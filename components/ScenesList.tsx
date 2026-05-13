@@ -1,0 +1,220 @@
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { api, ScenesResponse, SceneShot, SceneShotParticipant } from '../lib/api';
+import { CreateSceneModal } from './CreateSceneModal';
+import { CreateShotModal } from './CreateShotModal';
+
+export function ScenesList({ id }: { id: string }) {
+  const [data, setData]                           = useState<ScenesResponse | null>(null);
+  const [error, setError]                         = useState<string | null>(null);
+  const [showCreate, setShowCreate]               = useState(false);
+  const [createShotInScene, setCreateShotInScene] = useState<string | null>(null);
+  const [queue, setQueue] = useState<{ running: string[]; pending: string[] } | null>(null);
+
+  const refresh = useCallback(() => {
+    api.listScenes(id).then(setData).catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    api.comfyQueue().then(setQueue).catch(() => setQueue(null));
+  }, [id]);
+
+  useEffect(() => {
+    refresh();
+    const t = setInterval(refresh, 5000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  if (error)  return <main className="px-8 py-6 max-w-7xl mx-auto"><div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div></main>;
+  if (!data)  return <main className="px-8 py-6 max-w-7xl mx-auto text-zinc-500">Loading…</main>;
+
+  return (
+    <main className="px-8 py-6 max-w-7xl mx-auto">
+      <div className="flex justify-between items-center mb-4">
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm uppercase tracking-wider text-zinc-500">Сцены и кадры</h2>
+          {queue && (queue.running.length > 0 || queue.pending.length > 0) && (
+            <span className="text-xs text-amber-300 bg-amber-900/30 border border-amber-800/50 rounded px-2 py-0.5">
+              ComfyUI: ⚙ {queue.running.length} · ⏳ {queue.pending.length}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="text-xs bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded"
+        >
+          + новая сцена
+        </button>
+      </div>
+
+      {showCreate && (
+        <CreateSceneModal
+          projectId={id}
+          existingCount={data.scenes.length}
+          onClose={() => setShowCreate(false)}
+          onCreated={() => { setShowCreate(false); refresh(); }}
+        />
+      )}
+
+      <div className="space-y-6">
+        {data.scenes.map((s) => (
+          <article key={s.id} id={s.sceneKey} className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+            <header className="px-5 py-3 border-b border-zinc-800 flex items-baseline justify-between">
+              <h3 className="font-medium">
+                <span className="text-zinc-500 text-xs font-mono mr-2">#{s.sortOrder}</span>
+                {s.title ?? s.sceneKey}
+              </h3>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-zinc-500">
+                  {s.shots.length} кадров · готово: {s.shots.filter((sh) => sh.chosenRender).length}
+                </span>
+                <button
+                  onClick={() => setCreateShotInScene(s.id)}
+                  className="text-xs bg-blue-700 hover:bg-blue-600 text-white px-2 py-0.5 rounded"
+                >
+                  + кадр
+                </button>
+              </div>
+            </header>
+            <div className="divide-y divide-zinc-800">
+              {s.shots.map((sh) => (
+                <ShotRow
+                  key={sh.id}
+                  projectId={id}
+                  shot={sh}
+                  queueStatus={queueStatusFor(sh, queue)}
+                />
+              ))}
+            </div>
+          </article>
+        ))}
+      </div>
+
+      {createShotInScene && (
+        <CreateShotModal
+          projectId={id}
+          sceneId={createShotInScene}
+          existingShotCount={data.scenes.find((s) => s.id === createShotInScene)?.shots.length ?? 0}
+          onClose={() => setCreateShotInScene(null)}
+          onCreated={() => { setCreateShotInScene(null); refresh(); }}
+        />
+      )}
+    </main>
+  );
+}
+
+type QueueStatus = 'idle' | 'running' | 'pending';
+
+function queueStatusFor(shot: SceneShot, queue: { running: string[]; pending: string[] } | null): QueueStatus {
+  // Source of truth #1: our pipeline queue (covers pending — not yet dispatched —
+  // and running scenes; legacy direct renders won't have this set).
+  if (shot.pipelineRender) {
+    if (shot.pipelineRender.status === 'running') return 'running';
+    if (shot.pipelineRender.status === 'pending') return 'pending';
+  }
+  // Source of truth #2: raw ComfyUI queue, for shots that bypassed the pipeline
+  // (e.g. dry-runs, direct /render calls before we added the queue).
+  const id = shot.activeRenderPromptId;
+  if (!id || !queue) return 'idle';
+  if (queue.running.includes(id)) return 'running';
+  if (queue.pending.includes(id)) return 'pending';
+  return 'idle';
+}
+
+function ShotRow({ projectId, shot, queueStatus }: { projectId: string; shot: SceneShot; queueStatus: QueueStatus }) {
+  return (
+    <Link
+      href={`/projects/${projectId}/shots/${shot.id}`}
+      className={`px-5 py-3 flex gap-4 text-sm hover:bg-zinc-800/30 transition items-start ${queueStatus !== 'idle' ? 'bg-amber-950/20' : ''}`}
+    >
+      {/* Thumbnail of chosen render */}
+      <div className="w-24 h-16 flex-shrink-0 bg-zinc-950 border border-zinc-800 rounded overflow-hidden flex items-center justify-center">
+        {shot.chosenRender ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={api.shotImageUrl(shot.id, shot.chosenRender)}
+            alt={shot.chosenRender}
+            className="w-full h-full object-cover"
+            loading="lazy"
+          />
+        ) : shot.rendersCount > 0 ? (
+          <span className="text-[10px] text-zinc-500 text-center px-1">
+            {shot.rendersCount} вар.<br/>не выбран
+          </span>
+        ) : (
+          <span className="text-[10px] text-zinc-700">—</span>
+        )}
+      </div>
+
+      {/* Code + beat */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-baseline gap-2 mb-1 flex-wrap">
+          <span className="text-zinc-500 font-mono text-xs">{shot.shotCode}</span>
+          {queueStatus === 'running' && (
+            <span className="text-blue-300 bg-blue-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⚙ рендерится</span>
+          )}
+          {queueStatus === 'pending' && (
+            <span className="text-amber-300 bg-amber-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⏳ в очереди</span>
+          )}
+          {shot.chosenRender && (
+            <span className="text-emerald-400 text-[10px] uppercase tracking-wider">✓ approved</span>
+          )}
+          {!shot.chosenRender && shot.rendersCount > 0 && (
+            <span className="text-amber-400 text-[10px] uppercase tracking-wider">{shot.rendersCount} draft</span>
+          )}
+          {shot.cameraFraming && (
+            <span className="text-zinc-500 bg-zinc-800/60 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono">
+              📷 {shot.cameraFraming}
+            </span>
+          )}
+        </div>
+        <div className="text-zinc-300 line-clamp-2">{shot.beat ?? <em className="text-zinc-600">нет описания</em>}</div>
+        {shot.location && <div className="text-zinc-500 text-xs mt-0.5">📍 {shot.location}</div>}
+      </div>
+
+      {/* Participants — profile chips with LoRA status */}
+      {shot.participants.length > 0 && (
+        <div className="flex flex-col gap-1 flex-shrink-0 max-w-[260px]">
+          {shot.participants.map((p) => (
+            <ProfileChip key={p.id} p={p} />
+          ))}
+        </div>
+      )}
+
+      <span className="text-zinc-700 text-xs pt-0.5">→</span>
+    </Link>
+  );
+}
+
+function ProfileChip({ p }: { p: SceneShotParticipant }) {
+  // unbound participant — silhouette / extra (no LoRA needed)
+  if (!p.characterCode) {
+    return (
+      <span className="text-[10px] bg-zinc-800/60 text-zinc-500 px-2 py-0.5 rounded inline-flex items-center gap-1 italic">
+        ○ {p.label} (силуэт)
+      </span>
+    );
+  }
+  // No profile resolved yet
+  if (!p.profileCode) {
+    return (
+      <span className="text-[10px] bg-red-900/40 text-red-300 px-2 py-0.5 rounded inline-flex items-center gap-1">
+        ✕ {p.characterCode} — нет профиля
+      </span>
+    );
+  }
+  // Profile resolved — green if LoRA ready, amber if not
+  return (
+    <span
+      className={`text-[10px] px-2 py-0.5 rounded inline-flex items-center gap-1 ${
+        p.loraReady
+          ? 'bg-emerald-900/40 text-emerald-300'
+          : 'bg-amber-900/40 text-amber-300'
+      }`}
+      title={`${p.characterDisplayName ?? p.characterCode} → ${p.profileCode}${p.profileAgeLabel ? ' (' + p.profileAgeLabel + ')' : ''}`}
+    >
+      {p.loraReady ? '✓' : '⚠'} {p.profileCode}
+      {p.profileAgeLabel && <span className="text-zinc-500 ml-0.5">·{p.profileAgeLabel}</span>}
+      {!p.chosenExplicitly && <span className="text-zinc-500 ml-0.5">авто</span>}
+    </span>
+  );
+}
