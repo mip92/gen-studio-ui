@@ -128,6 +128,10 @@ export interface ShotPromptFields {
   production?:             { notes?: string; promptStatus?: string; assetRefs?: string[] };
   workflowParams?:         { seedPolicy?: string; faceswapRef?: string };
   captionGenerator?:       string;
+  /** Florence-2 caption + motion template, auto-generated on chosenRender approval. */
+  motionPromptDraft?:       string;
+  motionPromptDraftStatus?: 'generating' | 'ready' | 'failed';
+  motionPromptDraftError?:  string | null;
   [key: string]: unknown;
 }
 

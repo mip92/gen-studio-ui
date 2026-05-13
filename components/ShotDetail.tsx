@@ -219,7 +219,7 @@ export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: s
               Чтобы поменять персонажей или какую LoRA брать (например HERO_TEEN_15 vs HERO_OVERLOAD_16) — нажми «✎ редактировать» вверху.
             </p>
             <RenderSection shot={shot} onShotChange={setShot} />
-            <VideoSection projectId={projectId} shot={shot} />
+            <VideoSection projectId={projectId} shot={shot} onShotChange={setShot} />
           </>
         )}
       </div>
@@ -740,17 +740,47 @@ function ParticipantsEditor({
 
 // ── Video render section (Wan2.2 i2v from the chosen render) ────────────────
 
-function VideoSection({ projectId, shot }: { projectId: string; shot: ShotFull }) {
+function VideoSection({ projectId, shot, onShotChange }: {
+  projectId: string;
+  shot: ShotFull;
+  onShotChange: (s: ShotFull) => void;
+}) {
+  const draftPrompt: string =
+    typeof shot.promptFields?.motionPromptDraft === 'string' ? shot.promptFields.motionPromptDraft : '';
+  const draftStatus: 'generating' | 'ready' | 'failed' | undefined =
+    shot.promptFields?.motionPromptDraftStatus as ('generating' | 'ready' | 'failed' | undefined);
+
+  // Auto-prefill from the draft Florence-2 result. If the user starts typing
+  // (touched=true), we stop overwriting their text on re-render.
+  const [motionPrompt, setMotionPrompt] = useState(draftPrompt);
+  const [touched,      setTouched]      = useState(false);
   const [videos,       setVideos]       = useState<VideoRender[] | null>(null);
-  const [motionPrompt, setMotionPrompt] = useState('');
   const [busy,         setBusy]         = useState<false | 'auto' | 'start'>(false);
   const [error,        setError]        = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!touched && draftPrompt && draftPrompt !== motionPrompt) {
+      setMotionPrompt(draftPrompt);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftPrompt, touched]);
 
   const refresh = useCallback(() => {
     api.listVideosForShot(shot.id).then(setVideos).catch(() => setVideos([]));
   }, [shot.id]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // While Florence-2 is generating the draft prompt in the background, poll
+  // the shot record so the textarea fills in (and the badge clears) without
+  // a manual refresh.
+  useEffect(() => {
+    if (draftStatus !== 'generating') return;
+    const t = setInterval(() => {
+      api.getShot(shot.id).then(onShotChange).catch(() => {});
+    }, 3000);
+    return () => clearInterval(t);
+  }, [draftStatus, shot.id, onShotChange]);
 
   // Poll while anything is pending/running so the UI flips to "completed"
   // without the user reloading.
@@ -801,10 +831,22 @@ function VideoSection({ projectId, shot }: { projectId: string; shot: ShotFull }
       </p>
 
       <div className="mb-2">
+        {draftStatus === 'generating' && (
+          <div className="text-amber-300 text-xs mb-1 flex items-center gap-1">
+            <span className="animate-pulse">✨</span> Florence-2 описывает кадр… textarea заполнится автоматически.
+          </div>
+        )}
+        {draftStatus === 'failed' && (
+          <div className="text-red-400 text-xs mb-1">
+            ✕ Florence-2 не справился{shot.promptFields?.motionPromptDraftError
+              ? `: ${String(shot.promptFields.motionPromptDraftError).slice(0, 120)}`
+              : ''}. Можно нажать «Auto» ещё раз или написать руками.
+          </div>
+        )}
         <textarea
           value={motionPrompt}
           rows={3}
-          onChange={(e) => setMotionPrompt(e.target.value)}
+          onChange={(e) => { setMotionPrompt(e.target.value); setTouched(true); }}
           placeholder="Motion prompt — что должно происходить в кадре (камера, движение тела). Можно оставить пустым."
           className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-200 font-mono"
         />
