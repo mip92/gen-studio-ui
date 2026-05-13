@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { api, ScenesResponse, SceneShot, SceneShotParticipant } from '../lib/api';
 import { CreateSceneModal } from './CreateSceneModal';
 import { CreateShotModal } from './CreateShotModal';
@@ -82,6 +83,7 @@ export function ScenesList({ id }: { id: string }) {
                   projectId={id}
                   shot={sh}
                   queueStatus={queueStatusFor(sh, queue)}
+                  onEnqueued={refresh}
                 />
               ))}
             </div>
@@ -120,11 +122,44 @@ function queueStatusFor(shot: SceneShot, queue: { running: string[]; pending: st
   return 'idle';
 }
 
-function ShotRow({ projectId, shot, queueStatus }: { projectId: string; shot: SceneShot; queueStatus: QueueStatus }) {
+function ShotRow({ projectId, shot, queueStatus, onEnqueued }: {
+  projectId: string;
+  shot: SceneShot;
+  queueStatus: QueueStatus;
+  onEnqueued: () => void;
+}) {
+  const router            = useRouter();
+  const [busy,    setBusy]    = useState<false | 'one' | 'five'>(false);
+  const [enqueueErr, setErr]  = useState<string | null>(null);
+
+  // Render is allowed iff every bound participant has a trained LoRA.
+  // 0-participant shots (environment) are renderable. unbound (silhouette)
+  // participants are okay — they don't need a LoRA.
+  const blocked = shot.participants.some((p) => p.characterCode && !p.loraReady);
+  const idle    = queueStatus === 'idle';
+  const canRender = idle && !blocked;
+
+  const enqueue = async (n: number, tag: 'one' | 'five') => {
+    setBusy(tag);
+    setErr(null);
+    try {
+      for (let i = 0; i < n; i++) {
+        await api.enqueueShotRender(shot.id, { seed: Math.floor(Math.random() * 2 ** 32) });
+      }
+      onEnqueued();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stop = (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); };
+
   return (
-    <Link
-      href={`/projects/${projectId}/shots/${shot.id}`}
-      className={`px-5 py-3 flex gap-4 text-sm hover:bg-zinc-800/30 transition items-start ${queueStatus !== 'idle' ? 'bg-amber-950/20' : ''}`}
+    <div
+      onClick={() => router.push(`/projects/${projectId}/shots/${shot.id}`)}
+      className={`px-5 py-3 flex gap-4 text-sm hover:bg-zinc-800/30 transition items-start cursor-pointer ${queueStatus !== 'idle' ? 'bg-amber-950/20' : ''}`}
     >
       {/* Thumbnail of chosen render */}
       <div className="w-24 h-16 flex-shrink-0 bg-zinc-950 border border-zinc-800 rounded overflow-hidden flex items-center justify-center">
@@ -169,6 +204,9 @@ function ShotRow({ projectId, shot, queueStatus }: { projectId: string; shot: Sc
         </div>
         <div className="text-zinc-300 line-clamp-2">{shot.beat ?? <em className="text-zinc-600">нет описания</em>}</div>
         {shot.location && <div className="text-zinc-500 text-xs mt-0.5">📍 {shot.location}</div>}
+        {enqueueErr && (
+          <div className="text-red-400 text-xs mt-1">{enqueueErr}</div>
+        )}
       </div>
 
       {/* Participants — profile chips with LoRA status */}
@@ -180,8 +218,34 @@ function ShotRow({ projectId, shot, queueStatus }: { projectId: string; shot: Sc
         </div>
       )}
 
-      <span className="text-zinc-700 text-xs pt-0.5">→</span>
-    </Link>
+      {/* Render buttons — one job, or queue 5 jobs at different seeds */}
+      <div onClick={stop} className="flex flex-col gap-1 flex-shrink-0">
+        <button
+          onClick={(e) => { stop(e); enqueue(1, 'one'); }}
+          disabled={!canRender || busy !== false}
+          title={blocked ? 'Не все LoRA готовы' : queueStatus !== 'idle' ? 'Уже в очереди' : 'Один рендер (5 вариантов)'}
+          className="text-[11px] bg-blue-700 hover:bg-blue-600 disabled:opacity-30 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded whitespace-nowrap"
+        >
+          {busy === 'one' ? '⏳' : shot.rendersCount > 0 ? `+ 5 вар. (${shot.rendersCount})` : '🚀 рендер'}
+        </button>
+        <button
+          onClick={(e) => { stop(e); enqueue(5, 'five'); }}
+          disabled={!canRender || busy !== false}
+          title="Поставить 5 рендеров с разными seed в очередь"
+          className="text-[11px] bg-zinc-700 hover:bg-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded whitespace-nowrap"
+        >
+          {busy === 'five' ? '⏳ 5×' : '× 5 в очередь'}
+        </button>
+      </div>
+
+      <Link
+        href={`/projects/${projectId}/shots/${shot.id}`}
+        onClick={stop}
+        className="text-zinc-700 text-xs pt-0.5 hover:text-zinc-400"
+      >
+        →
+      </Link>
+    </div>
   );
 }
 
