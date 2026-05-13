@@ -555,4 +555,44 @@ export const api = {
 
   pipelineCancel: (type: QueueJobType, id: string) =>
     http(`/pipeline/queue/${type}/${id}/cancel`, { method: 'POST' }),
+
+  // ── Video renders (Wan2.2 i2v from the shot's chosen render) ──────────────
+  startVideoRender: (shotId: string, body: { motionPrompt?: string; seed?: number; width?: number; height?: number; length?: number; fps?: number } = {}) =>
+    http<VideoRender>(`/generation/shots/${shotId}/videos`, {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  listVideosForShot: (shotId: string) =>
+    http<VideoRender[]>(`/generation/shots/${shotId}/videos`),
+
+  getVideo: (videoId: string) =>
+    http<VideoRender>(`/generation/videos/${videoId}`),
+
+  // Slow (~30 s) — Florence-2 caption + motion template.
+  autoMotionPrompt: (shotId: string) =>
+    http<{ caption: string; motionPrompt: string }>(
+      `/generation/shots/${shotId}/videos/auto-prompt`,
+      { method: 'POST' },
+    ),
+
+  // For <video src> — backend streams the mp4 with proper content-type.
+  videoFileUrl: (videoId: string) =>
+    `${API_BASE}/generation/videos/${videoId}/file`,
 };
+
+export interface VideoRender {
+  id:                  string;
+  shotId:              string;
+  sourceImageFilename: string;
+  motionPrompt:        string;
+  status:              'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  comfyPromptId:       string | null;
+  params:              { seed?: number; width?: number; height?: number; length?: number; fps?: number } | null;
+  outputFilename:      string | null;
+  workflowFilename:    string;
+  errorMessage:        string | null;
+  queuedAt:            string;
+  startedAt:           string | null;
+  completedAt:         string | null;
+}

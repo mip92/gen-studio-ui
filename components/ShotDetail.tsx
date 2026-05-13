@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { api, ShotFull, ShotPromptFields, UpdateShotBody } from '../lib/api';
+import { api, ShotFull, ShotPromptFields, UpdateShotBody, VideoRender } from '../lib/api';
 
 export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: string }) {
   const router = useRouter();
@@ -219,6 +219,7 @@ export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: s
               Чтобы поменять персонажей или какую LoRA брать (например HERO_TEEN_15 vs HERO_OVERLOAD_16) — нажми «✎ редактировать» вверху.
             </p>
             <RenderSection shot={shot} onShotChange={setShot} />
+            <VideoSection projectId={projectId} shot={shot} />
           </>
         )}
       </div>
@@ -735,4 +736,128 @@ function ParticipantsEditor({
       )}
     </section>
   );
+}
+
+// ── Video render section (Wan2.2 i2v from the chosen render) ────────────────
+
+function VideoSection({ projectId, shot }: { projectId: string; shot: ShotFull }) {
+  const [videos,       setVideos]       = useState<VideoRender[] | null>(null);
+  const [motionPrompt, setMotionPrompt] = useState('');
+  const [busy,         setBusy]         = useState<false | 'auto' | 'start'>(false);
+  const [error,        setError]        = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    api.listVideosForShot(shot.id).then(setVideos).catch(() => setVideos([]));
+  }, [shot.id]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  // Poll while anything is pending/running so the UI flips to "completed"
+  // without the user reloading.
+  useEffect(() => {
+    if (!videos) return;
+    const hasInFlight = videos.some((v) => v.status === 'pending' || v.status === 'running');
+    if (!hasInFlight) return;
+    const t = setInterval(refresh, 4000);
+    return () => clearInterval(t);
+  }, [videos, refresh]);
+
+  if (!shot.chosenRender) {
+    return (
+      <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mt-6">
+        <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-2">Видео (Wan2.2 i2v)</h3>
+        <p className="text-zinc-500 text-sm">Сначала выберите финальный рендер (✓ approved) — он пойдёт первым кадром видео.</p>
+      </section>
+    );
+  }
+
+  const autoFill = async () => {
+    setBusy('auto'); setError(null);
+    try {
+      const r = await api.autoMotionPrompt(shot.id);
+      setMotionPrompt(r.motionPrompt);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); }
+  };
+
+  const start = async () => {
+    setBusy('start'); setError(null);
+    try {
+      await api.startVideoRender(shot.id, { motionPrompt: motionPrompt.trim() || undefined });
+      setMotionPrompt('');
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mt-6">
+      <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-3">Видео (Wan2.2 i2v)</h3>
+
+      <p className="text-zinc-500 text-xs mb-2">
+        Первый кадр: <code className="text-zinc-300">{shot.chosenRender}</code> · 640×640 · 81 кадр · 16 fps (~5 сек)
+      </p>
+
+      <div className="mb-2">
+        <textarea
+          value={motionPrompt}
+          rows={3}
+          onChange={(e) => setMotionPrompt(e.target.value)}
+          placeholder="Motion prompt — что должно происходить в кадре (камера, движение тела). Можно оставить пустым."
+          className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-200 font-mono"
+        />
+      </div>
+
+      <div className="flex gap-2 flex-wrap items-center mb-3">
+        <button
+          onClick={start}
+          disabled={busy !== false}
+          className="bg-blue-700 hover:bg-blue-600 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded"
+        >
+          {busy === 'start' ? '⏳ ставим в очередь…' : '🎬 рендерить видео'}
+        </button>
+        <button
+          onClick={autoFill}
+          disabled={busy !== false}
+          title="Florence-2 опишет финальный кадр и допишет motion-шаблон (~30 сек)"
+          className="bg-zinc-700 hover:bg-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm px-3 py-2 rounded"
+        >
+          {busy === 'auto' ? '⏳ Florence-2…' : '✨ Auto from Florence-2'}
+        </button>
+        {error && <span className="text-red-400 text-xs">{error}</span>}
+      </div>
+
+      <div className="space-y-1">
+        <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">Сгенерированные видео</div>
+        {videos === null && <p className="text-zinc-500 text-xs">Loading…</p>}
+        {videos && videos.length === 0 && <p className="text-zinc-600 text-xs italic">Пока ничего нет.</p>}
+        {videos && videos.map((v) => (
+          <Link
+            key={v.id}
+            href={`/projects/${projectId}/shots/${shot.id}/videos/${v.id}`}
+            className="block px-3 py-2 bg-zinc-950 border border-zinc-800 hover:border-zinc-600 rounded text-xs flex gap-3 items-center"
+          >
+            <VideoStatusBadge status={v.status} />
+            <span className="font-mono text-zinc-500 flex-shrink-0">{new Date(v.queuedAt).toLocaleTimeString()}</span>
+            <span className="text-zinc-300 truncate flex-1">{v.motionPrompt || <em className="text-zinc-600">no prompt</em>}</span>
+            <span className="text-zinc-600">→</span>
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function VideoStatusBadge({ status }: { status: VideoRender['status'] }) {
+  const map: Record<VideoRender['status'], { label: string; cls: string }> = {
+    pending:   { label: '⏳ pending',   cls: 'text-amber-300 bg-amber-900/40' },
+    running:   { label: '⚙ running',   cls: 'text-blue-300 bg-blue-900/40' },
+    completed: { label: '✓ completed', cls: 'text-emerald-300 bg-emerald-900/40' },
+    failed:    { label: '✕ failed',    cls: 'text-red-300 bg-red-900/40' },
+    cancelled: { label: '○ cancelled', cls: 'text-zinc-400 bg-zinc-800/40' },
+  };
+  const m = map[status] ?? { label: status, cls: 'text-zinc-300 bg-zinc-800/40' };
+  return <span className={`${m.cls} text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded flex-shrink-0`}>{m.label}</span>;
 }
