@@ -219,7 +219,7 @@ export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: s
               Чтобы поменять персонажей или какую LoRA брать (например HERO_TEEN_15 vs HERO_OVERLOAD_16) — нажми «✎ редактировать» вверху.
             </p>
             <RenderSection shot={shot} onShotChange={setShot} />
-            <VideoSection projectId={projectId} shot={shot} onShotChange={setShot} />
+            <VideoSection projectId={projectId} shot={shot} />
           </>
         )}
       </div>
@@ -235,7 +235,7 @@ function Pad({ children }: { children: React.ReactNode }) {
 function Err({ msg }: { msg: string }) {
   return <div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{msg}</div>;
 }
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+export function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div>
       <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">
@@ -246,12 +246,12 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
     </div>
   );
 }
-function Value({ v, multi, mono }: { v?: string; multi?: boolean; mono?: boolean }) {
+export function Value({ v, multi, mono }: { v?: string; multi?: boolean; mono?: boolean }) {
   if (!v) return <span className="text-zinc-600 text-sm italic">—</span>;
   if (multi) return <pre className={`text-sm text-zinc-300 whitespace-pre-wrap ${mono ? 'font-mono' : 'font-sans'} break-words`}>{v}</pre>;
   return <span className={`text-sm text-zinc-300 ${mono ? 'font-mono text-xs' : ''}`}>{v}</span>;
 }
-function Input({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+export function Input({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <input
       type="text" value={value} onChange={(e) => onChange(e.target.value)}
@@ -259,7 +259,7 @@ function Input({ value, onChange }: { value: string; onChange: (v: string) => vo
     />
   );
 }
-function Textarea({ value, rows, onChange }: { value: string; rows: number; onChange: (v: string) => void }) {
+export function Textarea({ value, rows, onChange }: { value: string; rows: number; onChange: (v: string) => void }) {
   return (
     <textarea
       value={value} rows={rows} onChange={(e) => onChange(e.target.value)}
@@ -270,7 +270,7 @@ function Textarea({ value, rows, onChange }: { value: string; rows: number; onCh
 
 // ── Render section: gated on LoRA readiness ─────────────────────────────────
 
-function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotChange: (s: ShotFull) => void }) {
+export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotChange: (s: ShotFull) => void }) {
   // The pipeline queue owns dispatch + ComfyUI polling + persisting outputs to
   // shot.renderedImages. The UI just enqueues, then polls the shot until the
   // render count grows (or the scene job lands in `failed`/`cancelled`).
@@ -619,13 +619,13 @@ function RenderLightbox({
 
 // ── Participants editor ─────────────────────────────────────────────────────
 
-interface ParticipantDraft {
+export interface ParticipantDraft {
   label:        string;
   characterId?: string | null;
   profileId?:   string | null;
 }
 
-function ParticipantsEditor({
+export function ParticipantsEditor({
   editing, participants, characters, shotParticipants, onChange,
 }: {
   editing:          boolean;
@@ -740,47 +740,21 @@ function ParticipantsEditor({
 
 // ── Video render section (Wan2.2 i2v from the chosen render) ────────────────
 
-function VideoSection({ projectId, shot, onShotChange }: {
+export function VideoSection({ projectId, shot }: {
   projectId: string;
   shot: ShotFull;
-  onShotChange: (s: ShotFull) => void;
 }) {
-  const draftPrompt: string =
-    typeof shot.promptFields?.motionPromptDraft === 'string' ? shot.promptFields.motionPromptDraft : '';
-  const draftStatus: 'generating' | 'ready' | 'failed' | undefined =
-    shot.promptFields?.motionPromptDraftStatus as ('generating' | 'ready' | 'failed' | undefined);
-
-  // Auto-prefill from the draft Florence-2 result. If the user starts typing
-  // (touched=true), we stop overwriting their text on re-render.
-  const [motionPrompt, setMotionPrompt] = useState(draftPrompt);
-  const [touched,      setTouched]      = useState(false);
+  const [motionPrompt, setMotionPrompt] = useState('');
   const [videos,       setVideos]       = useState<VideoRender[] | null>(null);
-  const [busy,         setBusy]         = useState<false | 'auto' | 'start'>(false);
+  const [busy,         setBusy]         = useState<false | 'start'>(false);
   const [error,        setError]        = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!touched && draftPrompt && draftPrompt !== motionPrompt) {
-      setMotionPrompt(draftPrompt);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftPrompt, touched]);
+  const [count,        setCount]        = useState(1);
 
   const refresh = useCallback(() => {
     api.listVideosForShot(shot.id).then(setVideos).catch(() => setVideos([]));
   }, [shot.id]);
 
   useEffect(() => { refresh(); }, [refresh]);
-
-  // While Florence-2 is generating the draft prompt in the background, poll
-  // the shot record so the textarea fills in (and the badge clears) without
-  // a manual refresh.
-  useEffect(() => {
-    if (draftStatus !== 'generating') return;
-    const t = setInterval(() => {
-      api.getShot(shot.id).then(onShotChange).catch(() => {});
-    }, 3000);
-    return () => clearInterval(t);
-  }, [draftStatus, shot.id, onShotChange]);
 
   // Poll while anything is pending/running so the UI flips to "completed"
   // without the user reloading.
@@ -801,20 +775,13 @@ function VideoSection({ projectId, shot, onShotChange }: {
     );
   }
 
-  const autoFill = async () => {
-    setBusy('auto'); setError(null);
-    try {
-      const r = await api.autoMotionPrompt(shot.id);
-      setMotionPrompt(r.motionPrompt);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally { setBusy(false); }
-  };
-
   const start = async () => {
     setBusy('start'); setError(null);
     try {
-      await api.startVideoRender(shot.id, { motionPrompt: motionPrompt.trim() || undefined });
+      await api.startVideoRender(shot.id, {
+        motionPrompt: motionPrompt.trim() || undefined,
+        count,
+      });
       setMotionPrompt('');
       refresh();
     } catch (e) {
@@ -827,26 +794,14 @@ function VideoSection({ projectId, shot, onShotChange }: {
       <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-3">Видео (Wan2.2 i2v)</h3>
 
       <p className="text-zinc-500 text-xs mb-2">
-        Первый кадр: <code className="text-zinc-300">{shot.chosenRender}</code> · 640×640 · 81 кадр · 16 fps (~5 сек)
+        Первый кадр: <code className="text-zinc-300">{shot.chosenRender}</code> · 832×480 → апскейл 1920×1080 · 81 кадр · 16 fps (~5 сек)
       </p>
 
       <div className="mb-2">
-        {draftStatus === 'generating' && (
-          <div className="text-amber-300 text-xs mb-1 flex items-center gap-1">
-            <span className="animate-pulse">✨</span> Florence-2 описывает кадр… textarea заполнится автоматически.
-          </div>
-        )}
-        {draftStatus === 'failed' && (
-          <div className="text-red-400 text-xs mb-1">
-            ✕ Florence-2 не справился{shot.promptFields?.motionPromptDraftError
-              ? `: ${String(shot.promptFields.motionPromptDraftError).slice(0, 120)}`
-              : ''}. Можно нажать «Auto» ещё раз или написать руками.
-          </div>
-        )}
         <textarea
           value={motionPrompt}
           rows={3}
-          onChange={(e) => { setMotionPrompt(e.target.value); setTouched(true); }}
+          onChange={(e) => setMotionPrompt(e.target.value)}
           placeholder="Motion prompt — что должно происходить в кадре (камера, движение тела). Можно оставить пустым."
           className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-200 font-mono"
         />
@@ -858,21 +813,32 @@ function VideoSection({ projectId, shot, onShotChange }: {
           disabled={busy !== false}
           className="bg-blue-700 hover:bg-blue-600 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded"
         >
-          {busy === 'start' ? '⏳ ставим в очередь…' : '🎬 рендерить видео'}
+          {busy === 'start' ? '⏳ ставим в очередь…' : `🎬 рендерить ${count > 1 ? `${count} видео` : 'видео'}`}
         </button>
-        <button
-          onClick={autoFill}
-          disabled={busy !== false}
-          title="Florence-2 опишет финальный кадр и допишет motion-шаблон (~30 сек)"
-          className="bg-zinc-700 hover:bg-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm px-3 py-2 rounded"
-        >
-          {busy === 'auto' ? '⏳ Florence-2…' : '✨ Auto from Florence-2'}
-        </button>
+        <label className="flex items-center gap-1 text-zinc-400 text-xs">
+          количество
+          <input
+            type="number"
+            min={1}
+            max={8}
+            value={count}
+            onChange={(e) => setCount(Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
+            className="w-14 bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 text-center"
+          />
+        </label>
         {error && <span className="text-red-400 text-xs">{error}</span>}
       </div>
 
       <div className="space-y-1">
-        <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">Сгенерированные видео</div>
+        <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1 flex items-baseline justify-between">
+          <span>Сгенерированные видео</span>
+          <Link
+            href={`/projects/${projectId}/shots/${shot.id}/videos`}
+            className="text-[10px] text-blue-400 hover:text-blue-300 normal-case tracking-normal"
+          >
+            посмотреть все →
+          </Link>
+        </div>
         {videos === null && <p className="text-zinc-500 text-xs">Loading…</p>}
         {videos && videos.length === 0 && <p className="text-zinc-600 text-xs italic">Пока ничего нет.</p>}
         {videos && videos.map((v) => (

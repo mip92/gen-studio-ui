@@ -128,10 +128,6 @@ export interface ShotPromptFields {
   production?:             { notes?: string; promptStatus?: string; assetRefs?: string[] };
   workflowParams?:         { seedPolicy?: string; faceswapRef?: string };
   captionGenerator?:       string;
-  /** Florence-2 caption + motion template, auto-generated on chosenRender approval. */
-  motionPromptDraft?:       string;
-  motionPromptDraftStatus?: 'generating' | 'ready' | 'failed';
-  motionPromptDraftError?:  string | null;
   [key: string]: unknown;
 }
 
@@ -223,7 +219,7 @@ export interface SceneSummary {
   shots:     SceneShot[];
 }
 
-export type QueueJobType = 'training' | 'dataset' | 'scene';
+export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale';
 
 export interface QueueRow {
   type:          QueueJobType;
@@ -561,8 +557,11 @@ export const api = {
     http(`/pipeline/queue/${type}/${id}/cancel`, { method: 'POST' }),
 
   // ── Video renders (Wan2.2 i2v from the shot's chosen render) ──────────────
-  startVideoRender: (shotId: string, body: { motionPrompt?: string; seed?: number; width?: number; height?: number; length?: number; fps?: number } = {}) =>
-    http<VideoRender>(`/generation/shots/${shotId}/videos`, {
+  startVideoRender: (
+    shotId: string,
+    body: { motionPrompt?: string; seed?: number; width?: number; height?: number; length?: number; fps?: number; count?: number } = {},
+  ) =>
+    http<VideoRender[]>(`/generation/shots/${shotId}/videos`, {
       method: 'POST',
       body:   JSON.stringify(body),
     }),
@@ -573,16 +572,15 @@ export const api = {
   getVideo: (videoId: string) =>
     http<VideoRender>(`/generation/videos/${videoId}`),
 
-  // Slow (~30 s) — Florence-2 caption + motion template.
-  autoMotionPrompt: (shotId: string) =>
-    http<{ caption: string; motionPrompt: string }>(
-      `/generation/shots/${shotId}/videos/auto-prompt`,
-      { method: 'POST' },
-    ),
-
   // For <video src> — backend streams the mp4 with proper content-type.
   videoFileUrl: (videoId: string) =>
     `${API_BASE}/generation/videos/${videoId}/file`,
+
+  videoFhdFileUrl: (videoId: string) =>
+    `${API_BASE}/generation/videos/${videoId}/file-fhd`,
+
+  upscaleVideo: (videoId: string) =>
+    http<VideoRender>(`/generation/videos/${videoId}/upscale`, { method: 'POST' }),
 };
 
 export interface VideoRender {
@@ -599,4 +597,11 @@ export interface VideoRender {
   queuedAt:            string;
   startedAt:           string | null;
   completedAt:         string | null;
+  // Upscale-on-demand (4x-UltraSharp → 1920×1080). Populated after the user clicks "upscale".
+  upscaleStatus:        'pending' | 'running' | 'completed' | 'failed' | null;
+  upscaledFilename:     string | null;
+  upscalePromptId:      string | null;
+  upscaleStartedAt:     string | null;
+  upscaleCompletedAt:   string | null;
+  upscaleErrorMessage:  string | null;
 }
