@@ -150,12 +150,18 @@ export interface ShotFull {
   referenceImagePool:  unknown;
   renderedImages:      RenderedImage[] | null;
   chosenRender:        string | null;
+  chosenVideoId:       string | null;
   participants:        ShotParticipant[];
   scene?: {
-    id:        string;
-    sceneKey:  string;
-    title:     string | null;
-    sortOrder: number;
+    id:              string;
+    sceneKey:        string;
+    title:           string | null;
+    sortOrder:       number;
+    /** Scene-level voiceover text (the slice of script.md this scene covers). */
+    narrationText:   string | null;
+    /** Inclusive line range in the project's script.md. */
+    scriptStartLine: number | null;
+    scriptEndLine:   number | null;
   };
   project?: { id: string; slug: string; name: string };
 }
@@ -209,14 +215,36 @@ export interface SceneShot {
   activeRenderPromptId: string | null;
   /** Most recent pending|running pipeline render job for this shot, or null. */
   pipelineRender:       { id: string; status: string; queuedAt: string } | null;
+
+  // ── Video state (mirrors chosenRender for the animation pass) ──────────────
+  /** How many VideoRender rows exist for the shot (any status). */
+  videosCount:    number;
+  /** VideoRender.id approved as the canonical motion clip, or null. */
+  chosenVideoId:  string | null;
+  /** Summary of the chosen video (status info needed to render the right button). */
+  chosenVideo:    {
+    id:               string;
+    outputFilename:   string | null;
+    upscaleStatus:    'pending' | 'running' | 'completed' | 'failed' | null;
+    upscaledFilename: string | null;
+  } | null;
+  /** Oldest pending|running video render — used to badge "⚙ video" in the row. */
+  pipelineVideo:   { id: string; status: string; queuedAt: string } | null;
+  /** Pending|running upscale on the chosen video, if any. */
+  pipelineUpscale: { id: string; status: string } | null;
 }
 
 export interface SceneSummary {
-  id:        string;
-  sceneKey:  string;
-  title:     string | null;
-  sortOrder: number;
-  shots:     SceneShot[];
+  id:              string;
+  sceneKey:        string;
+  title:           string | null;
+  sortOrder:       number;
+  /** Scene-level voiceover script — used by the TTS narration modal. */
+  narrationText:   string | null;
+  /** Which lines in <slug>_script.md this scene covers (inclusive). */
+  scriptStartLine: number | null;
+  scriptEndLine:   number | null;
+  shots:           SceneShot[];
 }
 
 export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale';
@@ -471,6 +499,12 @@ export const api = {
       body:   JSON.stringify({ filename }),
     }),
 
+  setChosenVideo: (shotId: string, videoId: string | null) =>
+    http<ShotFull>(`/shots/${shotId}/chosen-video`, {
+      method: 'PATCH',
+      body:   JSON.stringify({ videoId }),
+    }),
+
   createShot: (projectIdOrSlug: string, body: CreateShotBody) =>
     http<ShotFull>(`/projects/${projectIdOrSlug}/shots`, {
       method: 'POST',
@@ -581,7 +615,60 @@ export const api = {
 
   upscaleVideo: (videoId: string) =>
     http<VideoRender>(`/generation/videos/${videoId}/upscale`, { method: 'POST' }),
+
+  deleteVideo: (videoId: string) =>
+    http<{ deleted: true; id: string }>(`/generation/videos/${videoId}`, { method: 'DELETE' }),
+
+  // ── TTS (Silero V5 ru) ────────────────────────────────────────────────────
+  startTTS: (
+    sceneId: string,
+    body: { text?: string; voice?: TTSVoice; sampleRate?: TTSSampleRate } = {},
+  ) =>
+    http<TTSJob>(`/tts/scenes/${sceneId}`, {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  listTTSJobs: (sceneId: string) =>
+    http<TTSJob[]>(`/tts/scenes/${sceneId}/jobs`),
+
+  setSceneNarrationText: (sceneId: string, text: string) =>
+    http<{ id: string; narrationText: string | null }>(`/tts/scenes/${sceneId}/narration`, {
+      method: 'PATCH',
+      body:   JSON.stringify({ text }),
+    }),
+
+  getTTSJob: (jobId: string) =>
+    http<TTSJob>(`/tts/jobs/${jobId}`),
+
+  ttsFileUrl: (jobId: string) =>
+    `${API_BASE}/tts/jobs/${jobId}/file`,
+
+  /**
+   * Read the project's full narration script (Markdown), if one is configured.
+   * Used by the TTS modal to show the user the full story they're voicing —
+   * they then copy/paste relevant chunks per scene.
+   */
+  getProjectScript: (idOrSlug: string) =>
+    http<{ text: string | null; path: string | null }>(`/projects/${idOrSlug}/script`),
 };
+
+export type TTSVoice      = 'aidar' | 'baya' | 'kseniya' | 'xenia' | 'eugene' | 'random';
+export type TTSSampleRate = 8000 | 24000 | 48000;
+
+export interface TTSJob {
+  id:             string;
+  sceneId:        string;
+  text:           string;
+  voice:          TTSVoice;
+  sampleRate:     TTSSampleRate;
+  status:         'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  outputFilename: string | null;
+  errorMessage:   string | null;
+  queuedAt:       string;
+  startedAt:      string | null;
+  completedAt:    string | null;
+}
 
 export interface VideoRender {
   id:                  string;

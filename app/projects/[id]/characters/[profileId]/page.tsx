@@ -1,10 +1,10 @@
-import { CharacterDetail } from '../../../../../components/CharacterDetail';
+import { redirect } from 'next/navigation';
 
-export default async function CharacterDetailPage({
+export default async function CharacterRootPage({
   params,
 }: {
   params: Promise<{ id: string; profileId: string }>;
 }) {
   const { id, profileId } = await params;
-  return <CharacterDetail projectId={id} profileId={profileId} />;
+  redirect(`/projects/${id}/characters/${profileId}/description`);
 }

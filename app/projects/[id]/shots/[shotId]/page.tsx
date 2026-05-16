@@ -1,10 +1,10 @@
-import { ShotDetail } from '../../../../../components/ShotDetail';
+import { redirect } from 'next/navigation';
 
-export default async function ShotDetailPage({
+export default async function ShotRootPage({
   params,
 }: {
   params: Promise<{ id: string; shotId: string }>;
 }) {
   const { id, shotId } = await params;
-  return <ShotDetail projectId={id} shotId={shotId} />;
+  redirect(`/projects/${id}/shots/${shotId}/prompts`);
 }

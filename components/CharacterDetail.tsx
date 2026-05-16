@@ -365,7 +365,7 @@ export function CharacterDetail({
 
 // ── Training progress ───────────────────────────────────────────────────────
 
-function TrainingProgress({
+export function TrainingProgress({
   trainingJob,
 }: {
   trainingJob: ProfileSummary['lastTrainingJob'];
@@ -491,7 +491,7 @@ function TrainingProgress({
 
 // ── Reference image uploader ────────────────────────────────────────────────
 
-function ReferenceUploader({ profileId }: { profileId: string }) {
+export function ReferenceUploader({ profileId }: { profileId: string }) {
   type Info =
     | { exists: false; profileCode: string }
     | { exists: true;  profileCode: string; filename: string; size: number; mtime: number };
@@ -615,7 +615,7 @@ function Err({ msg }: { msg: string }) {
     </div>
   );
 }
-function Stat({ label, value, mono, highlight }: { label: string; value: string; mono?: boolean; highlight?: boolean }) {
+export function Stat({ label, value, mono, highlight }: { label: string; value: string; mono?: boolean; highlight?: boolean }) {
   return (
     <div className={`bg-zinc-900 border border-zinc-800 rounded p-3 ${highlight ? 'border-emerald-700/60' : ''}`}>
       <div className="text-zinc-500 text-[10px] uppercase tracking-wider">{label}</div>
@@ -623,7 +623,7 @@ function Stat({ label, value, mono, highlight }: { label: string; value: string;
     </div>
   );
 }
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
       <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">{label}</div>
@@ -631,10 +631,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     </div>
   );
 }
-function Choices({ children }: { children: React.ReactNode }) {
+export function Choices({ children }: { children: React.ReactNode }) {
   return <div className="flex gap-2 text-xs flex-wrap items-center">{children}</div>;
 }
-function Radio({
+export function Radio({
   checked, onChange, disabled, children,
 }: {
   checked:   boolean;
@@ -649,7 +649,7 @@ function Radio({
     </label>
   );
 }
-function Thumbnail({
+export function Thumbnail({
   profileId, image, busy, onOpen, onDelete,
 }: {
   profileId: string;
@@ -687,7 +687,7 @@ function Thumbnail({
 
 // ── Lightbox: full-size gallery with keyboard nav ───────────────────────────
 
-function Lightbox({
+export function Lightbox({
   profileId, images, index, onClose, onNavigate, onDelete,
 }: {
   profileId:  string;
@@ -785,7 +785,7 @@ const FIELDS: Array<{
   { key: 'triggerToken',  label: 'Trigger token',              type: 'text',      hint: 'Уникальное «слово» для LoRA' },
 ];
 
-function ProfileDescription({
+export function ProfileDescription({
   profile, onSaved,
 }: {
   profile: ProfileFull;

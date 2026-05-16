@@ -89,7 +89,7 @@ export default function QueuePage() {
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-xl font-semibold">Pipeline queue</h1>
-            <p className="text-zinc-500 text-xs">Unified GPU queue · training + dataset · auto-poll {POLL_MS}ms</p>
+            <p className="text-zinc-500 text-xs">Unified GPU queue · training + dataset + scene + video · auto-poll {POLL_MS}ms</p>
           </div>
           <Link href="/" className="text-zinc-400 hover:text-zinc-200 text-sm">← Projects</Link>
         </div>
@@ -216,14 +216,19 @@ function Row({ row, pl, left, right }: {
 function renderRowTargets(row: QueueRow, pl?: ProjectLinks): React.ReactNode {
   const cls = 'underline-offset-2 hover:underline hover:text-white';
 
-  if (row.type === 'scene') {
-    const shot  = pl?.shots.get(row.profileCode);
+  if (row.type === 'scene' || row.type === 'video' || row.type === 'video_upscale') {
+    // For video_upscale the profileCode includes a "↑FHD" suffix — strip for lookup.
+    const lookupCode = row.profileCode.replace(/\s*↑FHD\s*$/, '');
+    const shot  = pl?.shots.get(lookupCode);
     const slug  = row.projectSlug;
     const sceneNode = shot
       ? <Link href={`/projects/${slug}/scenes#${shot.sceneKey}`} className={`text-zinc-300 ${cls}`}>{row.characterCode}</Link>
       : <span className="text-zinc-300">{row.characterCode}</span>;
+    // For video/video_upscale the id IS the videoRender id — link to the video detail page.
     const shotNode = shot
-      ? <Link href={`/projects/${slug}/shots/${shot.shotId}`} className={`text-zinc-200 ${cls}`}>{row.profileCode}</Link>
+      ? (row.type === 'video' || row.type === 'video_upscale'
+          ? <Link href={`/projects/${slug}/shots/${shot.shotId}/videos/${row.id}`} className={`text-zinc-200 ${cls}`}>{row.profileCode}</Link>
+          : <Link href={`/projects/${slug}/shots/${shot.shotId}`} className={`text-zinc-200 ${cls}`}>{row.profileCode}</Link>)
       : <span className="text-zinc-200">{row.profileCode}</span>;
     return <>{sceneNode}<span className="text-zinc-500"> · </span>{shotNode}</>;
   }
@@ -258,16 +263,21 @@ function fmt(iso: string | null): string {
   const d = new Date(iso);
   const now = Date.now();
   const dt = now - d.getTime();
+  // Negative dt = timestamp in "future" (server/client clock or TZ skew). Show
+  // "just now" rather than the misleading "-1234s ago".
+  if (dt < 0)             return 'just now';
   if (dt < 60_000)        return `${Math.floor(dt / 1000)}s ago`;
   if (dt < 3_600_000)     return `${Math.floor(dt / 60_000)}m ago`;
   if (dt < 86_400_000)    return `${Math.floor(dt / 3_600_000)}h ago`;
   return d.toLocaleString();
 }
 
-function typeBadge(t: 'training' | 'dataset' | 'scene'): string {
-  if (t === 'training') return 'bg-purple-950/40 text-purple-300 border-purple-900';
-  if (t === 'dataset')  return 'bg-blue-950/40   text-blue-300   border-blue-900';
-  return                       'bg-amber-950/40  text-amber-300  border-amber-900';
+function typeBadge(t: QueueJobType): string {
+  if (t === 'training')      return 'bg-purple-950/40 text-purple-300 border-purple-900';
+  if (t === 'dataset')       return 'bg-blue-950/40   text-blue-300   border-blue-900';
+  if (t === 'scene')         return 'bg-amber-950/40  text-amber-300  border-amber-900';
+  if (t === 'video')         return 'bg-rose-950/40   text-rose-300   border-rose-900';
+  return                            'bg-emerald-950/40 text-emerald-300 border-emerald-900';
 }
 
 function statusBadge(s: string): string {
