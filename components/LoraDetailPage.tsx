@@ -80,13 +80,6 @@ export function LoraDetailPage({
 
   return (
     <main className="px-8 py-6 max-w-5xl mx-auto">
-      <Link
-        href={`/projects/${projectId}/characters/${profileId}/loras`}
-        className="text-zinc-500 hover:text-zinc-200 text-sm mb-4 inline-block"
-      >
-        ← все LoRA
-      </Link>
-
       <header className="mb-6 flex items-baseline justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-3">

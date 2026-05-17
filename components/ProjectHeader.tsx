@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { Breadcrumbs, BreadcrumbItem } from './Breadcrumbs';
 
 const TABS = [
   { key: '',           label: 'Overview' },
@@ -19,21 +20,42 @@ export function ProjectHeader({
   const pathname = usePathname();
   const base     = `/projects/${id}`;
 
+  // Deeper layouts (CharacterPageShell, ShotPageShell) render their own sticky
+  // header WITH their own breadcrumbs and their own tab strip. Stacking the
+  // project-level header on top of those is redundant and makes the page look
+  // like it has two headers — so we hide ourselves on those routes. The
+  // deeper crumbs already chain back to Projects → <project> → … correctly.
+  if (pathname?.startsWith(`${base}/characters/`) || pathname?.startsWith(`${base}/shots/`)) {
+    const seg = pathname.split('/');
+    // /projects/[id]/characters       → no [profileId] yet, keep header
+    // /projects/[id]/characters/[id]  → CharacterPageShell takes over
+    // /projects/[id]/shots/[id]       → ShotPageShell takes over
+    const hasDeepSegment = seg.length >= 5 && seg[4] && seg[4].length > 0;
+    if (hasDeepSegment) return null;
+  }
+
   function isActive(tabKey: string) {
     const target = tabKey ? `${base}/${tabKey}` : base;
     if (tabKey === '') return pathname === base;
     return pathname.startsWith(target);
   }
 
+  const activeTab = TABS.find((t) => isActive(t.key));
+  const crumbs: BreadcrumbItem[] = [
+    { label: 'Projects',     href: '/' },
+    { label: projectName,    href: activeTab && activeTab.key ? base : undefined },
+    ...(activeTab && activeTab.key ? [{ label: activeTab.label }] : []),
+  ];
+
   return (
     <header className="border-b border-zinc-800 bg-zinc-950 sticky top-0 z-10">
-      <div className="px-8 py-4 max-w-7xl mx-auto flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link href="/" className="text-zinc-500 hover:text-zinc-200 text-sm">← projects</Link>
-          <div>
-            <h1 className="text-lg font-semibold">{projectName}</h1>
-            <p className="text-zinc-500 text-xs font-mono truncate max-w-md">{id}</p>
-          </div>
+      <div className="px-8 pt-3 max-w-7xl mx-auto">
+        <Breadcrumbs items={crumbs} />
+      </div>
+      <div className="px-8 pb-4 max-w-7xl mx-auto flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-semibold">{projectName}</h1>
+          <p className="text-zinc-500 text-xs font-mono truncate max-w-md">{id}</p>
         </div>
       </div>
       <nav className="px-8 max-w-7xl mx-auto flex gap-1">

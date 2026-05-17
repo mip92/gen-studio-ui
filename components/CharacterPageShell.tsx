@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { api, DashboardResponse, ProfileSummary, ProfileFull } from '../lib/api';
+import { Breadcrumbs, BreadcrumbItem } from './Breadcrumbs';
 
 const POLL_MS = 5000;
 
@@ -128,7 +129,7 @@ function StickyHeader({
   return (
     <div className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
       <div className="max-w-7xl mx-auto px-8 pt-3 pb-0">
-        <Breadcrumbs projectId={projectId} profileId={profileId} project={project} profile={profile} />
+        <CharacterBreadcrumbs projectId={projectId} profileId={profileId} project={project} profile={profile} />
         <div className="flex items-baseline justify-between mb-0">
           <div>
             <h1 className="text-xl font-semibold text-zinc-100">{profile.displayName ?? profile.profileCode}</h1>
@@ -144,7 +145,7 @@ function StickyHeader({
   );
 }
 
-function Breadcrumbs({
+function CharacterBreadcrumbs({
   projectId, profileId, project, profile,
 }: {
   projectId: string;
@@ -156,33 +157,14 @@ function Breadcrumbs({
   const base = `/projects/${projectId}/characters/${profileId}`;
   const tab = TABS.find((t) => pathname?.includes(`${base}/${t.slug}`));
 
-  return (
-    <nav className="text-xs text-zinc-500 mb-2 flex items-center gap-1.5 flex-wrap" aria-label="Breadcrumb">
-      <Link href="/projects" className="hover:text-zinc-300">Projects</Link>
-      <Sep />
-      <Link href={`/projects/${projectId}/characters`} className="hover:text-zinc-300">
-        {project.name}
-      </Link>
-      <Sep />
-      <Link href={`/projects/${projectId}/characters`} className="hover:text-zinc-300">
-        Characters
-      </Link>
-      <Sep />
-      <Link href={`${base}/description`} className="font-mono hover:text-zinc-300">
-        {profile.profileCode}
-      </Link>
-      {tab && (
-        <>
-          <Sep />
-          <span className="text-zinc-300">{tab.label}</span>
-        </>
-      )}
-    </nav>
-  );
-}
-
-function Sep() {
-  return <span className="text-zinc-700">/</span>;
+  const items: BreadcrumbItem[] = [
+    { label: 'Projects',     href: '/' },
+    { label: project.name,   href: `/projects/${projectId}` },
+    { label: 'Characters',   href: `/projects/${projectId}/characters` },
+    { label: profile.profileCode, href: `${base}/description` },
+    ...(tab ? [{ label: tab.label }] : []),
+  ];
+  return <Breadcrumbs items={items} />;
 }
 
 function TabsNav({ projectId, profileId }: { projectId: string; profileId: string }) {

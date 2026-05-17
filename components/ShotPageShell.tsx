@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { api, ShotFull } from '../lib/api';
+import { Breadcrumbs, BreadcrumbItem } from './Breadcrumbs';
 
 type CharactersList = Awaited<ReturnType<typeof api.listCharacters>>;
 
@@ -54,18 +55,12 @@ export function ShotPageShell({
   if (error) {
     return (
       <main className="px-8 py-6">
-        <Breadcrumbs projectId={projectId} shotId={shotId} />
         <div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div>
       </main>
     );
   }
   if (!shot) {
-    return (
-      <main className="px-8 py-6">
-        <Breadcrumbs projectId={projectId} shotId={shotId} />
-        <p className="text-zinc-500">Loading…</p>
-      </main>
-    );
+    return <main className="px-8 py-6 text-zinc-500">Loading…</main>;
   }
 
   return (
@@ -80,50 +75,29 @@ function StickyHeader({ projectId, shotId, shot }: { projectId: string; shotId: 
   return (
     <div className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
       <div className="max-w-7xl mx-auto px-8 pt-3 pb-0">
-        <Breadcrumbs projectId={projectId} shotId={shotId} shot={shot} />
-        <div className="flex items-baseline justify-between mb-0">
-          <div>
-            <div className="text-zinc-500 text-xs font-mono mb-1">{shot.scene?.title ?? shot.scene?.sceneKey}</div>
-            <h1 className="text-xl font-semibold font-mono text-zinc-100">{shot.shotCode}</h1>
-          </div>
-        </div>
+        <ShotBreadcrumbs projectId={projectId} shotId={shotId} shot={shot} />
+        <h1 className="text-xl font-semibold font-mono text-zinc-100">{shot.shotCode}</h1>
         <TabsNav projectId={projectId} shotId={shotId} />
       </div>
     </div>
   );
 }
 
-function Breadcrumbs({ projectId, shotId, shot }: { projectId: string; shotId: string; shot?: ShotFull }) {
+function ShotBreadcrumbs({ projectId, shotId, shot }: { projectId: string; shotId: string; shot: ShotFull }) {
   const pathname = usePathname();
   const tab = TABS.find((t) => pathname?.includes(`/shots/${shotId}/${t.slug}`));
 
-  return (
-    <nav className="text-xs text-zinc-500 mb-2 flex items-center gap-1.5 flex-wrap" aria-label="Breadcrumb">
-      <Link href="/projects" className="hover:text-zinc-300">Projects</Link>
-      <Sep />
-      <Link href={`/projects/${projectId}/scenes`} className="hover:text-zinc-300">
-        {shot?.project?.name ?? projectId.slice(0, 8)}
-      </Link>
-      <Sep />
-      <Link href={`/projects/${projectId}/scenes#${shot?.scene?.sceneKey ?? ''}`} className="hover:text-zinc-300">
-        {shot?.scene?.title ?? shot?.scene?.sceneKey ?? 'scene'}
-      </Link>
-      <Sep />
-      <Link href={`/projects/${projectId}/shots/${shotId}/prompts`} className="font-mono hover:text-zinc-300">
-        {shot?.shotCode ?? shotId.slice(0, 8)}
-      </Link>
-      {tab && (
-        <>
-          <Sep />
-          <span className="text-zinc-300">{tab.label}</span>
-        </>
-      )}
-    </nav>
-  );
-}
-
-function Sep() {
-  return <span className="text-zinc-700">/</span>;
+  // shot is always loaded by the time we reach the StickyHeader — error/loading
+  // states bail out earlier — so we never have to fall back to a truncated id.
+  const items: BreadcrumbItem[] = [
+    { label: 'Projects',                  href: '/' },
+    { label: shot.project?.name ?? '…',   href: `/projects/${projectId}` },
+    { label: shot.scene?.title ?? shot.scene?.sceneKey ?? 'scene',
+      href: `/projects/${projectId}/scenes#${shot.scene?.sceneKey ?? ''}` },
+    { label: shot.shotCode,       href: `/projects/${projectId}/shots/${shotId}/prompts` },
+    ...(tab ? [{ label: tab.label }] : []),
+  ];
+  return <Breadcrumbs items={items} />;
 }
 
 function TabsNav({ projectId, shotId }: { projectId: string; shotId: string }) {

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, ProjectListItem } from '../lib/api';
+import { Breadcrumbs } from '../components/Breadcrumbs';
 
 export default function HomePage() {
   const [projects, setProjects] = useState<ProjectListItem[] | null>(null);
@@ -17,14 +18,14 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       <header className="border-b border-zinc-800 px-8 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div>
+        <div className="max-w-7xl mx-auto">
+          <Breadcrumbs items={[{ label: 'Projects' }]} />
+          <div className="flex items-center justify-between">
             <h1 className="text-xl font-semibold">Gen Studio</h1>
-            <p className="text-zinc-500 text-xs">AI video production · LoRA pipeline · scene rendering</p>
+            <Link href="/queue" className="text-sm text-zinc-300 hover:text-zinc-100 border border-zinc-700 hover:border-zinc-500 px-3 py-1.5 rounded">
+              Queue →
+            </Link>
           </div>
-          <Link href="/queue" className="text-sm text-zinc-300 hover:text-zinc-100 border border-zinc-700 hover:border-zinc-500 px-3 py-1.5 rounded">
-            Queue →
-          </Link>
         </div>
       </header>
 

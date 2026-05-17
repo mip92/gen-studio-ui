@@ -247,7 +247,7 @@ export interface SceneSummary {
   shots:           SceneShot[];
 }
 
-export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale';
+export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale' | 'tts';
 
 export interface QueueRow {
   type:          QueueJobType;
@@ -261,12 +261,32 @@ export interface QueueRow {
   startedAt:     string | null;
   completedAt:   string | null;
   errorMessage:  string | null;
+  /** Server-computed: head of the unified pending FIFO. Used to disable ↑. */
+  isFirstPending: boolean;
+  /** Server-computed: tail of the unified pending FIFO. Used to disable ↓. */
+  isLastPending:  boolean;
 }
 
-export interface QueueSnapshot {
-  active:  QueueRow[];
-  pending: QueueRow[];
-  recent:  QueueRow[];
+export type QueueSortField = 'queuedAt' | 'startedAt' | 'completedAt' | 'status' | 'type';
+
+export interface QueueListParams {
+  id?:       string;
+  status?:   string[];
+  type?:     QueueJobType[];
+  finished?: boolean;
+  sort?:     QueueSortField;
+  order?:    'asc' | 'desc';
+  page?:     number;
+  limit?:    number;
+}
+
+export interface QueueListResponse {
+  rows:  QueueRow[];
+  total: number;
+  page:  number;
+  limit: number;
+  sort:  QueueSortField;
+  order: 'asc' | 'desc';
 }
 
 export interface ScenesResponse {
@@ -577,9 +597,22 @@ export const api = {
       { method: 'POST', body: JSON.stringify(body) },
     ),
 
-  // ── Pipeline queue (unified across training + dataset) ──────────────────
-  pipelineQueue: () =>
-    http<QueueSnapshot>(`/pipeline/queue`),
+  // ── Pipeline queue (unified across every job type) ───────────────────────
+  /** Paginated + filterable + sortable queue list. Single endpoint for the
+   *  /queue page AND for any caller looking up a job by id. */
+  pipelineQueue: (params: QueueListParams = {}) => {
+    const qs = new URLSearchParams();
+    if (params.id)                            qs.set('id',       params.id);
+    if (params.status?.length)                qs.set('status',   params.status.join(','));
+    if (params.type?.length)                  qs.set('type',     params.type.join(','));
+    if (params.finished !== undefined)        qs.set('finished', String(params.finished));
+    if (params.sort)                          qs.set('sort',     params.sort);
+    if (params.order)                         qs.set('order',    params.order);
+    if (params.page)                          qs.set('page',     String(params.page));
+    if (params.limit)                         qs.set('limit',    String(params.limit));
+    const q = qs.toString();
+    return http<QueueListResponse>(`/pipeline/queue${q ? `?${q}` : ''}`);
+  },
 
   pipelineMove: (type: QueueJobType, id: string, direction: 'up' | 'down') =>
     http<{ moved: boolean; swappedWith?: { type: QueueJobType; id: string }; reason?: string }>(
@@ -622,7 +655,7 @@ export const api = {
   // ── TTS (Silero V5 ru) ────────────────────────────────────────────────────
   startTTS: (
     sceneId: string,
-    body: { text?: string; voice?: TTSVoice; sampleRate?: TTSSampleRate } = {},
+    body: { text?: string; voice?: TTSVoice; sampleRate?: TTSSampleRate; rate?: number } = {},
   ) =>
     http<TTSJob>(`/tts/scenes/${sceneId}`, {
       method: 'POST',
@@ -645,12 +678,12 @@ export const api = {
     `${API_BASE}/tts/jobs/${jobId}/file`,
 
   /**
-   * Read the project's full narration script (Markdown), if one is configured.
+   * Read the project's full narration script (stored in Project.scriptText).
    * Used by the TTS modal to show the user the full story they're voicing —
    * they then copy/paste relevant chunks per scene.
    */
   getProjectScript: (idOrSlug: string) =>
-    http<{ text: string | null; path: string | null }>(`/projects/${idOrSlug}/script`),
+    http<{ text: string | null }>(`/projects/${idOrSlug}/script`),
 };
 
 export type TTSVoice      = 'aidar' | 'baya' | 'kseniya' | 'xenia' | 'eugene' | 'random';
@@ -662,6 +695,8 @@ export interface TTSJob {
   text:           string;
   voice:          TTSVoice;
   sampleRate:     TTSSampleRate;
+  /** Playback rate, 1.0 = normal, <1 slower, >1 faster (range [0.5, 2.0]). */
+  rate:           number;
   status:         'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   outputFilename: string | null;
   errorMessage:   string | null;

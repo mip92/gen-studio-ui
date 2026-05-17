@@ -91,10 +91,8 @@ export function VideoDetail({
   return (
     <main className="px-8 py-6 max-w-5xl mx-auto">
       <div className="mb-4 flex items-baseline gap-3">
-        <Link href={`/projects/${projectId}/shots/${shotId}`} className="text-xs text-zinc-500 hover:text-zinc-300">
-          ← к кадру
-        </Link>
         <h1 className="text-lg font-semibold text-zinc-200">Видео-рендер</h1>
+        <span className="font-mono text-xs text-zinc-500">{video.id.slice(0, 8)}</span>
         <StatusBadge status={video.status} />
         <button
           onClick={handleDelete}

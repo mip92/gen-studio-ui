@@ -312,11 +312,8 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
     if ((state.status !== 'queued' && state.status !== 'running') || !state.sceneJobId) return;
     const t = setInterval(async () => {
       try {
-        const snap = await api.pipelineQueue();
-        const found =
-          snap.active.find((r) => r.id === state.sceneJobId) ??
-          snap.pending.find((r) => r.id === state.sceneJobId) ??
-          snap.recent.find((r) => r.id === state.sceneJobId);
+        const snap = await api.pipelineQueue({ id: state.sceneJobId, type: ['scene'], limit: 1 });
+        const found = snap.rows[0];
         if (!found) return;
         if (found.status === 'pending')  { setState((s) => ({ ...s, status: 'queued'  })); return; }
         if (found.status === 'running')  { setState((s) => ({ ...s, status: 'running' })); return; }

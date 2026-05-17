@@ -40,6 +40,17 @@ const VOICES: { id: TTSVoice; label: string }[] = [
 
 const SAMPLE_RATES: TTSSampleRate[] = [48000, 24000, 8000];
 
+// Discrete speed presets — Silero SSML accepts any % but documentary narration
+// usually wants one of these. 0.85 (медленнее) is the sweet spot for Russian
+// voiceover — gives clear articulation without sounding sleepy.
+const RATE_PRESETS: { value: number; label: string }[] = [
+  { value: 0.70, label: '0.7× — очень медленно' },
+  { value: 0.85, label: '0.85× — медленно (рекомендую для документалки)' },
+  { value: 1.00, label: '1.0× — нормально' },
+  { value: 1.15, label: '1.15× — быстро' },
+  { value: 1.30, label: '1.3× — очень быстро' },
+];
+
 export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialText, shots, onClose }: Props) {
   const draftFromBeats = useMemo(() => deriveDraftFromBeats(shots), [shots]);
   // Pre-fill: if the scene already has a saved narrationText, use it.
@@ -48,16 +59,18 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
   const [text,       setText]       = useState(initialText?.trim() || draftFromBeats);
   const [voice,      setVoice]      = useState<TTSVoice>('eugene');
   const [sampleRate, setSampleRate] = useState<TTSSampleRate>(48000);
+  // Default slow — better articulation for documentary narration.
+  const [rate,       setRate]       = useState<number>(0.85);
 
   // Full project narration script (Markdown) — fetched once, shown read-only in
   // a collapsible reference panel so the user can copy relevant fragments into
   // the textarea per scene.
-  const [script,      setScript]      = useState<{ text: string | null; path: string | null } | null>(null);
+  const [script,      setScript]      = useState<{ text: string | null } | null>(null);
   const [scriptOpen,  setScriptOpen]  = useState(false);
   useEffect(() => {
     api.getProjectScript(projectSlug)
       .then(setScript)
-      .catch(() => setScript({ text: null, path: null }));
+      .catch(() => setScript({ text: null }));
   }, [projectSlug]);
 
   // Insert the user-selected fragment from the script panel into the textarea.
@@ -109,7 +122,7 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
     try {
       // Save first so a later open re-uses the same text.
       await api.setSceneNarrationText(sceneId, text);
-      await api.startTTS(sceneId, { voice, sampleRate });
+      await api.startTTS(sceneId, { voice, sampleRate, rate });
       refresh();
     } catch (e) {
       setRunErr(e instanceof Error ? e.message : String(e));
@@ -180,7 +193,7 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
                 onClick={() => setScriptOpen((v) => !v)}
                 className="w-full px-3 py-2 flex items-center justify-between text-xs uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
               >
-                <span>📖 Полный сценарий проекта {script.path ? <span className="ml-2 normal-case tracking-normal text-zinc-600 text-[10px] font-mono">{script.path}</span> : null}</span>
+                <span>📖 Полный сценарий проекта</span>
                 <span>{scriptOpen ? '▾' : '▸'}</span>
               </button>
               {scriptOpen && (
@@ -199,8 +212,8 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
             </section>
           )}
 
-          {/* Voice + sample rate */}
-          <section className="grid grid-cols-2 gap-3">
+          {/* Voice + speed + sample rate */}
+          <section className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <label className="text-xs flex flex-col gap-1">
               <span className="text-zinc-500 uppercase tracking-wider">Голос</span>
               <select
@@ -210,6 +223,18 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
               >
                 {VOICES.map((v) => (
                   <option key={v.id} value={v.id}>{v.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs flex flex-col gap-1">
+              <span className="text-zinc-500 uppercase tracking-wider">Скорость</span>
+              <select
+                value={rate}
+                onChange={(e) => setRate(Number(e.target.value))}
+                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200"
+              >
+                {RATE_PRESETS.map((r) => (
+                  <option key={r.value} value={r.value}>{r.label}</option>
                 ))}
               </select>
             </label>
@@ -262,7 +287,7 @@ function TTSJobRow({ job }: { job: TTSJob }) {
     <div className="bg-zinc-950 border border-zinc-800 rounded p-3 text-xs">
       <div className="flex items-baseline gap-3 flex-wrap">
         <StatusBadge status={job.status} />
-        <span className="text-zinc-400 font-mono">{job.voice} · {job.sampleRate} Hz</span>
+        <span className="text-zinc-400 font-mono">{job.voice} · {job.sampleRate} Hz · {job.rate}×</span>
         <span className="text-zinc-600">{new Date(job.queuedAt).toLocaleString()}</span>
       </div>
       {isReady && (
