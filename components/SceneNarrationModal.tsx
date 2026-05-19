@@ -41,51 +41,26 @@ const VOICE_LABELS: Record<TTSVoice, string> = {
   random:  'Random (новый голос каждый раз) — лучше всего на V3',
 };
 
-const SAMPLE_RATES: TTSSampleRate[] = [48000, 24000, 8000];
-
-// Discrete speed presets for documentary narration. 0.9 (чуть медленнее
-// нормы) is the sweet spot for Russian voiceover — clear articulation
-// without sounding sleepy. 0.85 проверено на слух — слишком медленно.
-const RATE_PRESETS: { value: number; label: string }[] = [
-  { value: 0.70, label: '0.7× — очень медленно' },
-  { value: 0.85, label: '0.85× — медленно' },
-  { value: 0.90, label: '0.9× — чуть медленнее (рекомендую для документалки)' },
-  { value: 1.00, label: '1.0× — нормально' },
-  { value: 1.15, label: '1.15× — быстро' },
-  { value: 1.30, label: '1.3× — очень быстро' },
-];
+// Fixed TTS settings — Silero V5_5 at 48kHz, normal speed, no inter-sentence
+// silence. The previous selectors for sample-rate / speed / pause / model were
+// removed at user request: only V5_5 is in use, only 48kHz, only 1.0×, no
+// gaps between sentences. Backend auto-picks the V5_5 file when no
+// modelFilename is supplied, so we omit it entirely.
+const FIXED_SAMPLE_RATE: TTSSampleRate = 48000;
+const FIXED_RATE                       = 1.0;
+const FIXED_SENTENCE_PAUSE_SEC         = 0;
 
 export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialText, initialApprovedJobId, shots, onClose }: Props) {
   const draftFromBeats = useMemo(() => deriveDraftFromBeats(shots), [shots]);
   // Pre-fill: if the scene already has a saved narrationText, use it.
   // Otherwise drop in the auto-derived draft from shot beats so the textarea
   // isn't empty — user starts editing, not from scratch.
-  const [text,       setText]       = useState(initialText?.trim() || draftFromBeats);
-  const [voice,      setVoice]      = useState<TTSVoice>('eugene');
-  const [sampleRate, setSampleRate] = useState<TTSSampleRate>(48000);
-  // Default slightly-slow — 0.9× is the sweet spot for documentary narration
-  // (0.85 was tested and sounded too sleepy).
-  const [rate,       setRate]       = useState<number>(0.90);
-  // Silence after every sentence — documentary style benefits from explicit
-  // breathing room between beats. 5s is the user-requested default.
-  const [sentencePauseSec, setSentencePauseSec] = useState<number>(5);
+  const [text,  setText]  = useState(initialText?.trim() || draftFromBeats);
+  const [voice, setVoice] = useState<TTSVoice>('eugene');
 
-  // Available .pt models scanned from .silero_cache/ by the backend. modelFilename
-  // = empty string means "backend default (V5_5 first)". When a model with a
-  // smaller voice set is picked, the voice dropdown is filtered to its voices.
-  const [models,         setModels]      = useState<Array<{ filename: string; sizeBytes: number; voices: TTSVoice[] }>>([]);
-  const [modelFilename,  setModelFile]   = useState<string>('');
-  useEffect(() => {
-    api.listTTSModels().then(setModels).catch(() => setModels([]));
-  }, []);
-  const activeModel  = models.find((m) => m.filename === modelFilename);
-  const availableVoices: TTSVoice[] = activeModel
-    ? activeModel.voices
-    : (Object.keys(VOICE_LABELS) as TTSVoice[]);
-  // Snap voice back to the first allowed one when switching to a narrower model.
-  useEffect(() => {
-    if (!availableVoices.includes(voice)) setVoice(availableVoices[0] ?? 'eugene');
-  }, [availableVoices, voice]);
+  // Voice list — V5_5 ru only. Other selectors (model / sample-rate / speed /
+  // sentence-pause) were removed: backend now uses V5_5, 48kHz, 1.0×, no gap.
+  const availableVoices: TTSVoice[] = (Object.keys(VOICE_LABELS) as TTSVoice[]);
 
   // Full project narration script (Markdown) — fetched once, shown read-only in
   // a collapsible reference panel so the user can copy relevant fragments into
@@ -155,10 +130,10 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
       await api.setSceneNarrationText(sceneId, text);
       await api.startTTS(sceneId, {
         voice,
-        sampleRate,
-        rate,
-        sentencePauseSec,
-        ...(modelFilename ? { modelFilename } : {}),
+        sampleRate:       FIXED_SAMPLE_RATE,
+        rate:             FIXED_RATE,
+        sentencePauseSec: FIXED_SENTENCE_PAUSE_SEC,
+        // modelFilename intentionally omitted — backend auto-picks Silero V5_5.
       });
       refresh();
     } catch (e) {
@@ -287,24 +262,10 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
             </section>
           )}
 
-          {/* Model + voice + speed + sample rate */}
-          <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <label className="text-xs flex flex-col gap-1">
-              <span className="text-zinc-500 uppercase tracking-wider">Модель Silero</span>
-              <select
-                value={modelFilename}
-                onChange={(e) => setModelFile(e.target.value)}
-                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200"
-              >
-                <option value="">авто (V5_5 если есть, иначе по приоритету)</option>
-                {models.map((m) => (
-                  <option key={m.filename} value={m.filename}>
-                    {m.filename} ({Math.round(m.sizeBytes / 1024 / 1024)} MB · {m.voices.length} голос{m.voices.length === 1 ? '' : m.voices.length < 5 ? 'а' : 'ов'})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-xs flex flex-col gap-1">
+          {/* Voice selector — the only TTS knob left. Model is fixed to Silero V5_5,
+              sample rate to 48kHz, speed to 1.0×, no inter-sentence pause. */}
+          <section>
+            <label className="text-xs flex flex-col gap-1 max-w-xs">
               <span className="text-zinc-500 uppercase tracking-wider">Голос</span>
               <select
                 value={voice}
@@ -313,51 +274,6 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
               >
                 {availableVoices.map((v) => (
                   <option key={v} value={v}>{VOICE_LABELS[v] ?? v}</option>
-                ))}
-              </select>
-            </label>
-          </section>
-          <section className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <label className="text-xs flex flex-col gap-1">
-              <span className="text-zinc-500 uppercase tracking-wider">Скорость</span>
-              <select
-                value={rate}
-                onChange={(e) => setRate(Number(e.target.value))}
-                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200"
-              >
-                {RATE_PRESETS.map((r) => (
-                  <option key={r.value} value={r.value}>{r.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="text-xs flex flex-col gap-1">
-              <span className="text-zinc-500 uppercase tracking-wider" title="Пауза после каждого предложения. Текст бьётся по [.!?…], каждый кусок синтезируется отдельно, между ними вставляется тишина.">
-                Пауза после фразы
-              </span>
-              <select
-                value={sentencePauseSec}
-                onChange={(e) => setSentencePauseSec(Number(e.target.value))}
-                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200"
-              >
-                <option value={0}>0 — без паузы</option>
-                <option value={1}>1 сек</option>
-                <option value={2}>2 сек</option>
-                <option value={3}>3 сек</option>
-                <option value={5}>5 сек — документалка (дефолт)</option>
-                <option value={7}>7 сек</option>
-                <option value={10}>10 сек</option>
-                <option value={15}>15 сек</option>
-              </select>
-            </label>
-            <label className="text-xs flex flex-col gap-1">
-              <span className="text-zinc-500 uppercase tracking-wider">Sample rate</span>
-              <select
-                value={sampleRate}
-                onChange={(e) => setSampleRate(Number(e.target.value) as TTSSampleRate)}
-                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200"
-              >
-                {SAMPLE_RATES.map((sr) => (
-                  <option key={sr} value={sr}>{sr} Hz</option>
                 ))}
               </select>
             </label>
