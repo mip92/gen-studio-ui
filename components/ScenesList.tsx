@@ -73,13 +73,7 @@ export function ScenesList({ id }: { id: string }) {
                 <span className="text-xs text-zinc-500">
                   {s.shots.length} кадров · фото: {s.shots.filter((sh) => sh.chosenRender).length} · видео: {s.shots.filter((sh) => sh.chosenVideoId).length}
                 </span>
-                <button
-                  onClick={() => setTtsForScene(s.id)}
-                  title="Озвучка кадров сцены — по одному ~5с wav на шот"
-                  className="text-xs bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded"
-                >
-                  🔊 озвучка ({s.shots.filter((sh) => (sh as { narrationText?: string | null }).narrationText).length}/{s.shots.length})
-                </button>
+                <SceneTTSControls sceneId={s.id} onOpenDetails={() => setTtsForScene(s.id)} />
                 <button
                   onClick={() => setCreateShotInScene(s.id)}
                   className="text-xs bg-blue-700 hover:bg-blue-600 text-white px-2 py-0.5 rounded"
@@ -127,6 +121,87 @@ export function ScenesList({ id }: { id: string }) {
         );
       })()}
     </main>
+  );
+}
+
+/**
+ * Per-scene TTS controls — inline progress + bulk-queue button + "details" link
+ * that opens the full SceneShotsTTSModal. Polls the per-scene shot-TTS summary
+ * every 3s while anything is in flight so the user sees live counts without
+ * leaving the scenes page.
+ */
+function SceneTTSControls({ sceneId, onOpenDetails }: { sceneId: string; onOpenDetails: () => void }) {
+  const [sum,  setSum]  = useState<{ total: number; withText: number; approved: number; pending: number; running: number; failed: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err,  setErr]  = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    api.sceneShotsTTSSummary(sceneId).then(setSum).catch(() => setSum(null));
+  }, [sceneId]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  // Live poll while jobs are pending/running.
+  useEffect(() => {
+    if (!sum) return;
+    if (sum.pending + sum.running === 0) return;
+    const t = setInterval(refresh, 3000);
+    return () => clearInterval(t);
+  }, [sum, refresh]);
+
+  const queueMissing = async () => {
+    if (!sum) return;
+    const eligible = sum.withText - sum.approved;
+    if (eligible <= 0) {
+      alert('Нечего ставить: все шоты с текстом уже утверждены.');
+      return;
+    }
+    if (!confirm(`Поставить в очередь TTS для ${eligible} шотов сцены? Это серийная работа на CPU, по очереди.`)) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await api.queueAllShotTTS(sceneId, { mode: 'missing' });
+      refresh();
+      if (r.queued === 0) setErr('Ничего не поставлено — у всех шотов либо нет текста, либо уже утверждённый wav.');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!sum) {
+    return (
+      <button onClick={onOpenDetails} className="text-xs bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded">
+        🔊 озвучка
+      </button>
+    );
+  }
+
+  const inflight = sum.pending + sum.running;
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="text-zinc-500 font-mono">
+        🎙 {sum.approved}/{sum.total}
+        {sum.withText < sum.total && <span className="text-amber-400/70"> · 📝 {sum.withText}</span>}
+        {inflight > 0 && <span className="text-amber-300"> · ⚙ {sum.running} ⏳ {sum.pending}</span>}
+        {sum.failed > 0 && <span className="text-red-400"> · ✕ {sum.failed}</span>}
+      </span>
+      <button
+        onClick={queueMissing}
+        disabled={busy || sum.withText - sum.approved <= 0}
+        title="Поставить в очередь TTS для всех шотов сцены без утверждённой озвучки"
+        className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 text-white px-2 py-0.5 rounded"
+      >
+        {busy ? '⏳' : '🎙 в очередь'}
+      </button>
+      <button
+        onClick={onOpenDetails}
+        className="bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded"
+      >
+        детали
+      </button>
+      {err && <span className="text-red-400 text-[10px] font-mono truncate max-w-[200px]" title={err}>{err}</span>}
+    </div>
   );
 }
 

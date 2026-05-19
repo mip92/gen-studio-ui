@@ -753,6 +753,22 @@ export const api = {
       method: 'POST',
     }),
 
+  /**
+   * Bulk-queue TTS for every shot in a scene. mode='missing' skips shots that
+   * already have an approved completed wav (default); mode='all' re-renders.
+   */
+  queueAllShotTTS: (sceneId: string, body: { mode?: 'missing' | 'all'; voice?: TTSVoice } = {}) =>
+    http<{ queued: number; skipped: number; total: number }>(
+      `/tts/scenes/${sceneId}/shots/queue-all`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
+
+  /** Per-scene aggregate of shot-level TTS progress (live badge on scenes list). */
+  sceneShotsTTSSummary: (sceneId: string) =>
+    http<{ total: number; withText: number; approved: number; pending: number; running: number; failed: number }>(
+      `/tts/scenes/${sceneId}/shots/summary`,
+    ),
+
   // ── CapCut export ─────────────────────────────────────────────────────────
   capcutReadiness: (idOrSlug: string) =>
     http<CapcutReadiness>(`/projects/${idOrSlug}/export/capcut/readiness`),
