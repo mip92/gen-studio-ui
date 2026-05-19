@@ -30,6 +30,7 @@ const TABS = [
   { slug: 'participants', label: 'Participants' },
   { slug: 'render',       label: 'Рендер кадра' },
   { slug: 'videos',       label: 'Видео (Wan2.2 i2v)' },
+  { slug: 'narration',    label: 'Озвучка' },
 ] as const;
 
 export function ShotPageShell({
