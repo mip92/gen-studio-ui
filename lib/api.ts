@@ -772,10 +772,27 @@ export const api = {
       { method: 'POST', body: JSON.stringify(body) },
     ),
 
-  /** Per-scene aggregate of shot-level TTS progress (live badge on scenes list). */
+  /** Per-scene aggregate of shot-level TTS progress (live badge on scenes list).
+   *  Shot-bucketed: approved + waitingApprove + inFlight + needsQueueing ≤ total. */
   sceneShotsTTSSummary: (sceneId: string) =>
-    http<{ total: number; withText: number; approved: number; pending: number; running: number; failed: number }>(
-      `/tts/scenes/${sceneId}/shots/summary`,
+    http<{
+      total:          number;
+      withText:       number;
+      approved:       number;
+      waitingApprove: number;
+      inFlight:       number;
+      needsQueueing:  number;
+      pendingJobs:    number;
+      runningJobs:    number;
+      failedJobs:     number;
+    }>(`/tts/scenes/${sceneId}/shots/summary`),
+
+  /** Bulk-approve every shot in the scene that has a completed wav waiting.
+   *  Picks the latest completed take per shot. Returns counts. */
+  approveAllCompletedTTS: (sceneId: string) =>
+    http<{ approved: number; skipped: number; total: number }>(
+      `/tts/scenes/${sceneId}/shots/approve-all-completed`,
+      { method: 'POST' },
     ),
 
   // ── CapCut export ─────────────────────────────────────────────────────────

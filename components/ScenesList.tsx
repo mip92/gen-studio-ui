@@ -130,9 +130,21 @@ export function ScenesList({ id }: { id: string }) {
  * every 3s while anything is in flight so the user sees live counts without
  * leaving the scenes page.
  */
+type SceneSum = {
+  total:          number;
+  withText:       number;
+  approved:       number;
+  waitingApprove: number;
+  inFlight:       number;
+  needsQueueing:  number;
+  pendingJobs:    number;
+  runningJobs:    number;
+  failedJobs:     number;
+};
+
 function SceneTTSControls({ sceneId, onOpenDetails }: { sceneId: string; onOpenDetails: () => void }) {
-  const [sum,  setSum]  = useState<{ total: number; withText: number; approved: number; pending: number; running: number; failed: number } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [sum,  setSum]  = useState<SceneSum | null>(null);
+  const [busy, setBusy] = useState<false | 'queue' | 'approve'>(false);
   const [err,  setErr]  = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -141,27 +153,40 @@ function SceneTTSControls({ sceneId, onOpenDetails }: { sceneId: string; onOpenD
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Live poll while jobs are pending/running.
+  // Live poll while jobs are in flight.
   useEffect(() => {
     if (!sum) return;
-    if (sum.pending + sum.running === 0) return;
+    if (sum.inFlight === 0) return;
     const t = setInterval(refresh, 3000);
     return () => clearInterval(t);
   }, [sum, refresh]);
 
   const queueMissing = async () => {
     if (!sum) return;
-    const eligible = sum.withText - sum.approved;
-    if (eligible <= 0) {
-      alert('Нечего ставить: все шоты с текстом уже утверждены.');
+    if (sum.needsQueueing <= 0) {
+      alert('Нечего ставить: у всех шотов уже есть wav (готовый или в очереди).');
       return;
     }
-    if (!confirm(`Поставить в очередь TTS для ${eligible} шотов сцены? Это серийная работа на CPU, по очереди.`)) return;
-    setBusy(true); setErr(null);
+    if (!confirm(`Поставить в очередь ${sum.needsQueueing} шотов? (серийная работа, по очереди)`)) return;
+    setBusy('queue'); setErr(null);
     try {
-      const r = await api.queueAllShotTTS(sceneId, { mode: 'missing' });
+      await api.queueAllShotTTS(sceneId, { mode: 'missing' });
       refresh();
-      if (r.queued === 0) setErr('Ничего не поставлено — у всех шотов либо нет текста, либо уже утверждённый wav.');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const approveAll = async () => {
+    if (!sum || sum.waitingApprove <= 0) return;
+    if (!confirm(`Утвердить последнее завершённое аудио для ${sum.waitingApprove} шотов сцены?`)) return;
+    setBusy('approve'); setErr(null);
+    try {
+      const r = await api.approveAllCompletedTTS(sceneId);
+      refresh();
+      if (r.approved === 0) setErr('Никого не утвердили — нет готовых wav.');
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -177,23 +202,50 @@ function SceneTTSControls({ sceneId, onOpenDetails }: { sceneId: string; onOpenD
     );
   }
 
-  const inflight = sum.pending + sum.running;
+  // Plain-language breakdown — each number maps to one of the four shot
+  // buckets the user has to act on:
+  //   🎙 ✓        = approved (done)
+  //   🔊 ждут     = waitingApprove (click "утвердить ✓")
+  //   ⚙ / ⏳      = inFlight (waiting for the queue, nothing to do)
+  //   🚀 ставить  = needsQueueing (click "🎙 в очередь")
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="text-zinc-500 font-mono">
-        🎙 {sum.approved}/{sum.total}
-        {sum.withText < sum.total && <span className="text-amber-400/70"> · 📝 {sum.withText}</span>}
-        {inflight > 0 && <span className="text-amber-300"> · ⚙ {sum.running} ⏳ {sum.pending}</span>}
-        {sum.failed > 0 && <span className="text-red-400"> · ✕ {sum.failed}</span>}
+    <div className="flex items-center gap-2 text-xs flex-wrap">
+      <span className="font-mono flex items-center gap-2">
+        <span className="text-emerald-400" title="Утверждено">🎙 ✓ {sum.approved}</span>
+        {sum.waitingApprove > 0 && (
+          <span className="text-amber-300" title="Готовы wav, ждут утверждения">🔊 ждут {sum.waitingApprove}</span>
+        )}
+        {sum.inFlight > 0 && (
+          <span className="text-blue-300" title="В очереди / рендерится">⚙ {sum.runningJobs} ⏳ {sum.pendingJobs}</span>
+        )}
+        {sum.needsQueueing > 0 && (
+          <span className="text-zinc-400" title="Текст есть, но wav не рендерили">🚀 ставить {sum.needsQueueing}</span>
+        )}
+        {sum.failedJobs > 0 && (
+          <span className="text-red-400" title="Failed jobs">✕ {sum.failedJobs}</span>
+        )}
+        <span className="text-zinc-600">/ {sum.total}</span>
       </span>
-      <button
-        onClick={queueMissing}
-        disabled={busy || sum.withText - sum.approved <= 0}
-        title="Поставить в очередь TTS для всех шотов сцены без утверждённой озвучки"
-        className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 text-white px-2 py-0.5 rounded"
-      >
-        {busy ? '⏳' : '🎙 в очередь'}
-      </button>
+      {sum.needsQueueing > 0 && (
+        <button
+          onClick={queueMissing}
+          disabled={busy !== false}
+          title={`Поставить в очередь TTS для ${sum.needsQueueing} шотов без рендера`}
+          className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 text-white px-2 py-0.5 rounded"
+        >
+          {busy === 'queue' ? '⏳' : `🎙 поставить ${sum.needsQueueing}`}
+        </button>
+      )}
+      {sum.waitingApprove > 0 && (
+        <button
+          onClick={approveAll}
+          disabled={busy !== false}
+          title={`Утвердить последний wav для ${sum.waitingApprove} шотов`}
+          className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 text-white px-2 py-0.5 rounded"
+        >
+          {busy === 'approve' ? '⏳' : `✓ утвердить ${sum.waitingApprove}`}
+        </button>
+      )}
       <button
         onClick={onOpenDetails}
         className="bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded"
