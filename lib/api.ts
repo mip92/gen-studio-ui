@@ -240,10 +240,12 @@ export interface SceneSummary {
   title:           string | null;
   sortOrder:       number;
   /** Scene-level voiceover script — used by the TTS narration modal. */
-  narrationText:   string | null;
+  narrationText:    string | null;
+  /** id of the TTSJob the user approved as the canonical narration, or null. */
+  approvedTTSJobId: string | null;
   /** Which lines in <slug>_script.md this scene covers (inclusive). */
-  scriptStartLine: number | null;
-  scriptEndLine:   number | null;
+  scriptStartLine:  number | null;
+  scriptEndLine:    number | null;
   shots:           SceneShot[];
 }
 
@@ -267,12 +269,14 @@ export interface QueueRow {
   isLastPending:  boolean;
 }
 
-export type QueueSortField = 'queuedAt' | 'startedAt' | 'completedAt' | 'status' | 'type';
+export type QueueSortField = 'queuedAt' | 'startedAt' | 'completedAt' | 'status' | 'type' | 'project';
 
 export interface QueueListParams {
   id?:       string;
   status?:   string[];
   type?:     QueueJobType[];
+  /** Comma-separated list of project slugs to filter by. */
+  project?:  string[];
   finished?: boolean;
   sort?:     QueueSortField;
   order?:    'asc' | 'desc';
@@ -605,6 +609,7 @@ export const api = {
     if (params.id)                            qs.set('id',       params.id);
     if (params.status?.length)                qs.set('status',   params.status.join(','));
     if (params.type?.length)                  qs.set('type',     params.type.join(','));
+    if (params.project?.length)               qs.set('project',  params.project.join(','));
     if (params.finished !== undefined)        qs.set('finished', String(params.finished));
     if (params.sort)                          qs.set('sort',     params.sort);
     if (params.order)                         qs.set('order',    params.order);
@@ -652,10 +657,18 @@ export const api = {
   deleteVideo: (videoId: string) =>
     http<{ deleted: true; id: string }>(`/generation/videos/${videoId}`, { method: 'DELETE' }),
 
-  // ── TTS (Silero V5 ru) ────────────────────────────────────────────────────
+  // ── TTS (Silero ru) ───────────────────────────────────────────────────────
   startTTS: (
     sceneId: string,
-    body: { text?: string; voice?: TTSVoice; sampleRate?: TTSSampleRate; rate?: number } = {},
+    body: {
+      text?:             string;
+      voice?:            TTSVoice;
+      sampleRate?:       TTSSampleRate;
+      rate?:             number;
+      modelFilename?:    string;
+      /** Silence after every sentence (seconds). 0 = off. */
+      sentencePauseSec?: number;
+    } = {},
   ) =>
     http<TTSJob>(`/tts/scenes/${sceneId}`, {
       method: 'POST',
@@ -664,6 +677,10 @@ export const api = {
 
   listTTSJobs: (sceneId: string) =>
     http<TTSJob[]>(`/tts/scenes/${sceneId}/jobs`),
+
+  /** List Silero .pt models found in .silero_cache/ with their voice sets. */
+  listTTSModels: () =>
+    http<Array<{ filename: string; sizeBytes: number; voices: TTSVoice[] }>>(`/tts/models`),
 
   setSceneNarrationText: (sceneId: string, text: string) =>
     http<{ id: string; narrationText: string | null }>(`/tts/scenes/${sceneId}/narration`, {
@@ -677,6 +694,36 @@ export const api = {
   ttsFileUrl: (jobId: string) =>
     `${API_BASE}/tts/jobs/${jobId}/file`,
 
+  /** Mark a TTS job as the approved narration for its scene. Idempotent. */
+  approveTTSJob: (jobId: string) =>
+    http<{ id: string; approvedTTSJobId: string | null }>(`/tts/jobs/${jobId}/approve`, {
+      method: 'POST',
+    }),
+
+  /** Clear the scene's TTS approval — rare; usually you approve a different take instead. */
+  clearTTSApproval: (sceneId: string) =>
+    http<{ id: string; approvedTTSJobId: string | null }>(`/tts/scenes/${sceneId}/approve/clear`, {
+      method: 'POST',
+    }),
+
+  /** Hard-delete a TTS job (DB row + .wav on disk). Refuses if status='running'. */
+  deleteTTSJob: (jobId: string) =>
+    http<{ deleted: true; id: string }>(`/tts/jobs/${jobId}`, { method: 'DELETE' }),
+
+  /** Bulk-purge failed + cancelled jobs for a scene. */
+  purgeFailedTTSJobs: (sceneId: string) =>
+    http<{ deleted: number }>(`/tts/scenes/${sceneId}/jobs`, { method: 'DELETE' }),
+
+  // ── CapCut export ─────────────────────────────────────────────────────────
+  capcutReadiness: (idOrSlug: string) =>
+    http<CapcutReadiness>(`/projects/${idOrSlug}/export/capcut/readiness`),
+
+  exportCapcut: (idOrSlug: string) =>
+    http<{ draftPath: string; sceneCount: number; shotCount: number }>(
+      `/projects/${idOrSlug}/export/capcut`,
+      { method: 'POST' },
+    ),
+
   /**
    * Read the project's full narration script (stored in Project.scriptText).
    * Used by the TTS modal to show the user the full story they're voicing —
@@ -686,8 +733,24 @@ export const api = {
     http<{ text: string | null }>(`/projects/${idOrSlug}/script`),
 };
 
-export type TTSVoice      = 'aidar' | 'baya' | 'kseniya' | 'xenia' | 'eugene' | 'random';
+export type TTSVoice      = 'aidar' | 'baya' | 'kseniya' | 'xenia' | 'eugene' | 'ruslan' | 'random';
 export type TTSSampleRate = 8000 | 24000 | 48000;
+
+export interface CapcutReadiness {
+  ready: boolean;
+  totals: { scenes: number; shots: number };
+  missingShots:  Array<{
+    shotCode: string;
+    shotId:   string;
+    reason:   'no_chosen_video' | 'no_upscale';
+  }>;
+  missingScenes: Array<{
+    sceneKey: string;
+    sceneId:  string;
+    title:    string | null;
+    reason:   'no_approved_tts' | 'no_shots';
+  }>;
+}
 
 export interface TTSJob {
   id:             string;
@@ -697,6 +760,10 @@ export interface TTSJob {
   sampleRate:     TTSSampleRate;
   /** Playback rate, 1.0 = normal, <1 slower, >1 faster (range [0.5, 2.0]). */
   rate:           number;
+  /** Extra silence (seconds) inserted after every sentence boundary. 0 = off. */
+  sentencePauseSec: number;
+  /** Which Silero .pt was used (null = backend default). */
+  modelFilename:  string | null;
   status:         'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   outputFilename: string | null;
   errorMessage:   string | null;

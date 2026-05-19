@@ -24,7 +24,7 @@ export default async function ProjectLayout({
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="bg-zinc-950 text-zinc-100">
       <ProjectHeader id={id} projectName={projectName} />
       {children}
     </div>

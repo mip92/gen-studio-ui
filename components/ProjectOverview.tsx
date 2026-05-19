@@ -2,19 +2,29 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, ScenesResponse, DashboardResponse } from '../lib/api';
+import { api, CapcutReadiness, ScenesResponse, DashboardResponse } from '../lib/api';
 
 export function ProjectOverview({ id }: { id: string }) {
   const [scenes,    setScenes]    = useState<ScenesResponse    | null>(null);
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
+  const [readiness, setReadiness] = useState<CapcutReadiness   | null>(null);
   const [error,     setError]     = useState<string | null>(null);
+
+  const refreshReadiness = () => {
+    api.capcutReadiness(id).then(setReadiness).catch(() => setReadiness(null));
+  };
 
   useEffect(() => {
     (async () => {
       try {
-        const [s, d] = await Promise.all([api.listScenes(id), api.dashboard(id)]);
+        const [s, d, r] = await Promise.all([
+          api.listScenes(id),
+          api.dashboard(id),
+          api.capcutReadiness(id).catch(() => null),
+        ]);
         setScenes(s);
         setDashboard(d);
+        setReadiness(r);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -30,12 +40,19 @@ export function ProjectOverview({ id }: { id: string }) {
 
   return (
     <main className="px-8 py-6 max-w-7xl mx-auto">
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
-        <Stat label="Сцены"      value={String(scenes.scenes.length)} />
-        <Stat label="Кадры"      value={String(totalShots)} />
-        <Stat label="Персонажи"  value={String(total)} />
-        <Stat label="LoRA готовы" value={`${ready} / ${total}`} highlight={ready > 0} />
-      </section>
+      <div className="flex items-start justify-between mb-6 gap-4">
+        <section className="grid grid-cols-2 md:grid-cols-4 gap-3 flex-1">
+          <Stat label="Сцены"      value={String(scenes.scenes.length)} />
+          <Stat label="Кадры"      value={String(totalShots)} />
+          <Stat label="Персонажи"  value={String(total)} />
+          <Stat label="LoRA готовы" value={`${ready} / ${total}`} highlight={ready > 0} />
+        </section>
+        <ExportCapcutButton
+          projectId={id}
+          readiness={readiness}
+          onAfterExport={refreshReadiness}
+        />
+      </div>
 
       <section>
         <h2 className="text-sm uppercase tracking-wider text-zinc-500 mb-3">Сценарий</h2>
@@ -103,6 +120,110 @@ function Err({ msg }: { msg: string }) {
   return (
     <div className="bg-red-900/40 border border-red-700 rounded p-4">
       <p className="text-red-200 font-mono text-sm">{msg}</p>
+    </div>
+  );
+}
+
+function ExportCapcutButton({
+  projectId,
+  readiness,
+  onAfterExport,
+}: {
+  projectId:     string;
+  readiness:     CapcutReadiness | null;
+  onAfterExport: () => void;
+}) {
+  const [busy,   setBusy]   = useState(false);
+  const [result, setResult] = useState<{ draftPath: string; sceneCount: number; shotCount: number } | null>(null);
+  const [err,    setErr]    = useState<string | null>(null);
+
+  const reasonLabel = (r: string) => ({
+    no_chosen_video:  'нет утверждённого видео',
+    no_upscale:       'нет FHD-апскейла',
+    no_approved_tts:  'нет утверждённой озвучки',
+    no_shots:         'в сцене нет кадров',
+  } as Record<string, string>)[r] ?? r;
+
+  const totalMissing = (readiness?.missingShots.length ?? 0) + (readiness?.missingScenes.length ?? 0);
+  const ready        = readiness?.ready === true;
+
+  const tooltip = ready
+    ? 'Все кадры FHD, вся озвучка утверждена. Жми — соберу draft для CapCut.'
+    : !readiness
+      ? 'Проверяю готовность…'
+      : `Не готово: ${totalMissing} пункт${totalMissing === 1 ? '' : 'а'}. См. список ниже.`;
+
+  const onClick = async () => {
+    if (!ready || busy) return;
+    setBusy(true); setErr(null); setResult(null);
+    try {
+      const r = await api.exportCapcut(projectId);
+      setResult(r);
+      onAfterExport();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="w-72 flex-shrink-0">
+      <button
+        onClick={onClick}
+        disabled={!ready || busy}
+        title={tooltip}
+        className={`w-full px-4 py-2 rounded text-sm font-medium border transition-colors ${ready
+          ? 'bg-emerald-700 hover:bg-emerald-600 border-emerald-600 text-white'
+          : 'bg-zinc-900 border-zinc-700 text-zinc-500 cursor-not-allowed'}`}
+      >
+        {busy ? '⏳ собираю draft…' : '🎬 Экспорт в CapCut'}
+      </button>
+      {readiness && !ready && (
+        <div className="mt-2 bg-zinc-950 border border-zinc-800 rounded p-3 text-xs space-y-1.5 max-h-64 overflow-y-auto">
+          {readiness.missingScenes.map((s) => (
+            // Scene jump-link: /scenes page with the sceneKey anchor. ScenesList
+            // already renders an id="<sceneKey>" anchor per card, so the browser
+            // scrolls to the right card. From there the user clicks "озвучка".
+            <Link
+              key={s.sceneId}
+              href={`/projects/${projectId}/scenes#${s.sceneKey}`}
+              className="flex justify-between gap-2 px-1.5 py-1 -mx-1.5 rounded hover:bg-zinc-900 transition-colors"
+              title={`Открыть сцену ${s.sceneKey} → утвердить озвучку`}
+            >
+              <span className="text-zinc-300 hover:text-blue-300">сцена {s.sceneKey}</span>
+              <span className="text-amber-300 text-[10px]">{reasonLabel(s.reason)} →</span>
+            </Link>
+          ))}
+          {readiness.missingShots.map((s) => (
+            // Shot jump-link: each row points to the shot's right tab depending
+            // on what is missing — videos tab if no chosen video or no upscale
+            // yet, because both fixes happen on that page.
+            <Link
+              key={s.shotId}
+              href={`/projects/${projectId}/shots/${s.shotId}/videos`}
+              className="flex justify-between gap-2 px-1.5 py-1 -mx-1.5 rounded hover:bg-zinc-900 transition-colors"
+              title={`Открыть видео кадра ${s.shotCode}`}
+            >
+              <span className="text-zinc-300 font-mono hover:text-blue-300">{s.shotCode}</span>
+              <span className="text-amber-300 text-[10px]">{reasonLabel(s.reason)} →</span>
+            </Link>
+          ))}
+        </div>
+      )}
+      {err && <p className="mt-2 text-red-400 text-xs font-mono whitespace-pre-wrap break-all">{err}</p>}
+      {result && (
+        <div className="mt-2 bg-emerald-950/40 border border-emerald-700 rounded p-3 text-xs space-y-1">
+          <p className="text-emerald-300">✓ draft создан — {result.sceneCount} сцен, {result.shotCount} кадров</p>
+          <code className="block text-emerald-200 font-mono break-all bg-black/30 p-1.5 rounded text-[10px]">
+            {result.draftPath}
+          </code>
+          <p className="text-zinc-400">
+            Скопируй эту папку в <code>%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft\</code>.
+            Откроется в списке проектов CapCut.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

@@ -10,6 +10,8 @@ interface Props {
   projectSlug: string;
   /** Current narration text from the scene row — may be null if never set. */
   initialText: string | null;
+  /** Currently approved TTSJob id for this scene, or null. Mirrors Scene.approvedTTSJobId. */
+  initialApprovedJobId?: string | null;
   /**
    * Scene's shots, used to auto-derive narration text from narrative beats
    * when the user hasn't written anything yet. Each shot's beat is a one-line
@@ -29,29 +31,31 @@ function deriveDraftFromBeats(shots: SceneShot[] | undefined): string {
     .join('\n\n');
 }
 
-const VOICES: { id: TTSVoice; label: string }[] = [
-  { id: 'eugene',  label: 'Eugene (м, спокойный диктор) — дефолт' },
-  { id: 'aidar',   label: 'Aidar (м, уверенный)' },
-  { id: 'baya',    label: 'Baya (ж, нейтральная)' },
-  { id: 'kseniya', label: 'Kseniya (ж, мягкая)' },
-  { id: 'xenia',   label: 'Xenia (ж, выразительная)' },
-  { id: 'random',  label: 'Random (рандом)' },
-];
+const VOICE_LABELS: Record<TTSVoice, string> = {
+  eugene:  'Eugene (м, спокойный диктор)',
+  aidar:   'Aidar (м, уверенный)',
+  baya:    'Baya (ж, нейтральная)',
+  kseniya: 'Kseniya (ж, мягкая)',
+  xenia:   'Xenia (ж, выразительная)',
+  ruslan:  'Ruslan (м, бас) — только V3/V4',
+  random:  'Random (новый голос каждый раз) — лучше всего на V3',
+};
 
 const SAMPLE_RATES: TTSSampleRate[] = [48000, 24000, 8000];
 
-// Discrete speed presets — Silero SSML accepts any % but documentary narration
-// usually wants one of these. 0.85 (медленнее) is the sweet spot for Russian
-// voiceover — gives clear articulation without sounding sleepy.
+// Discrete speed presets for documentary narration. 0.9 (чуть медленнее
+// нормы) is the sweet spot for Russian voiceover — clear articulation
+// without sounding sleepy. 0.85 проверено на слух — слишком медленно.
 const RATE_PRESETS: { value: number; label: string }[] = [
   { value: 0.70, label: '0.7× — очень медленно' },
-  { value: 0.85, label: '0.85× — медленно (рекомендую для документалки)' },
+  { value: 0.85, label: '0.85× — медленно' },
+  { value: 0.90, label: '0.9× — чуть медленнее (рекомендую для документалки)' },
   { value: 1.00, label: '1.0× — нормально' },
   { value: 1.15, label: '1.15× — быстро' },
   { value: 1.30, label: '1.3× — очень быстро' },
 ];
 
-export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialText, shots, onClose }: Props) {
+export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialText, initialApprovedJobId, shots, onClose }: Props) {
   const draftFromBeats = useMemo(() => deriveDraftFromBeats(shots), [shots]);
   // Pre-fill: if the scene already has a saved narrationText, use it.
   // Otherwise drop in the auto-derived draft from shot beats so the textarea
@@ -59,8 +63,29 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
   const [text,       setText]       = useState(initialText?.trim() || draftFromBeats);
   const [voice,      setVoice]      = useState<TTSVoice>('eugene');
   const [sampleRate, setSampleRate] = useState<TTSSampleRate>(48000);
-  // Default slow — better articulation for documentary narration.
-  const [rate,       setRate]       = useState<number>(0.85);
+  // Default slightly-slow — 0.9× is the sweet spot for documentary narration
+  // (0.85 was tested and sounded too sleepy).
+  const [rate,       setRate]       = useState<number>(0.90);
+  // Silence after every sentence — documentary style benefits from explicit
+  // breathing room between beats. 5s is the user-requested default.
+  const [sentencePauseSec, setSentencePauseSec] = useState<number>(5);
+
+  // Available .pt models scanned from .silero_cache/ by the backend. modelFilename
+  // = empty string means "backend default (V5_5 first)". When a model with a
+  // smaller voice set is picked, the voice dropdown is filtered to its voices.
+  const [models,         setModels]      = useState<Array<{ filename: string; sizeBytes: number; voices: TTSVoice[] }>>([]);
+  const [modelFilename,  setModelFile]   = useState<string>('');
+  useEffect(() => {
+    api.listTTSModels().then(setModels).catch(() => setModels([]));
+  }, []);
+  const activeModel  = models.find((m) => m.filename === modelFilename);
+  const availableVoices: TTSVoice[] = activeModel
+    ? activeModel.voices
+    : (Object.keys(VOICE_LABELS) as TTSVoice[]);
+  // Snap voice back to the first allowed one when switching to a narrower model.
+  useEffect(() => {
+    if (!availableVoices.includes(voice)) setVoice(availableVoices[0] ?? 'eugene');
+  }, [availableVoices, voice]);
 
   // Full project narration script (Markdown) — fetched once, shown read-only in
   // a collapsible reference panel so the user can copy relevant fragments into
@@ -87,9 +112,15 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
   };
 
   const [jobs,      setJobs]   = useState<TTSJob[] | null>(null);
-  const [busy,      setBusy]   = useState<false | 'save' | 'render'>(false);
+  const [busy,      setBusy]   = useState<false | 'save' | 'render' | 'approve' | 'delete'>(false);
   const [saveError, setSaveErr] = useState<string | null>(null);
   const [runError,  setRunErr]  = useState<string | null>(null);
+  const [approveErr, setApproveErr] = useState<string | null>(null);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
+  // Approved job id — starts from the SceneSummary prop, then tracked locally
+  // so the approve/clear buttons feel instant. Server is source of truth on
+  // re-open (ScenesList refreshes on close).
+  const [approvedJobId, setApprovedJobId] = useState<string | null>(initialApprovedJobId ?? null);
 
   const refresh = useCallback(() => {
     api.listTTSJobs(sceneId).then(setJobs).catch(() => setJobs([]));
@@ -122,10 +153,54 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
     try {
       // Save first so a later open re-uses the same text.
       await api.setSceneNarrationText(sceneId, text);
-      await api.startTTS(sceneId, { voice, sampleRate, rate });
+      await api.startTTS(sceneId, {
+        voice,
+        sampleRate,
+        rate,
+        sentencePauseSec,
+        ...(modelFilename ? { modelFilename } : {}),
+      });
       refresh();
     } catch (e) {
       setRunErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const approveJob = async (jobId: string) => {
+    setBusy('approve'); setApproveErr(null);
+    try {
+      const res = await api.approveTTSJob(jobId);
+      setApprovedJobId(res.approvedTTSJobId ?? jobId);
+    } catch (e) {
+      setApproveErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearApproval = async () => {
+    setBusy('approve'); setApproveErr(null);
+    try {
+      await api.clearTTSApproval(sceneId);
+      setApprovedJobId(null);
+    } catch (e) {
+      setApproveErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteJob = async (jobId: string) => {
+    if (!confirm('Удалить эту запись насовсем? Файл .wav тоже сотрётся.')) return;
+    setBusy('delete'); setDeleteErr(null);
+    try {
+      await api.deleteTTSJob(jobId);
+      if (approvedJobId === jobId) setApprovedJobId(null);
+      refresh();
+    } catch (e) {
+      setDeleteErr(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -212,8 +287,23 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
             </section>
           )}
 
-          {/* Voice + speed + sample rate */}
-          <section className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {/* Model + voice + speed + sample rate */}
+          <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <label className="text-xs flex flex-col gap-1">
+              <span className="text-zinc-500 uppercase tracking-wider">Модель Silero</span>
+              <select
+                value={modelFilename}
+                onChange={(e) => setModelFile(e.target.value)}
+                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200"
+              >
+                <option value="">авто (V5_5 если есть, иначе по приоритету)</option>
+                {models.map((m) => (
+                  <option key={m.filename} value={m.filename}>
+                    {m.filename} ({Math.round(m.sizeBytes / 1024 / 1024)} MB · {m.voices.length} голос{m.voices.length === 1 ? '' : m.voices.length < 5 ? 'а' : 'ов'})
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className="text-xs flex flex-col gap-1">
               <span className="text-zinc-500 uppercase tracking-wider">Голос</span>
               <select
@@ -221,11 +311,13 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
                 onChange={(e) => setVoice(e.target.value as TTSVoice)}
                 className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200"
               >
-                {VOICES.map((v) => (
-                  <option key={v.id} value={v.id}>{v.label}</option>
+                {availableVoices.map((v) => (
+                  <option key={v} value={v}>{VOICE_LABELS[v] ?? v}</option>
                 ))}
               </select>
             </label>
+          </section>
+          <section className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <label className="text-xs flex flex-col gap-1">
               <span className="text-zinc-500 uppercase tracking-wider">Скорость</span>
               <select
@@ -236,6 +328,25 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
                 {RATE_PRESETS.map((r) => (
                   <option key={r.value} value={r.value}>{r.label}</option>
                 ))}
+              </select>
+            </label>
+            <label className="text-xs flex flex-col gap-1">
+              <span className="text-zinc-500 uppercase tracking-wider" title="Пауза после каждого предложения. Текст бьётся по [.!?…], каждый кусок синтезируется отдельно, между ними вставляется тишина.">
+                Пауза после фразы
+              </span>
+              <select
+                value={sentencePauseSec}
+                onChange={(e) => setSentencePauseSec(Number(e.target.value))}
+                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200"
+              >
+                <option value={0}>0 — без паузы</option>
+                <option value={1}>1 сек</option>
+                <option value={2}>2 сек</option>
+                <option value={3}>3 сек</option>
+                <option value={5}>5 сек — документалка (дефолт)</option>
+                <option value={7}>7 сек</option>
+                <option value={10}>10 сек</option>
+                <option value={15}>15 сек</option>
               </select>
             </label>
             <label className="text-xs flex flex-col gap-1">
@@ -264,16 +375,53 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
             {runError && <span className="ml-3 text-red-400 text-xs">{runError}</span>}
           </section>
 
-          {/* Past jobs */}
+          {/* Past jobs — failed/cancelled are hidden by default (user has explicitly
+              said they don't care about them); a tiny "+N упавших" hint at the top
+              of the list keeps them recoverable without dominating the UI. */}
           <section>
-            <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-2">История ({jobs?.length ?? 0})</h3>
-            {jobs === null && <p className="text-zinc-600 text-sm">Loading…</p>}
-            {jobs && jobs.length === 0 && (
-              <p className="text-zinc-600 text-sm italic">Ещё не запускали.</p>
-            )}
-            <div className="space-y-2">
-              {jobs?.map((j) => <TTSJobRow key={j.id} job={j} />)}
-            </div>
+            {(() => {
+              const visible = (jobs ?? []).filter((j) => j.status !== 'failed' && j.status !== 'cancelled');
+              const hidden  = (jobs ?? []).length - visible.length;
+              return (
+                <>
+                  <div className="flex items-baseline justify-between mb-2">
+                    <h3 className="text-xs uppercase tracking-wider text-zinc-500">
+                      История ({visible.length}{hidden > 0 ? ` · +${hidden} скрыто` : ''})
+                    </h3>
+                    {approvedJobId && (
+                      <button
+                        onClick={clearApproval}
+                        disabled={busy !== false}
+                        className="text-[10px] uppercase tracking-wider text-zinc-500 hover:text-red-300 disabled:opacity-30"
+                        title="Снять отметку «утверждено»"
+                      >
+                        снять approve
+                      </button>
+                    )}
+                  </div>
+                  {approveErr && <p className="text-red-400 text-xs mb-2">{approveErr}</p>}
+                  {deleteErr  && <p className="text-red-400 text-xs mb-2">{deleteErr}</p>}
+                  {jobs === null && <p className="text-zinc-600 text-sm">Loading…</p>}
+                  {jobs && visible.length === 0 && (
+                    <p className="text-zinc-600 text-sm italic">
+                      {hidden > 0 ? `Все ${hidden} попытки упали — нажми «озвучить» ещё раз.` : 'Ещё не запускали.'}
+                    </p>
+                  )}
+                  <div className="space-y-2">
+                    {visible.map((j) => (
+                      <TTSJobRow
+                        key={j.id}
+                        job={j}
+                        isApproved={j.id === approvedJobId}
+                        onApprove={() => approveJob(j.id)}
+                        onDelete={() => deleteJob(j.id)}
+                        busy={busy === 'approve' || busy === 'delete'}
+                      />
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
           </section>
         </div>
       </div>
@@ -281,14 +429,61 @@ export function SceneNarrationModal({ sceneId, sceneTitle, projectSlug, initialT
   );
 }
 
-function TTSJobRow({ job }: { job: TTSJob }) {
+function TTSJobRow({
+  job,
+  isApproved,
+  onApprove,
+  onDelete,
+  busy,
+}: {
+  job:        TTSJob;
+  isApproved: boolean;
+  onApprove:  () => void;
+  onDelete:   () => void;
+  busy:       boolean;
+}) {
   const isReady = job.status === 'completed' && job.outputFilename;
   return (
-    <div className="bg-zinc-950 border border-zinc-800 rounded p-3 text-xs">
+    <div className={`border rounded p-3 text-xs ${isApproved
+      ? 'bg-emerald-950/30 border-emerald-700'
+      : 'bg-zinc-950 border-zinc-800'}`}>
       <div className="flex items-baseline gap-3 flex-wrap">
         <StatusBadge status={job.status} />
+        {isApproved && (
+          <span className="text-emerald-300 bg-emerald-900/40 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded">
+            ✓ approved
+          </span>
+        )}
         <span className="text-zinc-400 font-mono">{job.voice} · {job.sampleRate} Hz · {job.rate}×</span>
+        {job.sentencePauseSec > 0 && (
+          <span className="text-amber-300/70 font-mono text-[10px]" title="Пауза после каждого предложения">⏸ {job.sentencePauseSec}s</span>
+        )}
+        {job.modelFilename && (
+          <span className="text-zinc-500 font-mono text-[10px]">{job.modelFilename.replace(/\.pt$/, '')}</span>
+        )}
         <span className="text-zinc-600">{new Date(job.queuedAt).toLocaleString()}</span>
+        <div className="ml-auto flex items-center gap-2">
+          {isReady && !isApproved && (
+            <button
+              onClick={onApprove}
+              disabled={busy}
+              className="bg-emerald-800 hover:bg-emerald-700 disabled:opacity-30 text-white text-[10px] uppercase tracking-wider px-2 py-0.5 rounded"
+              title="Утвердить эту запись как финальную для сцены"
+            >
+              ✓ approve
+            </button>
+          )}
+          {job.status !== 'running' && (
+            <button
+              onClick={onDelete}
+              disabled={busy}
+              className="bg-red-900/40 hover:bg-red-800 disabled:opacity-30 text-red-200 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded"
+              title="Удалить запись и .wav-файл"
+            >
+              ✕ удалить
+            </button>
+          )}
+        </div>
       </div>
       {isReady && (
         <audio

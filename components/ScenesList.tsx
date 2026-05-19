@@ -123,6 +123,7 @@ export function ScenesList({ id }: { id: string }) {
             sceneTitle={s.title ?? s.sceneKey}
             projectSlug={id}
             initialText={s.narrationText}
+            initialApprovedJobId={s.approvedTTSJobId}
             shots={s.shots}
             onClose={() => { setTtsForScene(null); refresh(); }}
           />

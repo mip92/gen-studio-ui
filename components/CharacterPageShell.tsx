@@ -158,7 +158,8 @@ function CharacterBreadcrumbs({
   const tab = TABS.find((t) => pathname?.includes(`${base}/${t.slug}`));
 
   const items: BreadcrumbItem[] = [
-    { label: 'Projects',     href: '/' },
+    { label: 'Overview',     href: '/' },
+    { label: 'Projects',     href: '/projects' },
     { label: project.name,   href: `/projects/${projectId}` },
     { label: 'Characters',   href: `/projects/${projectId}/characters` },
     { label: profile.profileCode, href: `${base}/description` },

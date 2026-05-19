@@ -17,6 +17,7 @@ import {
   QueueRow,
   QueueJobType,
   QueueSortField,
+  ProjectListItem,
 } from '../lib/api';
 
 const POLL_MS = 3000;
@@ -42,6 +43,8 @@ export interface QueueTableProps {
   initialStatuses?: string[];
   /** Types pre-selected in the Type column filter dropdown. */
   initialTypes?:    QueueJobType[];
+  /** Project slugs pre-selected in the Project column filter dropdown. */
+  initialProjects?: string[];
 }
 
 /**
@@ -58,16 +61,18 @@ function tsStateToApiParams(
   const sortId = sorting[0]?.id as QueueSortField | undefined;
   const order: 'asc' | 'desc' = sorting[0]?.desc === false ? 'asc' : 'desc';
 
-  const typeFilter   = columnFilters.find((f) => f.id === 'type')?.value   as string[] | undefined;
-  const statusFilter = columnFilters.find((f) => f.id === 'status')?.value as string[] | undefined;
+  const typeFilter    = columnFilters.find((f) => f.id === 'type')?.value    as string[] | undefined;
+  const statusFilter  = columnFilters.find((f) => f.id === 'status')?.value  as string[] | undefined;
+  const projectFilter = columnFilters.find((f) => f.id === 'project')?.value as string[] | undefined;
 
   return {
-    sort:   sortId,
+    sort:    sortId,
     order,
-    page:   pagination.pageIndex + 1,
-    limit:  pagination.pageSize,
-    type:   typeFilter   && typeFilter.length   > 0 ? (typeFilter   as QueueJobType[]) : undefined,
-    status: statusFilter && statusFilter.length > 0 ?  statusFilter                    : undefined,
+    page:    pagination.pageIndex + 1,
+    limit:   pagination.pageSize,
+    type:    typeFilter    && typeFilter.length    > 0 ? (typeFilter    as QueueJobType[]) : undefined,
+    status:  statusFilter  && statusFilter.length  > 0 ?  statusFilter                     : undefined,
+    project: projectFilter && projectFilter.length > 0 ?  projectFilter                    : undefined,
   };
 }
 
@@ -75,15 +80,26 @@ export default function QueueTable({
   initialSort     = { id: 'queuedAt', desc: true },
   initialStatuses = [],
   initialTypes    = [],
+  initialProjects = [],
 }: QueueTableProps) {
   const [sorting,    setSorting]    = useState<SortingState>([initialSort]);
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(() => {
     const init: ColumnFiltersState = [];
-    if (initialStatuses.length > 0) init.push({ id: 'status', value: initialStatuses });
-    if (initialTypes.length    > 0) init.push({ id: 'type',   value: initialTypes });
+    if (initialStatuses.length > 0) init.push({ id: 'status',  value: initialStatuses });
+    if (initialTypes.length    > 0) init.push({ id: 'type',    value: initialTypes });
+    if (initialProjects.length > 0) init.push({ id: 'project', value: initialProjects });
     return init;
   });
+
+  // Project list for the Project column's filter dropdown. Single fetch on
+  // mount — the list rarely changes during a session and we don't want every
+  // poll to re-request it. Empty array on fetch failure (filter still works,
+  // just shows no options).
+  const [projectList, setProjectList] = useState<ProjectListItem[]>([]);
+  useEffect(() => {
+    api.listProjects().then(setProjectList).catch(() => setProjectList([]));
+  }, []);
 
   const [data,  setData]  = useState<QueueListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -176,6 +192,33 @@ export default function QueueTable({
       ),
     },
     {
+      id: 'project', accessorKey: 'projectSlug', enableSorting: true, enableColumnFilter: true,
+      header: ({ column }) => (
+        <HeaderCell
+          label="Project"
+          column={column}
+          filter={
+            <MultiSelectLabeled
+              options={projectList.map((p) => ({ value: p.slug, label: p.name }))}
+              value={(column.getFilterValue() as string[] | undefined) ?? []}
+              onChange={(v) => column.setFilterValue(v.length ? v : undefined)}
+            />
+          }
+        />
+      ),
+      cell: ({ row }) => {
+        const slug = row.original.projectSlug;
+        const proj = projectList.find((p) => p.slug === slug);
+        return (
+          <Link href={`/projects/${proj?.id ?? slug}`}
+                className="text-xs text-zinc-300 hover:text-white underline-offset-2 hover:underline truncate inline-block max-w-[140px]"
+                title={proj?.name ?? slug}>
+            {proj?.name ?? slug}
+          </Link>
+        );
+      },
+    },
+    {
       id: 'status', accessorKey: 'status', enableSorting: true, enableColumnFilter: true,
       header: ({ column }) => (
         <HeaderCell
@@ -199,7 +242,6 @@ export default function QueueTable({
         return (
           <div className="min-w-0">
             <div className="font-mono text-xs truncate">
-              <span className="text-zinc-500">{r.projectSlug} / </span>
               {renderRowTargets(r, links[r.projectSlug])}
               {r.triggerToken && <span className="text-zinc-600 ml-2">→ {r.triggerToken}</span>}
             </div>
@@ -261,7 +303,7 @@ export default function QueueTable({
     },
   // links/busy/move/cancel captured by closure; deps intentionally narrow.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [links, busy]);
+  ], [links, busy, projectList]);
 
   const rows  = data?.rows  ?? [];
   const total = data?.total ?? 0;
@@ -437,6 +479,78 @@ function MultiSelect({ options, value, onChange }: {
               <input type="checkbox" checked={value.includes(opt)} onChange={() => toggle(opt)}
                      className="accent-emerald-500" />
               {opt}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Multi-select where the visible label differs from the stored value — e.g.
+ *  Project filter shows project names but sends slugs to the backend. */
+function MultiSelectLabeled({ options, value, onChange }: {
+  options:  { value: string; label: string }[];
+  value:    string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const toggle = (val: string) => {
+    const set = new Set(value);
+    if (set.has(val)) set.delete(val); else set.add(val);
+    onChange([...set]);
+  };
+
+  const buttonLabel = value.length === 0
+    ? 'all'
+    : value.length === 1
+      ? (options.find((o) => o.value === value[0])?.label ?? value[0])
+      : `${value.length} selected`;
+
+  return (
+    <div ref={wrapRef} className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={`text-[10px] normal-case font-normal px-2 py-0.5 rounded border transition-colors max-w-[140px] truncate ${
+          value.length > 0
+            ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200'
+            : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'
+        }`}
+        title={buttonLabel}
+      >
+        {buttonLabel} <span className="opacity-60">▾</span>
+      </button>
+      {open && (
+        <div className="absolute z-10 mt-1 left-0 min-w-[180px] bg-zinc-900 border border-zinc-700 rounded shadow-lg py-1 max-h-[300px] overflow-y-auto">
+          {options.length === 0 && (
+            <div className="px-3 py-1 text-[11px] text-zinc-600 italic">no options</div>
+          )}
+          {value.length > 0 && (
+            <button
+              type="button"
+              onClick={() => onChange([])}
+              className="block w-full text-left px-3 py-1 text-[11px] text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800"
+            >
+              clear
+            </button>
+          )}
+          {options.map((opt) => (
+            <label key={opt.value} className="flex items-center gap-2 px-3 py-1 text-[11px] text-zinc-300 hover:bg-zinc-800 cursor-pointer">
+              <input type="checkbox" checked={value.includes(opt.value)} onChange={() => toggle(opt.value)}
+                     className="accent-emerald-500" />
+              <span className="truncate">{opt.label}</span>
             </label>
           ))}
         </div>

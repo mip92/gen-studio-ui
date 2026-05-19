@@ -42,7 +42,8 @@ export function ProjectHeader({
 
   const activeTab = TABS.find((t) => isActive(t.key));
   const crumbs: BreadcrumbItem[] = [
-    { label: 'Projects',     href: '/' },
+    { label: 'Overview',     href: '/' },
+    { label: 'Projects',     href: '/projects' },
     { label: projectName,    href: activeTab && activeTab.key ? base : undefined },
     ...(activeTab && activeTab.key ? [{ label: activeTab.label }] : []),
   ];

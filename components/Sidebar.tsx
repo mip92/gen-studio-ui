@@ -37,7 +37,8 @@ export function Sidebar() {
 
       <nav className="px-2 pb-4 flex-1 space-y-4">
         <Section title="Главное">
-          <NavLink href="/"             label="Projects"      active={pathname === '/'} />
+          <NavLink href="/"         label="Overview" active={pathname === '/'} />
+          <NavLink href="/projects" label="Projects" active={pathname === '/projects'} />
         </Section>
 
         <Section title="Очередь">

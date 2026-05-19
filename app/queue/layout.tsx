@@ -15,13 +15,13 @@ export default function QueueLayout({ children }: { children: React.ReactNode })
   const tab = TABS.find((t) => pathname?.endsWith(`/queue/${t.slug}`));
 
   const crumbs: BreadcrumbItem[] = [
-    { label: 'Projects', href: '/' },
+    { label: 'Overview', href: '/' },
     { label: 'Queue',    href: tab ? '/queue/active' : undefined },
     ...(tab ? [{ label: tab.label }] : []),
   ];
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="bg-zinc-950 text-zinc-100">
       <div className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
         <div className="max-w-7xl mx-auto px-8 pt-3 pb-0">
           <Breadcrumbs items={crumbs} />

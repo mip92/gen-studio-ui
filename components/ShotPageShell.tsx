@@ -90,7 +90,8 @@ function ShotBreadcrumbs({ projectId, shotId, shot }: { projectId: string; shotI
   // shot is always loaded by the time we reach the StickyHeader — error/loading
   // states bail out earlier — so we never have to fall back to a truncated id.
   const items: BreadcrumbItem[] = [
-    { label: 'Projects',                  href: '/' },
+    { label: 'Overview',                  href: '/' },
+    { label: 'Projects',                  href: '/projects' },
     { label: shot.project?.name ?? '…',   href: `/projects/${projectId}` },
     { label: shot.scene?.title ?? shot.scene?.sceneKey ?? 'scene',
       href: `/projects/${projectId}/scenes#${shot.scene?.sceneKey ?? ''}` },
