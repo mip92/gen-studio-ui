@@ -231,8 +231,10 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
   markBeforeNav: (targetId?: string) => void;
 }) {
   const router            = useRouter();
-  const [busy,    setBusy]    = useState<false | 'one' | 'five' | 'video' | 'upscale'>(false);
+  const [busy,    setBusy]    = useState<false | 'one' | 'five' | 'video' | 'upscale' | 'tts'>(false);
   const [enqueueErr, setErr]  = useState<string | null>(null);
+  const narrationText   = (shot as { narrationText?: string | null }).narrationText ?? null;
+  const approvedTTSJobId = (shot as { approvedTTSJobId?: string | null }).approvedTTSJobId ?? null;
 
   // Render is allowed iff every bound participant has a trained LoRA.
   // 0-participant shots (environment) are renderable. unbound (silhouette)
@@ -285,6 +287,19 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
     setErr(null);
     try {
       await api.upscaleVideo(shot.chosenVideoId);
+      onEnqueued();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const enqueueTTS = async () => {
+    setBusy('tts');
+    setErr(null);
+    try {
+      await api.startShotTTS(shot.id, { voice: 'eugene' });
       onEnqueued();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -356,6 +371,15 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
           {fhdReady && (
             <span className="text-emerald-300 bg-emerald-900/30 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">FHD ✓</span>
           )}
+          {approvedTTSJobId && (
+            <span className="text-emerald-400 text-[10px] uppercase tracking-wider">🎙 tts ✓</span>
+          )}
+          {!approvedTTSJobId && narrationText && (
+            <span className="text-zinc-500 text-[10px] uppercase tracking-wider">📝 текст готов</span>
+          )}
+          {!narrationText && (
+            <span className="text-zinc-600 text-[10px] uppercase tracking-wider">🎙 нет текста</span>
+          )}
           {upscaleStatus === 'running' && (
             <span className="text-blue-300 bg-blue-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⚙ FHD</span>
           )}
@@ -388,8 +412,24 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
             1) no photo approved          → render photos
             2) photo approved, no video   → render video
             3) video approved, no FHD     → upscale to FHD
-            4) FHD ready / in-flight FHD  → no button (badge tells the story) */}
+            4) FHD ready / in-flight FHD  → no button (badge tells the story)
+          Plus an independent "🎙 озвучить" button on every row, hidden only
+          when narrationText is empty (TTS can't run on empty text). */}
       <div onClick={stop} className="flex flex-col gap-1 flex-shrink-0">
+        {narrationText && (
+          <button
+            onClick={(e) => { stop(e); enqueueTTS(); }}
+            disabled={busy !== false}
+            title={approvedTTSJobId
+              ? 'Переозвучить (поставит новый wav в очередь, старый approval сохраняется до явного утверждения нового)'
+              : 'Поставить TTS-озвучку этого шота в очередь'}
+            className={`text-[11px] disabled:opacity-30 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded whitespace-nowrap ${
+              approvedTTSJobId ? 'bg-zinc-700 hover:bg-zinc-600' : 'bg-amber-700 hover:bg-amber-600'
+            }`}
+          >
+            {busy === 'tts' ? '⏳ tts…' : approvedTTSJobId ? '🔁 переозвучить' : '🎙 озвучить'}
+          </button>
+        )}
         {videoApproved ? (
           fhdReady || upscaleStatus === 'running' || upscaleStatus === 'pending' ? null : (
             <button
