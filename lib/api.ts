@@ -239,6 +239,15 @@ export interface SceneShot {
   narrationText?:    string | null;
   /** TTSJob.id approved as the canonical voiceover for this shot, or null. */
   approvedTTSJobId?: string | null;
+  /** Status of the most recent NON-terminal TTSJob for this shot
+   *  (pending/running), or null when nothing is in flight. */
+  ttsLatestStatus?:  'pending' | 'running' | null;
+  /** How many completed TTSJobs exist for this shot but aren't approved yet
+   *  — these are takes waiting for the user to pick one. */
+  ttsCompletedUnapproved?: number;
+  /** id of the most recent completed-but-not-approved TTSJob — the row the
+   *  quick "✓ утвердить" button on the scenes list approves directly. */
+  ttsLatestCompletedUnapprovedId?: string | null;
 }
 
 export interface SceneSummary {

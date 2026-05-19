@@ -231,10 +231,13 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
   markBeforeNav: (targetId?: string) => void;
 }) {
   const router            = useRouter();
-  const [busy,    setBusy]    = useState<false | 'one' | 'five' | 'video' | 'upscale' | 'tts'>(false);
+  const [busy,    setBusy]    = useState<false | 'one' | 'five' | 'video' | 'upscale' | 'tts' | 'approve'>(false);
   const [enqueueErr, setErr]  = useState<string | null>(null);
-  const narrationText   = (shot as { narrationText?: string | null }).narrationText ?? null;
-  const approvedTTSJobId = (shot as { approvedTTSJobId?: string | null }).approvedTTSJobId ?? null;
+  const narrationText                  = (shot as { narrationText?: string | null }).narrationText ?? null;
+  const approvedTTSJobId               = (shot as { approvedTTSJobId?: string | null }).approvedTTSJobId ?? null;
+  const ttsLatestStatus                = (shot as { ttsLatestStatus?: 'pending' | 'running' | null }).ttsLatestStatus ?? null;
+  const ttsCompletedUnapproved         = (shot as { ttsCompletedUnapproved?: number }).ttsCompletedUnapproved ?? 0;
+  const ttsLatestCompletedUnapprovedId = (shot as { ttsLatestCompletedUnapprovedId?: string | null }).ttsLatestCompletedUnapprovedId ?? null;
 
   // Render is allowed iff every bound participant has a trained LoRA.
   // 0-participant shots (environment) are renderable. unbound (silhouette)
@@ -308,6 +311,20 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
     }
   };
 
+  const quickApprove = async () => {
+    if (!ttsLatestCompletedUnapprovedId) return;
+    setBusy('approve');
+    setErr(null);
+    try {
+      await api.approveTTSJob(ttsLatestCompletedUnapprovedId);
+      onEnqueued();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const stop = (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); };
 
   return (
@@ -371,10 +388,21 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
           {fhdReady && (
             <span className="text-emerald-300 bg-emerald-900/30 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">FHD ✓</span>
           )}
+          {ttsLatestStatus === 'running' && (
+            <span className="text-blue-300 bg-blue-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⚙ tts</span>
+          )}
+          {ttsLatestStatus === 'pending' && (
+            <span className="text-amber-300 bg-amber-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⏳ tts</span>
+          )}
           {approvedTTSJobId && (
             <span className="text-emerald-400 text-[10px] uppercase tracking-wider">🎙 tts ✓</span>
           )}
-          {!approvedTTSJobId && narrationText && (
+          {!approvedTTSJobId && ttsCompletedUnapproved > 0 && (
+            <span className="text-amber-300 bg-amber-900/30 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">
+              🔊 ждут {ttsCompletedUnapproved}
+            </span>
+          )}
+          {!approvedTTSJobId && ttsCompletedUnapproved === 0 && narrationText && (
             <span className="text-zinc-500 text-[10px] uppercase tracking-wider">📝 текст готов</span>
           )}
           {!narrationText && (
@@ -416,6 +444,20 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
           Plus an independent "🎙 озвучить" button on every row, hidden only
           when narrationText is empty (TTS can't run on empty text). */}
       <div onClick={stop} className="flex flex-col gap-1 flex-shrink-0">
+        {/* "✓ утвердить" — quick-approve the most recent completed-but-not-approved
+            TTSJob. Hidden when nothing is waiting (already approved OR no
+            completed take exists). Approving doesn't re-render anything; user
+            can still queue more takes via "🔁 переозвучить" / "🎙 озвучить". */}
+        {ttsLatestCompletedUnapprovedId && (
+          <button
+            onClick={(e) => { stop(e); quickApprove(); }}
+            disabled={busy !== false}
+            title={`Утвердить последний завершённый wav (${ttsCompletedUnapproved} доступно)`}
+            className="text-[11px] bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded whitespace-nowrap"
+          >
+            {busy === 'approve' ? '⏳ ✓' : `✓ утвердить${ttsCompletedUnapproved > 1 ? ` (${ttsCompletedUnapproved})` : ''}`}
+          </button>
+        )}
         {narrationText && (
           <button
             onClick={(e) => { stop(e); enqueueTTS(); }}
