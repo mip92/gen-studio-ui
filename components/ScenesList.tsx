@@ -388,25 +388,21 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
           {fhdReady && (
             <span className="text-emerald-300 bg-emerald-900/30 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">FHD ✓</span>
           )}
+          {/* TTS state badges — narration TEXT is always present, the user only
+              cares about wav rendering state. Single badge per shot at any moment. */}
           {ttsLatestStatus === 'running' && (
             <span className="text-blue-300 bg-blue-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⚙ tts</span>
           )}
           {ttsLatestStatus === 'pending' && (
             <span className="text-amber-300 bg-amber-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⏳ tts</span>
           )}
-          {approvedTTSJobId && (
-            <span className="text-emerald-400 text-[10px] uppercase tracking-wider">🎙 tts ✓</span>
+          {!ttsLatestStatus && approvedTTSJobId && (
+            <span className="text-emerald-400 bg-emerald-900/30 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">🎙 ✓</span>
           )}
-          {!approvedTTSJobId && ttsCompletedUnapproved > 0 && (
+          {!ttsLatestStatus && !approvedTTSJobId && ttsCompletedUnapproved > 0 && (
             <span className="text-amber-300 bg-amber-900/30 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">
               🔊 ждут {ttsCompletedUnapproved}
             </span>
-          )}
-          {!approvedTTSJobId && ttsCompletedUnapproved === 0 && narrationText && (
-            <span className="text-zinc-500 text-[10px] uppercase tracking-wider">📝 текст готов</span>
-          )}
-          {!narrationText && (
-            <span className="text-zinc-600 text-[10px] uppercase tracking-wider">🎙 нет текста</span>
           )}
           {upscaleStatus === 'running' && (
             <span className="text-blue-300 bg-blue-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⚙ FHD</span>
@@ -444,32 +440,41 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
           Plus an independent "🎙 озвучить" button on every row, hidden only
           when narrationText is empty (TTS can't run on empty text). */}
       <div onClick={stop} className="flex flex-col gap-1 flex-shrink-0">
-        {/* "✓ утвердить" — quick-approve the most recent completed-but-not-approved
-            TTSJob. Hidden when nothing is waiting (already approved OR no
-            completed take exists). Approving doesn't re-render anything; user
-            can still queue more takes via "🔁 переозвучить" / "🎙 озвучить". */}
-        {ttsLatestCompletedUnapprovedId && (
+        {/* TTS stage progression — mirrors the photo/video/upscale flow above.
+            Exactly one TTS button per stage:
+              ① no text                      → no button (badge says "нет текста")
+              ② text, nothing rendered       → "🎙 озвучить"
+              ③ pending/running              → no button (badge says "⚙/⏳ tts")
+              ④ wav ready, awaiting approve  → "✓ утвердить (N)"
+              ⑤ approved                     → small secondary "🔁 переозвучить" */}
+        {narrationText && ttsLatestStatus === null && !approvedTTSJobId && ttsCompletedUnapproved === 0 && (
+          <button
+            onClick={(e) => { stop(e); enqueueTTS(); }}
+            disabled={busy !== false}
+            title="Поставить TTS-озвучку этого шота в очередь"
+            className="text-[11px] bg-amber-700 hover:bg-amber-600 disabled:opacity-30 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded whitespace-nowrap"
+          >
+            {busy === 'tts' ? '⏳ tts…' : '🎙 озвучить'}
+          </button>
+        )}
+        {ttsLatestCompletedUnapprovedId && !approvedTTSJobId && ttsLatestStatus === null && (
           <button
             onClick={(e) => { stop(e); quickApprove(); }}
             disabled={busy !== false}
-            title={`Утвердить последний завершённый wav (${ttsCompletedUnapproved} доступно)`}
+            title={`Утвердить последний завершённый wav (${ttsCompletedUnapproved} вариант${ttsCompletedUnapproved === 1 ? '' : ttsCompletedUnapproved < 5 ? 'а' : 'ов'} доступно)`}
             className="text-[11px] bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded whitespace-nowrap"
           >
             {busy === 'approve' ? '⏳ ✓' : `✓ утвердить${ttsCompletedUnapproved > 1 ? ` (${ttsCompletedUnapproved})` : ''}`}
           </button>
         )}
-        {narrationText && (
+        {approvedTTSJobId && ttsLatestStatus === null && (
           <button
             onClick={(e) => { stop(e); enqueueTTS(); }}
             disabled={busy !== false}
-            title={approvedTTSJobId
-              ? 'Переозвучить (поставит новый wav в очередь, старый approval сохраняется до явного утверждения нового)'
-              : 'Поставить TTS-озвучку этого шота в очередь'}
-            className={`text-[11px] disabled:opacity-30 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded whitespace-nowrap ${
-              approvedTTSJobId ? 'bg-zinc-700 hover:bg-zinc-600' : 'bg-amber-700 hover:bg-amber-600'
-            }`}
+            title="Поставить новый wav в очередь — старый approval сохраняется"
+            className="text-[10px] bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-400 hover:text-zinc-200 px-2 py-0.5 rounded whitespace-nowrap"
           >
-            {busy === 'tts' ? '⏳ tts…' : approvedTTSJobId ? '🔁 переозвучить' : '🎙 озвучить'}
+            {busy === 'tts' ? '⏳' : '🔁 переозвучить'}
           </button>
         )}
         {videoApproved ? (
