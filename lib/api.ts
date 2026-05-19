@@ -829,7 +829,7 @@ export interface CapcutReadiness {
     sceneKey: string;
     sceneId:  string;
     title:    string | null;
-    reason:   'no_approved_tts' | 'no_shots';
+    reason:   'no_shots';
   }>;
 }
 

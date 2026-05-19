@@ -140,7 +140,6 @@ function ExportCapcutButton({
   const reasonLabel = (r: string) => ({
     no_chosen_video:  'нет утверждённого видео',
     no_upscale:       'нет FHD-апскейла',
-    no_approved_tts:  'нет утверждённой озвучки',
     no_shots:         'в сцене нет кадров',
   } as Record<string, string>)[r] ?? r;
 
@@ -148,7 +147,7 @@ function ExportCapcutButton({
   const ready        = readiness?.ready === true;
 
   const tooltip = ready
-    ? 'Все кадры FHD, вся озвучка утверждена. Жми — соберу draft для CapCut.'
+    ? 'Все кадры FHD. Жми — соберу draft для CapCut. Per-shot озвучка подтянется автоматически где утверждена.'
     : !readiness
       ? 'Проверяю готовность…'
       : `Не готово: ${totalMissing} пункт${totalMissing === 1 ? '' : 'а'}. См. список ниже.`;
@@ -189,7 +188,7 @@ function ExportCapcutButton({
               key={s.sceneId}
               href={`/projects/${projectId}/scenes#${s.sceneKey}`}
               className="flex justify-between gap-2 px-1.5 py-1 -mx-1.5 rounded hover:bg-zinc-900 transition-colors"
-              title={`Открыть сцену ${s.sceneKey} → утвердить озвучку`}
+              title={`Открыть сцену ${s.sceneKey} → добавить кадры`}
             >
               <span className="text-zinc-300 hover:text-blue-300">сцена {s.sceneKey}</span>
               <span className="text-amber-300 text-[10px]">{reasonLabel(s.reason)} →</span>
