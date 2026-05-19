@@ -86,6 +86,19 @@ export function SceneShotsTTSModal({ sceneId, sceneTitle, shots, onClose }: Prop
     }
   };
 
+  const approveJob = async (shotId: string, jobId: string) => {
+    setSaving((s) => ({ ...s, [shotId]: true }));
+    setErr(null);
+    try {
+      await api.approveTTSJob(jobId);
+      refreshJobs();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving((s) => ({ ...s, [shotId]: false }));
+    }
+  };
+
   const renderAll = async (mode: 'all' | 'missing') => {
     setBusyAll(mode);
     setErr(null);
@@ -180,35 +193,56 @@ export function SceneShotsTTSModal({ sceneId, sceneTitle, shots, onClose }: Prop
         {/* Per-shot rows */}
         <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
           {shots.map((s) => {
-            const jobs        = jobsByShot[s.id] ?? [];
-            const latest      = jobs[0];
-            const approvedJob = jobs.find((j) => j.id === s.approvedTTSJobId);
-            const draft       = drafts[s.id] ?? '';
-            const dirty       = draft !== (s.narrationText ?? '');
-            const isBusy      = saving[s.id] === true;
+            const jobs           = jobsByShot[s.id] ?? [];
+            const latest         = jobs[0];
+            // Most recent completed take — always show this audio player so
+            // the user can listen before approving (and not only after).
+            const latestCompleted = jobs.find((j) => j.status === 'completed') ?? null;
+            const approvedJob    = jobs.find((j) => j.id === s.approvedTTSJobId);
+            const playableJob    = approvedJob ?? latestCompleted;
+            const draft          = drafts[s.id] ?? '';
+            const dirty          = draft !== (s.narrationText ?? '');
+            const isBusy         = saving[s.id] === true;
+            const inFlight       = latest && (latest.status === 'pending' || latest.status === 'running');
 
             return (
-              <div key={s.id} className="bg-zinc-950 border border-zinc-800 rounded p-3">
-                <div className="flex items-center justify-between mb-2">
+              <div key={s.id} className={
+                `bg-zinc-950 border rounded p-3 ${approvedJob ? 'border-emerald-800/60' : latestCompleted ? 'border-amber-800/40' : 'border-zinc-800'}`
+              }>
+                <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
                   <span className="font-mono text-xs text-zinc-300">{s.shotCode}</span>
-                  <div className="flex items-center gap-2 text-[10px]">
+                  <div className="flex items-center gap-2 text-[10px] flex-1 justify-end flex-wrap">
                     {approvedJob && (
-                      <span className="text-emerald-400">✓ утверждён</span>
+                      <span className="text-emerald-400 font-mono">✓ утверждён</span>
                     )}
-                    {latest && (
-                      <span className={
-                        latest.status === 'completed' ? 'text-emerald-500'
-                        : latest.status === 'running' ? 'text-amber-400'
-                        : latest.status === 'pending' ? 'text-zinc-400'
-                        : latest.status === 'failed' ? 'text-red-400'
-                        : 'text-zinc-600'
-                      }>
-                        {latest.status === 'completed' ? '🔊' : latest.status === 'running' ? '⚙' : latest.status === 'pending' ? '⏳' : latest.status === 'failed' ? '✕' : ''}
-                        {' '}{latest.status}
+                    {!approvedJob && latestCompleted && (
+                      <span className="text-amber-300 font-mono">🔊 готов, не утверждён</span>
+                    )}
+                    {inFlight && (
+                      <span className="text-blue-300 font-mono">
+                        {latest!.status === 'running' ? '⚙ рендерится' : '⏳ в очереди'}
                       </span>
                     )}
-                    {approvedJob && (
-                      <audio controls preload="none" src={api.ttsFileUrl(approvedJob.id)} className="h-6" />
+                    {latest && latest.status === 'failed' && (
+                      <span className="text-red-400 font-mono" title={latest.errorMessage ?? ''}>✕ упал</span>
+                    )}
+                    {playableJob && (
+                      <audio
+                        controls
+                        preload="none"
+                        src={api.ttsFileUrl(playableJob.id)}
+                        className="h-7 max-w-[260px]"
+                      />
+                    )}
+                    {latestCompleted && !approvedJob && (
+                      <button
+                        onClick={() => approveJob(s.id, latestCompleted.id)}
+                        disabled={isBusy}
+                        title="Утвердить этот wav как канонический для шота"
+                        className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 text-white text-[10px] px-2 py-0.5 rounded"
+                      >
+                        {isBusy ? '⏳' : '✓ утвердить'}
+                      </button>
                     )}
                   </div>
                 </div>
