@@ -232,6 +232,13 @@ export interface SceneShot {
   pipelineVideo:   { id: string; status: string; queuedAt: string } | null;
   /** Pending|running upscale on the chosen video, if any. */
   pipelineUpscale: { id: string; status: string } | null;
+
+  // ── Per-shot narration (new in 2026-05) ───────────────────────────────────
+  /** ~5s Russian voiceover text for this shot. Per-shot TTS replaces the
+   *  legacy whole-scene narration on projects that opted in. */
+  narrationText?:    string | null;
+  /** TTSJob.id approved as the canonical voiceover for this shot, or null. */
+  approvedTTSJobId?: string | null;
 }
 
 export interface SceneSummary {
@@ -713,6 +720,38 @@ export const api = {
   /** Bulk-purge failed + cancelled jobs for a scene. */
   purgeFailedTTSJobs: (sceneId: string) =>
     http<{ deleted: number }>(`/tts/scenes/${sceneId}/jobs`, { method: 'DELETE' }),
+
+  // ── Shot-level TTS (per-shot ~5s voiceover) ───────────────────────────────
+  startShotTTS: (
+    shotId: string,
+    body: {
+      text?:             string;
+      voice?:            TTSVoice;
+      sampleRate?:       TTSSampleRate;
+      rate?:             number;
+      modelFilename?:    string;
+      sentencePauseSec?: number;
+    } = {},
+  ) =>
+    http<TTSJob>(`/tts/shots/${shotId}`, {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  listShotTTSJobs: (shotId: string) =>
+    http<TTSJob[]>(`/tts/shots/${shotId}/jobs`),
+
+  setShotNarrationText: (shotId: string, text: string) =>
+    http<{ id: string; narrationText: string | null }>(`/tts/shots/${shotId}/narration`, {
+      method: 'PATCH',
+      body:   JSON.stringify({ text }),
+    }),
+
+  /** Clear the shot's TTS approval. */
+  clearShotTTSApproval: (shotId: string) =>
+    http<{ id: string; approvedTTSJobId: string | null }>(`/tts/shots/${shotId}/approve/clear`, {
+      method: 'POST',
+    }),
 
   // ── CapCut export ─────────────────────────────────────────────────────────
   capcutReadiness: (idOrSlug: string) =>

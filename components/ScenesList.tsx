@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { api, ScenesResponse, SceneShot, SceneShotParticipant } from '../lib/api';
 import { CreateSceneModal } from './CreateSceneModal';
 import { CreateShotModal } from './CreateShotModal';
-import { SceneNarrationModal } from './SceneNarrationModal';
+import { SceneShotsTTSModal } from './SceneShotsTTSModal';
 import { useScrollRestore } from '../lib/useScrollRestore';
 
 export function ScenesList({ id }: { id: string }) {
@@ -75,10 +75,10 @@ export function ScenesList({ id }: { id: string }) {
                 </span>
                 <button
                   onClick={() => setTtsForScene(s.id)}
-                  title="Озвучка сцены (Silero V5 ru)"
+                  title="Озвучка кадров сцены — по одному ~5с wav на шот"
                   className="text-xs bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded"
                 >
-                  🔊 озвучка{s.narrationText ? ' ✓' : ''}
+                  🔊 озвучка ({s.shots.filter((sh) => (sh as { narrationText?: string | null }).narrationText).length}/{s.shots.length})
                 </button>
                 <button
                   onClick={() => setCreateShotInScene(s.id)}
@@ -118,12 +118,9 @@ export function ScenesList({ id }: { id: string }) {
         const s = data.scenes.find((sc) => sc.id === ttsForScene);
         if (!s) return null;
         return (
-          <SceneNarrationModal
+          <SceneShotsTTSModal
             sceneId={s.id}
             sceneTitle={s.title ?? s.sceneKey}
-            projectSlug={id}
-            initialText={s.narrationText}
-            initialApprovedJobId={s.approvedTTSJobId}
             shots={s.shots}
             onClose={() => { setTtsForScene(null); refresh(); }}
           />
