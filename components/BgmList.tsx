@@ -237,6 +237,12 @@ function SegmentRow({
   const [override,    setOverride]   = useState(segment.prompt ?? '');
   const [dirty,       setDirty]      = useState(false);
   const [busy,        setBusy]       = useState(false);
+  // Per-render duration override. Defaults to segment.durationSec; user can
+  // bump up/down before clicking render. Buffer as string (same reason as
+  // the chunkSeconds input on the block: clamping onChange on type=number
+  // fights mid-typing values).
+  const [secStr, setSecStr] = useState(String(segment.durationSec));
+  useEffect(() => { setSecStr(String(segment.durationSec)); }, [segment.durationSec]);
   useEffect(() => { if (!dirty) setOverride(segment.prompt ?? ''); }, [segment.prompt, dirty]);
 
   const savePrompt = async () => {
@@ -252,9 +258,13 @@ function SegmentRow({
   };
 
   const queueRender = async () => {
+    const raw = Number(secStr);
+    const durationSec = Number.isFinite(raw) && raw > 0
+      ? Math.max(10, Math.min(240, Math.round(raw)))
+      : segment.durationSec;
     setBusy(true);
     try {
-      await api.startBgmRender(segment.id, { count: 1 });
+      await api.startBgmRender(segment.id, { count: 1, durationSec });
       onChanged();
     } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
@@ -319,11 +329,27 @@ function SegmentRow({
           )}
         </div>
         <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={10}
+            max={240}
+            value={secStr}
+            onChange={(e) => setSecStr(e.target.value)}
+            onBlur={() => {
+              const n = Number(secStr);
+              if (!Number.isFinite(n) || n <= 0) setSecStr(String(segment.durationSec));
+              else setSecStr(String(Math.max(10, Math.min(240, Math.round(n)))));
+            }}
+            disabled={busy}
+            className="w-14 text-xs bg-zinc-900 border border-zinc-800 rounded px-1 py-0.5 text-center"
+            title="Сколько секунд генерировать (10–240). Ровно это число — без авто-надбавки."
+          />
+          <span className="text-[10px] text-zinc-500">сек</span>
           <button
             onClick={queueRender}
             disabled={busy}
             className="text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-2 py-0.5 rounded"
-            title="Поставить ACE-Step take в очередь"
+            title="Поставить ACE-Step take в очередь с указанной длительностью"
           >
             ▶ render
           </button>
