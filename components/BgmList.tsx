@@ -74,7 +74,10 @@ function BlockCard({ block, onChanged }: { block: NarrativeBlock; onChanged: () 
   const [prompt, setPrompt]     = useState(block.moodPrompt ?? '');
   const [dirty,  setDirty]      = useState(false);
   const [busy,   setBusy]       = useState(false);
-  const [chunk,  setChunk]      = useState(60);
+  // String state for the chunk input — controlled <input type="number"> with a
+  // clamping onChange fights mid-typing values ("1" → clamps to 10 → can't
+  // type "100"). Buffer as string, validate on submit instead.
+  const [chunkStr, setChunkStr] = useState('60');
 
   // Resync editor when the block prop changes (e.g. server refresh changed moodPrompt)
   useEffect(() => {
@@ -92,6 +95,11 @@ function BlockCard({ block, onChanged }: { block: NarrativeBlock; onChanged: () 
   };
 
   const fill = async () => {
+    // Validate + clamp at submit time, not on every keystroke.
+    const raw = Number(chunkStr);
+    const chunk = Number.isFinite(raw) && raw > 0
+      ? Math.max(10, Math.min(240, Math.round(raw)))
+      : 60;
     setBusy(true);
     try {
       await api.fillBlock(block.id, chunk);
@@ -160,8 +168,13 @@ function BlockCard({ block, onChanged }: { block: NarrativeBlock; onChanged: () 
             type="number"
             min={10}
             max={240}
-            value={chunk}
-            onChange={(e) => setChunk(Math.max(10, Math.min(240, Number(e.target.value) || 60)))}
+            value={chunkStr}
+            onChange={(e) => setChunkStr(e.target.value)}
+            onBlur={() => {
+              const n = Number(chunkStr);
+              if (!Number.isFinite(n) || n <= 0) setChunkStr('60');
+              else setChunkStr(String(Math.max(10, Math.min(240, Math.round(n)))));
+            }}
             className="w-16 text-xs bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-center"
           />
           <span className="text-[10px] uppercase tracking-wider text-zinc-500">сек</span>

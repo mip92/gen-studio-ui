@@ -248,6 +248,10 @@ export interface SceneShot {
   /** id of the most recent completed-but-not-approved TTSJob — the row the
    *  quick "✓ утвердить" button on the scenes list approves directly. */
   ttsLatestCompletedUnapprovedId?: string | null;
+  /** Exact wav duration of the approved narration take in milliseconds —
+   *  probed from the RIFF header. Null when nothing approved or the wav has
+   *  no measurable header; UI falls back to a text-length heuristic. */
+  approvedTTSDurationMs?: number | null;
 }
 
 export interface SceneSummary {
