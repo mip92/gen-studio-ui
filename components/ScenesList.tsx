@@ -456,6 +456,23 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
               🔊 ждут {ttsCompletedUnapproved}
             </span>
           )}
+          {/* Overflow warning: shot videos are ~5s; if narration text is so long
+              it estimates > 5s of speech, CapCut export will clip the wav at
+              the shot boundary. Estimate uses Silero ru default rate ≈15 cps
+              (matches the backend's bound in ExportsService.buildManifest). */}
+          {(() => {
+            if (!narrationText) return null;
+            const sec = narrationText.length / 15;
+            if (sec <= 5) return null;
+            return (
+              <span
+                className="text-red-300 bg-red-900/40 border border-red-800 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono"
+                title={`~${sec.toFixed(1)}s озвучки на ~5s видео — wav будет обрезан в CapCut. Сократи narrationText или раздели шот.`}
+              >
+                ⏱ ~{sec.toFixed(1)}s
+              </span>
+            );
+          })()}
           {upscaleStatus === 'running' && (
             <span className="text-blue-300 bg-blue-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⚙ FHD</span>
           )}

@@ -52,6 +52,7 @@ export function Sidebar() {
             <NavLink href={`/projects/${projectId}`}            label="Overview"  active={pathname === `/projects/${projectId}`} />
             <NavLink href={`/projects/${projectId}/characters`} label="Персонажи" active={pathname.startsWith(`/projects/${projectId}/characters`)} />
             <NavLink href={`/projects/${projectId}/scenes`}     label="Сцены"     active={pathname.startsWith(`/projects/${projectId}/scenes`) || pathname.startsWith(`/projects/${projectId}/shots`)} />
+            <NavLink href={`/projects/${projectId}/bgm`}        label="Музыка"    active={pathname.startsWith(`/projects/${projectId}/bgm`)} />
           </Section>
         )}
 

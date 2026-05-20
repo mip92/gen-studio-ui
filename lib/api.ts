@@ -812,6 +812,100 @@ export const api = {
    */
   getProjectScript: (idOrSlug: string) =>
     http<{ text: string | null }>(`/projects/${idOrSlug}/script`),
+
+  // ── BGM (ACE-Step background music) ────────────────────────────────────
+
+  listBlocks: (projectId: string) =>
+    http<NarrativeBlock[]>(`/bgm/projects/${projectId}/blocks`),
+
+  createBlock: (projectId: string, body: {
+    slug:        string;
+    title?:      string;
+    sortOrder?:  number;
+    moodPrompt?: string;
+    shotIds:     string[];
+  }) =>
+    http<NarrativeBlock>(`/bgm/projects/${projectId}/blocks`, {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  getBlock: (blockId: string) =>
+    http<NarrativeBlock>(`/bgm/blocks/${blockId}`),
+
+  updateBlock: (blockId: string, body: {
+    title?:      string | null;
+    sortOrder?:  number;
+    moodPrompt?: string | null;
+    shotIds?:    string[];
+    status?:     'filling' | 'filled' | 'manual';
+  }) =>
+    http<NarrativeBlock>(`/bgm/blocks/${blockId}`, {
+      method: 'PATCH',
+      body:   JSON.stringify(body),
+    }),
+
+  deleteBlock: (blockId: string) =>
+    http<{ deleted: true; id: string }>(`/bgm/blocks/${blockId}`, { method: 'DELETE' }),
+
+  recomputeBlockTarget: (blockId: string) =>
+    http<NarrativeBlock>(`/bgm/blocks/${blockId}/recompute-target`, { method: 'POST' }),
+
+  /** Auto-create empty MusicSegment rows until sum durationSec >= targetSeconds. */
+  fillBlock: (blockId: string, chunkSeconds?: number) =>
+    http<{ created: number; existing: number; targetSeconds: number; coveredSeconds: number }>(
+      `/bgm/blocks/${blockId}/fill${chunkSeconds ? `?chunkSeconds=${chunkSeconds}` : ''}`,
+      { method: 'POST' },
+    ),
+
+  createSegment: (body: {
+    blockId:      string;
+    prompt?:      string | null;
+    durationSec?: number;
+    sortOrder?:   number;
+  }) =>
+    http<MusicSegment>(`/bgm/segments`, {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  deleteSegment: (segmentId: string) =>
+    http<{ deleted: true; id: string }>(`/bgm/segments/${segmentId}`, { method: 'DELETE' }),
+
+  approveBgmJob: (segmentId: string, jobId: string) =>
+    http<MusicSegment>(`/bgm/segments/${segmentId}/approve/${jobId}`, { method: 'POST' }),
+
+  unapproveBgmJob: (segmentId: string) =>
+    http<MusicSegment>(`/bgm/segments/${segmentId}/approve`, { method: 'DELETE' }),
+
+  /** Queue an ACE-Step take (or N takes) for a segment. */
+  startBgmRender: (segmentId: string, body: {
+    prompt?:      string;
+    durationSec?: number;
+    seed?:        number;
+    steps?:       number;
+    cfg?:         number;
+    samplerName?: string;
+    scheduler?:   string;
+    count?:       number;
+  } = {}) =>
+    http<AudioRenderJob[]>(`/bgm/segments/${segmentId}/render`, {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  listBgmJobs: (segmentId: string) =>
+    http<AudioRenderJob[]>(`/bgm/segments/${segmentId}/jobs`),
+
+  getBgmJob: (jobId: string) =>
+    http<AudioRenderJob>(`/bgm/jobs/${jobId}`),
+
+  deleteBgmJob: (jobId: string) =>
+    http<{ deleted: true; id: string }>(`/bgm/jobs/${jobId}`, { method: 'DELETE' }),
+
+  /** Direct URL for the <audio> element to stream the rendered flac. */
+  bgmJobFileUrl: (jobId: string) =>
+    `${API_BASE}/bgm/jobs/${jobId}/file`,
 };
 
 export type TTSVoice      = 'aidar' | 'baya' | 'kseniya' | 'xenia' | 'eugene' | 'ruslan' | 'random';
@@ -874,4 +968,58 @@ export interface VideoRender {
   upscaleStartedAt:     string | null;
   upscaleCompletedAt:   string | null;
   upscaleErrorMessage:  string | null;
+}
+
+// ── BGM (ACE-Step background music) ──────────────────────────────────────
+
+export interface NarrativeBlock {
+  id:            string;
+  projectId:     string;
+  slug:          string;
+  title:         string | null;
+  sortOrder:     number;
+  moodPrompt:    string | null;
+  /** Ordered list of Shot.id that this block covers — drives targetSeconds. */
+  shotIds:       string[];
+  /** Sum of covered shots' chosen-video durations (length / fps), in seconds. */
+  targetSeconds: number | null;
+  status:        'filling' | 'filled' | 'manual';
+  createdAt:     string;
+  updatedAt:     string;
+  segments?:     MusicSegment[];
+}
+
+export interface MusicSegment {
+  id:            string;
+  blockId:       string;
+  sortOrder:     number;
+  /** Per-segment ACE-Step tags override; null = inherit block.moodPrompt. */
+  prompt:        string | null;
+  durationSec:   number;
+  /** AudioRenderJob.id approved as the canonical take, or null. */
+  approvedJobId: string | null;
+  createdAt:     string;
+  jobs?:         AudioRenderJob[];
+}
+
+export interface AudioRenderJob {
+  id:               string;
+  segmentId:        string;
+  status:           'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  comfyPromptId:    string | null;
+  params: {
+    prompt?:      string;
+    durationSec?: number;
+    seed?:        number;
+    steps?:       number;
+    cfg?:         number;
+    samplerName?: string;
+    scheduler?:   string;
+  } | null;
+  workflowFilename: string;
+  outputFilename:   string | null;
+  errorMessage:     string | null;
+  queuedAt:         string;
+  startedAt:        string | null;
+  completedAt:      string | null;
 }
