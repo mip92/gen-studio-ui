@@ -434,18 +434,7 @@ function SegmentRow({
             )}
           </div>
           {selected && selected.status === 'completed' && (
-            <audio
-              key={selected.id}
-              controls
-              src={api.bgmJobFileUrl(selected.id)}
-              className="w-full mt-1"
-              preload="none"
-              // ACE-Step renders are normalised loud. Default the preview to
-              // ~20% so it matches the BGM-under-voiceover mix the CapCut
-              // export uses (AudioSegment volume=0.2 there). User can still
-              // bump up via the native controls slider if needed.
-              ref={(el) => { if (el) el.volume = 0.2; }}
-            />
+            <AudioPreview jobId={selected.id} />
           )}
         </div>
       )}
@@ -466,6 +455,52 @@ function SegmentRow({
         <summary className="cursor-pointer">эффективный промпт</summary>
         <div className="mt-1 font-mono text-zinc-500 whitespace-pre-wrap">{effectivePrompt}</div>
       </details>
+    </div>
+  );
+}
+
+// ─── Audio preview with bitrate readout ─────────────────────────────────────
+//
+// Native <audio controls> needs the server to honour HTTP Range + return
+// Content-Length to expose a working seek slider. Backend was fixed at the
+// same time as this component (bgm.controller.ts file()).
+//
+// `preload="metadata"` is required: with "none" the browser doesn't fetch
+// duration until the user clicks play, and the timeline scrubber stays inert
+// until then. "metadata" only pulls the flac header (~kilobytes), no audio
+// frames — cheap enough to do upfront and unblocks seeking immediately.
+
+function AudioPreview({ jobId }: { jobId: string }) {
+  const [meta, setMeta] = useState<{ bytes: number; durationSec: number; bitrateKbps: number } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setMeta(null);
+    api.getBgmJobMeta(jobId)
+      .then((m) => { if (!cancelled) setMeta(m); })
+      .catch(() => { /* meta is purely informational — silent fail */ });
+    return () => { cancelled = true; };
+  }, [jobId]);
+
+  const bytesMb = meta ? (meta.bytes / (1024 * 1024)).toFixed(1) : null;
+
+  return (
+    <div className="mt-1">
+      <audio
+        key={jobId}
+        controls
+        src={api.bgmJobFileUrl(jobId)}
+        className="w-full"
+        preload="metadata"
+        // ACE-Step renders are normalised loud. Default the preview to
+        // ~20% so it matches the BGM-under-voiceover mix the CapCut
+        // export uses (AudioSegment volume=0.2 there).
+        ref={(el) => { if (el) el.volume = 0.2; }}
+      />
+      <div className="mt-0.5 text-[10px] text-zinc-500 font-mono">
+        {meta
+          ? `${meta.bitrateKbps} kbps · ${meta.durationSec.toFixed(1)}s · ${bytesMb} MB`
+          : '…'}
+      </div>
     </div>
   );
 }

@@ -910,6 +910,12 @@ export const api = {
   /** Direct URL for the <audio> element to stream the rendered flac. */
   bgmJobFileUrl: (jobId: string) =>
     `${API_BASE}/bgm/jobs/${jobId}/file`,
+
+  /** File size + computed bitrate for the rendered flac. Null when missing on disk. */
+  getBgmJobMeta: (jobId: string) =>
+    http<{ bytes: number; durationSec: number; bitrateKbps: number } | null>(
+      `/bgm/jobs/${jobId}/meta`,
+    ),
 };
 
 export type TTSVoice      = 'aidar' | 'baya' | 'kseniya' | 'xenia' | 'eugene' | 'ruslan' | 'random';
