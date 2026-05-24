@@ -37,8 +37,10 @@ export function Sidebar() {
 
       <nav className="px-2 pb-4 flex-1 space-y-4">
         <Section title="Главное">
-          <NavLink href="/"         label="Overview" active={pathname === '/'} />
-          <NavLink href="/projects" label="Projects" active={pathname === '/projects'} />
+          <NavLink href="/"           label="Overview"   active={pathname === '/'} />
+          <NavLink href="/projects"   label="Projects"   active={pathname === '/projects'} />
+          <NavLink href="/characters" label="Персонажи"  active={pathname.startsWith('/characters')} />
+          <NavLink href="/actions"    label="Действия"   active={pathname.startsWith('/actions')} />
         </Section>
 
         <Section title="Очередь">
@@ -50,7 +52,7 @@ export function Sidebar() {
         {projectId && (
           <Section title={project?.name ?? 'Проект'}>
             <NavLink href={`/projects/${projectId}`}            label="Overview"  active={pathname === `/projects/${projectId}`} />
-            <NavLink href={`/projects/${projectId}/characters`} label="Персонажи" active={pathname.startsWith(`/projects/${projectId}/characters`)} />
+            <NavLink href={`/projects/${projectId}/characters`} label="Состав"    active={pathname.startsWith(`/projects/${projectId}/characters`)} />
             <NavLink href={`/projects/${projectId}/scenes`}     label="Сцены"     active={pathname.startsWith(`/projects/${projectId}/scenes`) || pathname.startsWith(`/projects/${projectId}/shots`)} />
             <NavLink href={`/projects/${projectId}/bgm`}        label="Музыка"    active={pathname.startsWith(`/projects/${projectId}/bgm`)} />
           </Section>

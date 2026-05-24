@@ -21,3 +21,14 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* MUI-style scrollable tabs: hide the native scrollbar while keeping
+   the horizontal scroll behaviour. `ScrollableTabs` overlays its own
+   left/right chevron buttons that appear only when the row overflows. */
+.no-scrollbar {
+  scrollbar-width: none;       /* Firefox */
+  -ms-overflow-style: none;    /* IE/Edge legacy */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;               /* Chromium / Safari */
+}

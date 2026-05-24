@@ -4,10 +4,13 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, CapcutReadiness, ScenesResponse, DashboardResponse } from '../lib/api';
 
+type Stats = Awaited<ReturnType<typeof api.getProjectStats>>;
+
 export function ProjectOverview({ id }: { id: string }) {
   const [scenes,    setScenes]    = useState<ScenesResponse    | null>(null);
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [readiness, setReadiness] = useState<CapcutReadiness   | null>(null);
+  const [stats,     setStats]     = useState<Stats             | null>(null);
   const [error,     setError]     = useState<string | null>(null);
 
   const refreshReadiness = () => {
@@ -17,14 +20,16 @@ export function ProjectOverview({ id }: { id: string }) {
   useEffect(() => {
     (async () => {
       try {
-        const [s, d, r] = await Promise.all([
+        const [s, d, r, st] = await Promise.all([
           api.listScenes(id),
           api.dashboard(id),
           api.capcutReadiness(id).catch(() => null),
+          api.getProjectStats(id).catch(() => null),
         ]);
         setScenes(s);
         setDashboard(d);
         setReadiness(r);
+        setStats(st);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -55,59 +60,87 @@ export function ProjectOverview({ id }: { id: string }) {
       </div>
 
       <section>
-        <h2 className="text-sm uppercase tracking-wider text-zinc-500 mb-3">Сценарий</h2>
-        <div className="space-y-4">
-          {scenes.scenes.map((s) => (
-            <article key={s.id} className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-              <header className="flex items-baseline justify-between mb-3">
-                <h3 className="font-medium">
-                  <span className="text-zinc-500 text-xs font-mono mr-2">#{s.sortOrder}</span>
-                  {s.title ?? s.sceneKey}
-                </h3>
-                <Link
-                  href={`/projects/${id}/scenes#${s.sceneKey}`}
-                  className="text-xs text-blue-400 hover:text-blue-300"
-                >
-                  {s.shots.length} кадров →
-                </Link>
-              </header>
-              <ol className="space-y-1 text-sm text-zinc-300">
-                {s.shots.slice(0, 5).map((sh) => (
-                  <li key={sh.id} className="flex gap-2">
-                    <span className="text-zinc-600 font-mono text-xs w-20 flex-shrink-0">{sh.shotCode}</span>
-                    <span className="flex-1">{sh.beat ?? <em className="text-zinc-600">(нет описания)</em>}</span>
-                    {sh.participants.length > 0 && (
-                      <span className="text-xs text-zinc-500 flex-shrink-0">
-                        {sh.participants.map((p) => p.characterCode ?? '—').join(', ')}
-                      </span>
-                    )}
-                  </li>
-                ))}
-                {s.shots.length > 5 && (
-                  <li className="text-xs text-zinc-600 pl-22">
-                    + ещё {s.shots.length - 5} кадров
-                  </li>
-                )}
-              </ol>
-            </article>
-          ))}
-        </div>
+        <h2 className="text-sm uppercase tracking-wider text-zinc-500 mb-3">Статистика пайплайна</h2>
+        {!stats ? (
+          <p className="text-zinc-500 text-sm">Статистика пока недоступна.</p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+              <TimingCard label="SDXL рендер сцены" stat={stats.sceneRender} />
+              <TimingCard label="Wan2.2 видео (i2v)" stat={stats.videoRender} />
+              <TimingCard label="Видео FHD-апскейл" stat={stats.videoUpscale} />
+              <TimingCard label="Озвучка (TTS)" stat={stats.tts} />
+              <TimingCard label="Музыка (BGM)" stat={stats.bgm} />
+              <TimingCard label="Датасет" stat={stats.dataset} />
+              <TimingCard label="LoRA тренировка" stat={stats.training} />
+            </div>
+
+            <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-3">Перегенерации и удалённое</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <Stat
+                label="Удалено картинок (~)"
+                value={String(stats.waste.estimatedDeleted)}
+                hint={`из ~${stats.waste.estimatedGenerated} сгенеренных; сейчас в галерее ${stats.waste.currentImages}`}
+              />
+              <Stat
+                label="Шотов перегенерено"
+                value={String(stats.waste.shotsRegenerated)}
+                hint={`всего перегенераций: ${stats.waste.totalRegenerations}`}
+              />
+              <Stat label="Завершённых сцен-рендеров" value={String(stats.sceneRender.count)} />
+              <Stat label="Завершённых видео" value={String(stats.videoRender.count)} />
+            </div>
+
+            <p className="text-xs text-zinc-600 mt-4">
+              «Удалено картинок» — оценка: каждый завершённый сцен-рендер ≈ 5 кадров (batchSize),
+              сравниваем с тем что сейчас в <code>renderedImages</code>. «Перегенерации» — шоты у которых
+              больше одного завершённого <code>SceneRenderJob</code>.
+            </p>
+          </>
+        )}
       </section>
     </main>
   );
 }
 
 function Stat({
-  label, value, highlight,
+  label, value, highlight, hint,
 }: {
   label:      string;
   value:      string;
   highlight?: boolean;
+  hint?:      string;
 }) {
   return (
     <div className={`bg-zinc-900 border border-zinc-800 rounded-lg p-4 ${highlight ? 'border-emerald-700/60' : ''}`}>
       <div className="text-zinc-500 text-xs uppercase tracking-wider">{label}</div>
       <div className="text-2xl font-semibold mt-1">{value}</div>
+      {hint && <div className="text-[10px] text-zinc-600 mt-1 leading-snug">{hint}</div>}
+    </div>
+  );
+}
+
+function TimingCard({
+  label, stat,
+}: {
+  label: string;
+  stat:  { count: number; avgSeconds: number | null };
+}) {
+  const formatDuration = (s: number | null): string => {
+    if (s === null) return '—';
+    if (s < 60)   return `${s} сек`;
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    if (m < 60) return r === 0 ? `${m} мин` : `${m} мин ${r} сек`;
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return rm === 0 ? `${h} ч` : `${h} ч ${rm} мин`;
+  };
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+      <div className="text-zinc-500 text-xs uppercase tracking-wider">{label}</div>
+      <div className="text-2xl font-semibold mt-1">{formatDuration(stat.avgSeconds)}</div>
+      <div className="text-[10px] text-zinc-600 mt-1">в среднем по {stat.count} завершённым</div>
     </div>
   );
 }

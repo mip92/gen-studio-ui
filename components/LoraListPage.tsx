@@ -5,9 +5,8 @@ import Link from 'next/link';
 import { api, LoraVariant, ProfileFull } from '../lib/api';
 
 export function LoraListPage({
-  projectId, profileId,
+  profileId,
 }: {
-  projectId: string;
   profileId: string;
 }) {
   const [profile,  setProfile]  = useState<ProfileFull | null>(null);
@@ -48,24 +47,12 @@ export function LoraListPage({
     finally { setBusy(null); }
   };
 
+  // Trim — header (title, character code, back link) is already in the shell's
+  // sticky header (h1 + breadcrumbs + tab). Don't duplicate.
+  void profile;
+
   return (
-    <main className="px-8 py-6 max-w-5xl mx-auto">
-      <Link
-        href={`/projects/${projectId}/characters/${profileId}`}
-        className="text-zinc-500 hover:text-zinc-200 text-sm mb-4 inline-block"
-      >
-        ← персонаж
-      </Link>
-
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold">LoRA library</h1>
-        {profile && (
-          <p className="text-zinc-500 text-sm font-mono">
-            {profile.character?.code} · {profile.profileCode}
-          </p>
-        )}
-      </header>
-
+    <main className="px-8 py-6">
       {error && (
         <div className="bg-red-900/40 border border-red-700 rounded p-3 text-red-200 font-mono text-xs mb-4">
           {error}
@@ -86,7 +73,7 @@ export function LoraListPage({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <Link
-                      href={`/projects/${projectId}/characters/${profileId}/loras/${encodeURIComponent(v.filename)}`}
+                      href={`/characters/${profileId}/loras/${encodeURIComponent(v.filename)}`}
                       className="text-base font-medium hover:underline"
                     >
                       {v.label}

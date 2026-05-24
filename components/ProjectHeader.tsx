@@ -1,13 +1,16 @@
 'use client';
 
-import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Breadcrumbs, BreadcrumbItem } from './Breadcrumbs';
+import { ScrollableTabs } from './ScrollableTabs';
 
 const TABS = [
   { key: '',           label: 'Overview' },
-  { key: 'characters', label: 'Персонажи' },
+  { key: 'characters', label: 'Состав' },
   { key: 'scenes',     label: 'Сцены' },
+  { key: 'locations',  label: 'Локации' },
+  { key: 'bgm',        label: 'Музыка' },
+  { key: 'settings',   label: 'Настройки' },
 ];
 
 export function ProjectHeader({
@@ -59,25 +62,15 @@ export function ProjectHeader({
           <p className="text-zinc-500 text-xs font-mono truncate max-w-md">{id}</p>
         </div>
       </div>
-      <nav className="px-8 max-w-7xl mx-auto flex gap-1">
-        {TABS.map((t) => {
-          const active = isActive(t.key);
-          const href = t.key ? `${base}/${t.key}` : base;
-          return (
-            <Link
-              key={t.key}
-              href={href}
-              className={`px-4 py-2 text-sm border-b-2 transition ${
-                active
-                  ? 'border-blue-500 text-zinc-100'
-                  : 'border-transparent text-zinc-500 hover:text-zinc-300'
-              }`}
-            >
-              {t.label}
-            </Link>
-          );
-        })}
-      </nav>
+      <div className="px-8 max-w-7xl mx-auto">
+        <ScrollableTabs
+          tabs={TABS.map((t) => ({
+            href:   t.key ? `${base}/${t.key}` : base,
+            label:  t.label,
+            active: isActive(t.key),
+          }))}
+        />
+      </div>
     </header>
   );
 }

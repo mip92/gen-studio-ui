@@ -1,6 +1,11 @@
 import { ProjectHeader } from '../../../components/ProjectHeader';
 import { API_BASE } from '../../../lib/api';
 
+// Note on URL canonicalisation: the slug→uuid redirect happens in `middleware.ts`
+// at the app root, so by the time we hit this layout `params.id` is always a
+// UUID. We still call /projects here just to resolve the human-readable name
+// for the header.
+
 export default async function ProjectLayout({
   children,
   params,
@@ -10,7 +15,6 @@ export default async function ProjectLayout({
 }) {
   const { id } = await params;
 
-  // Resolve human-readable project name (id may also be a legacy slug).
   let projectName = id;
   try {
     const res = await fetch(`${API_BASE}/projects`, { cache: 'no-store' });

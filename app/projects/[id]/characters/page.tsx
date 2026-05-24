@@ -1,4 +1,4 @@
-import { CharactersList } from '../../../../components/CharactersList';
+import { ProjectCharactersPicker } from '@/components/ProjectCharactersPicker';
 
 export default async function CharactersPage({
   params,
@@ -6,5 +6,5 @@ export default async function CharactersPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <CharactersList id={id} />;
+  return <ProjectCharactersPicker projectSlug={id} />;
 }

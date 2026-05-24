@@ -5,8 +5,15 @@ import { api, DatasetImage } from '../lib/api';
 import { useCharacterCtx } from './CharacterPageShell';
 import { Field, Choices, Radio, Thumbnail, Lightbox } from './CharacterDetail';
 
+interface OtherProfile {
+  profileId:    string;
+  profileCode:  string;
+  characterCode: string;
+  displayName:  string | null;
+}
+
 export function CharacterDatasetTab() {
-  const { dashboard, profile, profileId, refresh } = useCharacterCtx();
+  const { profile, profileId, refresh } = useCharacterCtx();
 
   const [images, setImages]                     = useState<DatasetImage[]>([]);
   const [busy,   setBusy]                       = useState<string | null>(null);
@@ -19,8 +26,34 @@ export function CharacterDatasetTab() {
   const [waitMode,      setWaitMode]      = useState<'now' | 'after'>('now');
   const [waitProfileId, setWaitProfileId] = useState<string>('');
 
-  const otherProfiles       = dashboard.profiles.filter((p) => p.profileId !== profileId);
-  const profilesWithDataset = otherProfiles.filter((p) => p.datasetCount > 0);
+  // Chain/depends-on pickers see the whole persona library (a profile from any
+  // character anywhere can serve as a chained reference). Previously this list
+  // was project-scoped via dashboard.profiles — that's stale; characters are
+  // now project-independent.
+  const [otherProfiles, setOtherProfiles] = useState<OtherProfile[]>([]);
+  useEffect(() => {
+    api.listLibraryCharacters()
+      .then((chars) => {
+        const all: OtherProfile[] = [];
+        for (const c of chars) {
+          for (const p of c.profiles) {
+            if (p.id === profileId) continue;
+            all.push({
+              profileId:     p.id,
+              profileCode:   p.profileCode,
+              characterCode: c.code,
+              displayName:   c.displayName,
+            });
+          }
+        }
+        setOtherProfiles(all);
+      })
+      .catch(() => setOtherProfiles([]));
+  }, [profileId]);
+  // No cheap way to know dataset count in bulk; pickers below show all profiles
+  // and the backend rejects with a clear error if the chained source has no
+  // images at dispatch time.
+  const profilesWithDataset = otherProfiles;
 
   const loadImages = useCallback(async () => {
     try {
@@ -85,7 +118,7 @@ export function CharacterDatasetTab() {
                  : `⚙ генерируется… (${profile.datasetCount} картинок)`;
 
   return (
-    <main className="px-8 py-6 max-w-7xl mx-auto">
+    <main className="px-8 py-6">
       {/* Generate dataset */}
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 mb-6 space-y-4">
         <h2 className="text-sm uppercase tracking-wider text-zinc-500">Сгенерировать датасет</h2>

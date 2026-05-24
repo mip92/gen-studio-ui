@@ -1,10 +1,10 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { api, ShotFull } from '../lib/api';
 import { Breadcrumbs, BreadcrumbItem } from './Breadcrumbs';
+import { ScrollableTabs } from './ScrollableTabs';
 
 type CharactersList = Awaited<ReturnType<typeof api.listCharacters>>;
 
@@ -28,8 +28,8 @@ export function useShotCtx(): ShotCtx {
 const TABS = [
   { slug: 'prompts',      label: 'Промпты' },
   { slug: 'participants', label: 'Participants' },
-  { slug: 'render',       label: 'Рендер кадра' },
-  { slug: 'videos',       label: 'Видео (Wan2.2 i2v)' },
+  { slug: 'render',       label: 'Сцена' },
+  { slug: 'videos',       label: 'Видео' },
   { slug: 'narration',    label: 'Озвучка' },
 ] as const;
 
@@ -106,27 +106,14 @@ function TabsNav({ projectId, shotId }: { projectId: string; shotId: string }) {
   const pathname = usePathname();
   const base = `/projects/${projectId}/shots/${shotId}`;
   const activeSlug = TABS.find((t) => pathname?.includes(`${base}/${t.slug}`))?.slug ?? '';
-
   return (
-    <div className="flex border-b border-zinc-800 -mb-px mt-3" role="tablist">
-      {TABS.map((t) => {
-        const isActive = activeSlug === t.slug;
-        return (
-          <Link
-            key={t.slug}
-            href={`${base}/${t.slug}`}
-            role="tab"
-            aria-selected={isActive}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              isActive
-                ? 'text-blue-400 border-blue-500'
-                : 'text-zinc-500 border-transparent hover:text-zinc-300 hover:border-zinc-700'
-            }`}
-          >
-            {t.label}
-          </Link>
-        );
-      })}
-    </div>
+    <ScrollableTabs
+      className="mt-3"
+      tabs={TABS.map((t) => ({
+        href:   `${base}/${t.slug}`,
+        label:  t.label,
+        active: activeSlug === t.slug,
+      }))}
+    />
   );
 }

@@ -5,17 +5,17 @@ import { useCharacterCtx } from './CharacterPageShell';
 import { Stat, ProfileDescription } from './CharacterDetail';
 
 export function CharacterDescriptionTab() {
-  const { projectId, profileId, profile, profileFull, setProfileFull, refresh } = useCharacterCtx();
+  const { profileId, profile, profileFull, setProfileFull, refresh } = useCharacterCtx();
 
   return (
-    <main className="px-8 py-6 max-w-7xl mx-auto">
+    <main className="px-8 py-6">
       {/* Stats grid */}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <Stat label="датасет" value={`${profile.datasetCount} img`} />
         <Stat label="возраст" value={profile.ageLabel ?? '—'} />
         <Stat label="триггер" value={profile.triggerToken ?? '—'} mono />
         <Link
-          href={`/projects/${projectId}/characters/${profileId}/loras`}
+          href={`/characters/${profileId}/loras`}
           className={`text-left rounded-lg border p-3 transition block
             ${profile.loraReady
               ? 'bg-emerald-900/20 border-emerald-800 hover:border-emerald-600'

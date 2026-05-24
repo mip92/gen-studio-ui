@@ -1,8 +1,8 @@
 'use client';
 
-import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Breadcrumbs, BreadcrumbItem } from '../../components/Breadcrumbs';
+import { ScrollableTabs } from '../../components/ScrollableTabs';
 
 const TABS = [
   { slug: 'active', label: 'Активные' },
@@ -37,27 +37,14 @@ export default function QueueLayout({ children }: { children: React.ReactNode })
 function TabsNav() {
   const pathname = usePathname();
   const activeSlug = TABS.find((t) => pathname?.endsWith(`/queue/${t.slug}`))?.slug ?? '';
-
   return (
-    <div className="flex border-b border-zinc-800 -mb-px mt-3 overflow-x-auto" role="tablist">
-      {TABS.map((t) => {
-        const isActive = activeSlug === t.slug;
-        return (
-          <Link
-            key={t.slug}
-            href={`/queue/${t.slug}`}
-            role="tab"
-            aria-selected={isActive}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
-              isActive
-                ? 'text-blue-400 border-blue-500'
-                : 'text-zinc-500 border-transparent hover:text-zinc-300 hover:border-zinc-700'
-            }`}
-          >
-            {t.label}
-          </Link>
-        );
-      })}
-    </div>
+    <ScrollableTabs
+      className="mt-3"
+      tabs={TABS.map((t) => ({
+        href:   `/queue/${t.slug}`,
+        label:  t.label,
+        active: activeSlug === t.slug,
+      }))}
+    />
   );
 }

@@ -7,7 +7,7 @@ import { useCharacterCtx } from './CharacterPageShell';
 import { TrainingProgress } from './CharacterDetail';
 
 export function CharacterTrainingTab() {
-  const { profile, projectId, profileId, refresh } = useCharacterCtx();
+  const { profile, profileId, refresh } = useCharacterCtx();
   const [busy, setBusy] = useState<string | null>(null);
 
   const dsActive = !!profile.lastDatasetJob && ['pending','blocked','running'].includes(profile.lastDatasetJob.status);
@@ -27,7 +27,7 @@ export function CharacterTrainingTab() {
                  : `⚙ обучается… (${profile.lastTrainingJob!.status})`;
 
   return (
-    <main className="px-8 py-6 max-w-7xl mx-auto space-y-6">
+    <main className="px-8 py-6 space-y-6">
       <TrainingProgress trainingJob={profile.lastTrainingJob} />
 
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
@@ -53,7 +53,7 @@ export function CharacterTrainingTab() {
           </button>
 
           <Link
-            href={`/projects/${projectId}/characters/${profileId}/loras`}
+            href={`/characters/${profileId}/loras`}
             className="text-xs text-blue-400 hover:text-blue-300 border border-blue-900/50 hover:border-blue-700 rounded px-3 py-2"
           >
             📚 Все варианты LoRA →

@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, ShotPromptFields, UpdateShotBody } from '../lib/api';
+import { api, Location, ShotPromptFields, UpdateShotBody } from '../lib/api';
 import { useShotCtx } from './ShotPageShell';
 import { Field, Value, Input, Textarea } from './ShotDetail';
 
@@ -13,9 +13,17 @@ export function ShotPromptsTab() {
   const [draft, setDraft]     = useState<UpdateShotBody>({});
   const [busy, setBusy]       = useState(false);
   const [error, setError]     = useState<string | null>(null);
+  const [locations, setLocations]       = useState<Location[]>([]);
+  const [savingLocation, setSavingLoc]  = useState(false);
+
+  // Load project locations once — they're reused across all shots.
+  useEffect(() => {
+    api.listLocations(projectId).then(setLocations).catch(() => {});
+  }, [projectId]);
 
   const pf  = shot.promptFields ?? {};
   const dpf = (draft.promptFields ?? pf) as ShotPromptFields;
+  const currentLocation = locations.find((l) => l.id === shot.locationId) ?? null;
 
   const startEdit = () => {
     setDraft({
@@ -52,6 +60,22 @@ export function ShotPromptsTab() {
 
   const updatePf = (patch: Partial<ShotPromptFields>) => {
     setDraft((d) => ({ ...d, promptFields: { ...((d.promptFields ?? pf) as ShotPromptFields), ...patch } }));
+  };
+
+  // Standalone location change — doesn't go through the prompt edit-mode
+  // workflow. Calls PATCH /shots/:id/location and refetches the shot.
+  const changeLocation = async (newLocationId: string | null) => {
+    setSavingLoc(true);
+    setError(null);
+    try {
+      await api.assignShotLocation(shotId, newLocationId);
+      const fresh = await api.getShot(shotId);
+      setShot(fresh);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingLoc(false);
+    }
   };
 
   return (
@@ -127,6 +151,47 @@ export function ShotPromptsTab() {
         </div>
       )}
 
+      {/* Location picker — independent of edit-mode. Changing it calls
+          PATCH /shots/:id/location immediately. The renderer auto-prepends
+          location.description to the positive at render time. */}
+      <section className="mb-6 bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+        <div className="flex items-baseline justify-between gap-4 mb-2">
+          <div>
+            <div className="text-xs uppercase tracking-wider text-zinc-500">📍 Локация</div>
+            <div className="text-xs text-zinc-600 mt-0.5">
+              Описание автоматически добавляется в начало positive при рендере.
+            </div>
+          </div>
+          <a
+            href={`/projects/${projectId}/locations`}
+            className="text-xs text-blue-400 hover:text-blue-300 shrink-0"
+          >
+            ✎ управлять локациями →
+          </a>
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            value={shot.locationId ?? ''}
+            onChange={(e) => changeLocation(e.target.value || null)}
+            disabled={savingLocation}
+            className="flex-1 bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm disabled:opacity-50"
+          >
+            <option value="">— без локации (positive используется как есть) —</option>
+            {locations.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name} ({l.slug})
+              </option>
+            ))}
+          </select>
+          {savingLocation && <span className="text-xs text-zinc-500">сохраняю…</span>}
+        </div>
+        {currentLocation && (
+          <div className="mt-3 text-xs text-zinc-400 whitespace-pre-wrap font-mono leading-relaxed bg-zinc-950 rounded p-3 border border-zinc-800/50 max-h-40 overflow-y-auto">
+            {currentLocation.description}
+          </div>
+        )}
+      </section>
+
       <div className="space-y-4">
         <Field label="Beat (narrativeBeat)" hint="Что происходит в кадре">
           {!editing ? <Value v={pf.narrativeBeat} multi />
@@ -166,10 +231,16 @@ export function ShotPromptsTab() {
                         onChange={(v) => updatePf({ positive: v })} />}
         </Field>
 
-        <Field label="Negative prompt">
+        <Field label="Negative prompt" hint="SDXL negative — fallback Project.defaultNegative если пусто">
           {!editing ? <Value v={pf.negative} multi />
                     : <Textarea value={dpf.negative ?? ''} rows={3}
                         onChange={(v) => updatePf({ negative: v })} />}
+        </Field>
+
+        <Field label="Motion negative (для видео i2v)" hint="Wan2.2 negative — fallback Project.defaultVideoNegative если пусто. Уходит в ноду 10 воркфлоу.">
+          {!editing ? <Value v={pf.motionNegative as string | undefined} multi />
+                    : <Textarea value={(dpf.motionNegative as string | undefined) ?? ''} rows={3}
+                        onChange={(v) => updatePf({ motionNegative: v })} />}
         </Field>
 
         <Field label="Character locks (positiveCharacterLocks)" hint="Кто/как зафиксирован в кадре">

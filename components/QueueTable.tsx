@@ -209,8 +209,11 @@ export default function QueueTable({
       cell: ({ row }) => {
         const slug = row.original.projectSlug;
         const proj = projectList.find((p) => p.slug === slug);
+        // Prefer the UUID from the row itself (always populated by the API);
+        // fall back to a lookup, then to the slug.
+        const id = row.original.projectId ?? proj?.id ?? slug;
         return (
-          <Link href={`/projects/${proj?.id ?? slug}`}
+          <Link href={`/projects/${id}`}
                 className="text-xs text-zinc-300 hover:text-white underline-offset-2 hover:underline truncate inline-block max-w-[140px]"
                 title={proj?.name ?? slug}>
             {proj?.name ?? slug}
@@ -242,7 +245,7 @@ export default function QueueTable({
         return (
           <div className="min-w-0">
             <div className="font-mono text-xs truncate">
-              {renderRowTargets(r, links[r.projectSlug])}
+              {renderRowTargets(r, links[r.projectSlug], projectList.find((p) => p.slug === r.projectSlug)?.id)}
               {r.triggerToken && <span className="text-zinc-600 ml-2">→ {r.triggerToken}</span>}
             </div>
             {r.errorMessage && (
@@ -559,33 +562,76 @@ function MultiSelectLabeled({ options, value, onChange }: {
   );
 }
 
-function renderRowTargets(row: QueueRow, pl?: ProjectLinks): React.ReactNode {
+function renderRowTargets(row: QueueRow, pl?: ProjectLinks, projectId?: string): React.ReactNode {
   const cls = 'underline-offset-2 hover:underline hover:text-white';
 
-  if (row.type === 'scene' || row.type === 'video' || row.type === 'video_upscale') {
-    // For video_upscale the profileCode includes a "↑FHD" suffix — strip for lookup.
+  // Canonical URL form is always /projects/<uuid>/...; the row already carries
+  // the UUID (`row.projectId`), so a slug fallback is only used when the API
+  // is older than the projectId field.
+  const projSeg = row.projectId ?? projectId ?? row.projectSlug;
+
+  // Shot UUID. Backend now ships `shotId` directly for shot-anchored jobs
+  // (scene render / video / video_upscale / shot-level TTS); the projectLinks
+  // map lookup is the legacy fallback.
+  const fallbackShotId = (() => {
     const lookupCode = row.profileCode.replace(/\s*↑FHD\s*$/, '');
-    const shot  = pl?.shots.get(lookupCode);
-    const slug  = row.projectSlug;
-    const sceneNode = shot
-      ? <Link href={`/projects/${slug}/scenes#${shot.sceneKey}`} className={`text-zinc-300 ${cls}`}>{row.characterCode}</Link>
+    return pl?.shots.get(lookupCode)?.shotId ?? null;
+  })();
+  const shotId  = row.shotId ?? fallbackShotId;
+  const sceneInfo = (() => {
+    const lookupCode = row.profileCode.replace(/\s*↑FHD\s*$/, '');
+    return pl?.shots.get(lookupCode) ?? null;
+  })();
+
+  // Map queue job type → the shot tab where the result is viewable.
+  // scene  → /render   (image generation candidates land in the Сцена tab)
+  // video  → /videos   (i2v output list)
+  // tts    → /narration (per-shot voiceover)
+  function shotTabHrefFor(type: QueueRow['type']): string | null {
+    if (!shotId) return null;
+    if (type === 'scene')         return `/projects/${projSeg}/shots/${shotId}/render`;
+    if (type === 'video')         return `/projects/${projSeg}/shots/${shotId}/videos`;
+    if (type === 'video_upscale') return `/projects/${projSeg}/shots/${shotId}/videos`;
+    if (type === 'tts')           return `/projects/${projSeg}/shots/${shotId}/narration`;
+    return null;
+  }
+
+  if (row.type === 'scene' || row.type === 'video' || row.type === 'video_upscale') {
+    const sceneHref = sceneInfo ? `/projects/${projSeg}/scenes#${sceneInfo.sceneKey}` : null;
+    const shotHref  = shotTabHrefFor(row.type);
+    const sceneNode = sceneHref
+      ? <Link href={sceneHref} className={`text-zinc-300 ${cls}`}>{row.characterCode}</Link>
       : <span className="text-zinc-300">{row.characterCode}</span>;
-    const shotNode = shot
-      ? (row.type === 'video' || row.type === 'video_upscale'
-          ? <Link href={`/projects/${slug}/shots/${shot.shotId}/videos/${row.id}`} className={`text-zinc-200 ${cls}`}>{row.profileCode}</Link>
-          : <Link href={`/projects/${slug}/shots/${shot.shotId}`} className={`text-zinc-200 ${cls}`}>{row.profileCode}</Link>)
+    const shotNode = shotHref
+      ? <Link href={shotHref} className={`text-zinc-200 ${cls}`}>{row.profileCode}</Link>
       : <span className="text-zinc-200">{row.profileCode}</span>;
     return <>{sceneNode}<span className="text-zinc-500"> · </span>{shotNode}</>;
   }
 
+  // Per-shot TTS row → link the profileCode (which is the shotCode) to the
+  // shot's narration tab. Scene-level TTS rows (no shotId) fall through to
+  // a plain label since the project's /scenes anchor already exists from the
+  // scene-cell column.
+  if (row.type === 'tts' && shotId) {
+    const shotHref = shotTabHrefFor('tts')!;
+    return (
+      <>
+        <span className="text-zinc-300">{row.characterCode}</span>
+        <span className="text-zinc-500"> · </span>
+        <Link href={shotHref} className={`text-zinc-200 ${cls}`}>{row.profileCode}</Link>
+      </>
+    );
+  }
+
   const char = pl?.chars.get(row.characterCode);
   const profileId = char?.profiles.get(row.profileCode);
-  const slug = row.projectSlug;
+  // Persona pages are project-independent now — always link to the global
+  // /characters/<profileId>/description, not the legacy project-scoped URL.
   const charNode = profileId
-    ? <Link href={`/projects/${slug}/characters/${profileId}`} className={`text-zinc-300 ${cls}`}>{row.characterCode}</Link>
+    ? <Link href={`/characters/${profileId}/description`} className={`text-zinc-300 ${cls}`}>{row.characterCode}</Link>
     : <span className="text-zinc-300">{row.characterCode}</span>;
   const profNode = profileId
-    ? <Link href={`/projects/${slug}/characters/${profileId}`} className={`text-zinc-200 ${cls}`}>{row.profileCode}</Link>
+    ? <Link href={`/characters/${profileId}/description`} className={`text-zinc-200 ${cls}`}>{row.profileCode}</Link>
     : <span className="text-zinc-200">{row.profileCode}</span>;
   return <>{charNode}<span className="text-zinc-500"> · </span>{profNode}</>;
 }

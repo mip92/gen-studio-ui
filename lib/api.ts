@@ -85,7 +85,12 @@ export interface ProfileFull {
     id:          string;
     code:        string;
     displayName: string | null;
-    project?:    { id: string; slug: string; name: string };
+    project?:    { id: string; slug: string; name: string } | null;
+    projectLinks?: Array<{
+      projectId: string;
+      attachedAt: string;
+      project: { id: string; slug: string; name: string };
+    }>;
   };
 }
 
@@ -128,6 +133,10 @@ export interface ShotPromptFields {
   production?:             { notes?: string; promptStatus?: string; assetRefs?: string[] };
   workflowParams?:         { seedPolicy?: string; faceswapRef?: string };
   captionGenerator?:       string;
+  /** Per-shot override for the Wan2.2 (i2v) negative. When empty, the renderer
+   *  falls back to `Project.defaultVideoNegative`, then the workflow JSON's
+   *  hardcoded negative. Wired into node 10 of the i2v workflow. */
+  motionNegative?:         string;
   [key: string]: unknown;
 }
 
@@ -137,6 +146,16 @@ export interface RenderedImage {
   seed?:       number;
   strategyId?: string;
   createdAt?:  string;
+}
+
+export interface Location {
+  id:          string;
+  projectId:   string;
+  slug:        string;
+  name:        string;
+  description: string;
+  createdAt?:  string;
+  updatedAt?:  string;
 }
 
 export interface ShotFull {
@@ -151,6 +170,8 @@ export interface ShotFull {
   renderedImages:      RenderedImage[] | null;
   chosenRender:        string | null;
   chosenVideoId:       string | null;
+  /** FK to a Location row. SceneRenderService prepends location.description into positive. */
+  locationId:          string | null;
   participants:        ShotParticipant[];
   scene?: {
     id:              string;
@@ -188,6 +209,29 @@ export interface ProjectListItem {
   slug:      string;
   name:      string;
   settings?: unknown;
+}
+
+/** Full project row including the required prompt-content fields. */
+export interface ProjectFull extends ProjectListItem {
+  scriptText:                string | null;
+  defaultNegative:           string;
+  defaultVideoNegative:      string;
+  defaultMotionPrompt:       string;
+  defaultStaticMotionPrompt: string;
+  targetPlatform?:           string | null;
+  safetyTier?:               string | null;
+  createdAt?:                string;
+  updatedAt?:                string;
+}
+
+export interface UpdateProjectBody {
+  name?:                       string;
+  slug?:                       string;
+  defaultNegative?:            string;
+  defaultVideoNegative?:       string;
+  defaultMotionPrompt?:        string;
+  defaultStaticMotionPrompt?:  string;
+  scriptText?:                 string;
 }
 
 export interface SceneShotParticipant {
@@ -271,6 +315,9 @@ export interface SceneSummary {
 
 export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale' | 'tts';
 
+/** Wire format from /pipeline/queue rows. Backend pairs slug + UUID so
+ *  Link-builders can always go straight to the canonical /projects/<uuid>/
+ *  form without a slug→uuid middleware bounce. */
 export interface QueueRow {
   type:          QueueJobType;
   id:            string;
@@ -278,6 +325,8 @@ export interface QueueRow {
   profileCode:   string;
   characterCode: string;
   projectSlug:   string;
+  /** Canonical project UUID; prefer over slug for hrefs. */
+  projectId:     string | null;
   triggerToken:  string | null;
   queuedAt:      string;
   startedAt:     string | null;
@@ -385,9 +434,52 @@ export const api = {
   cancelDatasetJob: (jobId: string) =>
     http(`/dataset-queue/jobs/${jobId}`, { method: 'DELETE' }),
 
+  // ── Persona library (Phase 1 of character library refactor) ──────────
+  // Characters live independently of projects. The library list returns
+  // every character with its profiles + which projects each is attached to.
+
+  listLibraryCharacters: () =>
+    http<Array<{
+      id: string;
+      code: string;
+      displayName: string | null;
+      projectId: string | null;
+      profiles: Array<{
+        id: string;
+        profileCode: string;
+        ageLabel: string | null;
+        targetImages: number | null;
+        triggerToken: string | null;
+        loraPath: string | null;
+      }>;
+      projectLinks: Array<{
+        projectId: string;
+        attachedAt: string;
+        project: { id: string; slug: string; name: string };
+      }>;
+    }>>(`/library/characters`),
+
+  attachCharacter: (projectIdOrSlug: string, characterId: string) =>
+    http<{ projectId: string; characterId: string; code: string }>(
+      `/projects/${projectIdOrSlug}/characters/${characterId}/attach`,
+      { method: 'POST' },
+    ),
+
+  detachCharacter: (projectIdOrSlug: string, characterId: string) =>
+    http<{ projectId: string; characterId: string }>(
+      `/projects/${projectIdOrSlug}/characters/${characterId}/attach`,
+      { method: 'DELETE' },
+    ),
+
   // Profile read/edit
   getProfile: (profileId: string) =>
     http<ProfileFull>(`/profiles/${profileId}`),
+
+  /** Per-profile readiness summary. Project-independent — drives the persona
+   * detail page badges (phase, datasetCount, loraReady, last jobs) without
+   * relying on any project context. */
+  getProfileSummary: (profileId: string) =>
+    http<ProfileSummary>(`/profiles/${profileId}/summary`),
 
   updateProfile: (profileId: string, body: UpdateProfileBody) =>
     http<ProfileFull>(`/profiles/${profileId}`, {
@@ -536,6 +628,58 @@ export const api = {
     http<ShotFull>(`/shots/${shotId}/renders/${encodeURIComponent(filename)}`, {
       method: 'DELETE',
     }),
+
+  // Locations — project-scoped reusable setting descriptions. Renderer prepends
+  // location.description to shot.positive so editing the description once
+  // updates every shot tagged with this location.
+  listLocations: (projectId: string) =>
+    http<Location[]>(`/projects/${projectId}/locations`),
+
+  getLocation: (locationId: string) =>
+    http<Location>(`/locations/${locationId}`),
+
+  createLocation: (projectId: string, body: { slug: string; name: string; description: string }) =>
+    http<Location>(`/projects/${projectId}/locations`, {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  updateLocation: (locationId: string, body: { slug?: string; name?: string; description?: string }) =>
+    http<Location>(`/locations/${locationId}`, {
+      method: 'PATCH',
+      body:   JSON.stringify(body),
+    }),
+
+  deleteLocation: (locationId: string) =>
+    http<{ id: string; deleted: boolean }>(`/locations/${locationId}`, {
+      method: 'DELETE',
+    }),
+
+  assignShotLocation: (shotId: string, locationId: string | null) =>
+    http<{ id: string; shotCode: string; locationId: string | null }>(
+      `/shots/${shotId}/location`,
+      { method: 'PATCH', body: JSON.stringify({ locationId }) },
+    ),
+
+  // Pipeline timing + waste statistics for the Overview page.
+  getProjectStats: (idOrSlug: string) =>
+    http<{
+      project:      { id: string; slug: string; name: string };
+      sceneRender:  { count: number; avgSeconds: number | null };
+      videoRender:  { count: number; avgSeconds: number | null };
+      videoUpscale: { count: number; avgSeconds: number | null };
+      tts:          { count: number; avgSeconds: number | null };
+      bgm:          { count: number; avgSeconds: number | null };
+      dataset:      { count: number; avgSeconds: number | null };
+      training:     { count: number; avgSeconds: number | null };
+      waste: {
+        currentImages:      number;
+        estimatedGenerated: number;
+        estimatedDeleted:   number;
+        shotsRegenerated:   number;
+        totalRegenerations: number;
+      };
+    }>(`/projects/${idOrSlug}/stats`),
 
   setChosenRender: (shotId: string, filename: string | null) =>
     http<ShotFull>(`/shots/${shotId}/chosen-render`, {
@@ -799,6 +943,24 @@ export const api = {
       { method: 'POST' },
     ),
 
+  // ── Actions (pipeline gates waiting for user action) ─────────────────────
+  // Backend endpoint requires Nest restart to take effect — until then this
+  // returns 404 and the UI surfaces it as an error state.
+
+  listActions: (projectSlug?: string) =>
+    http<{ items: ActionItem[] }>(
+      `/actions${projectSlug ? `?project=${encodeURIComponent(projectSlug)}` : ''}`,
+    ),
+
+  /** Generic "fire the action attached to this ActionItem" wrapper. The path
+   *  + method come from the server so the UI doesn't need to know which gate
+   *  maps to which controller. Empty body if action.body is undefined. */
+  runAction: (action: NonNullable<ActionItem['action']>) =>
+    http(action.path, {
+      method: action.method,
+      body:   JSON.stringify(action.body ?? {}),
+    }),
+
   // ── CapCut export ─────────────────────────────────────────────────────────
   capcutReadiness: (idOrSlug: string) =>
     http<CapcutReadiness>(`/projects/${idOrSlug}/export/capcut/readiness`),
@@ -816,6 +978,28 @@ export const api = {
    */
   getProjectScript: (idOrSlug: string) =>
     http<{ text: string | null }>(`/projects/${idOrSlug}/script`),
+
+  /** Overwrite Project.scriptText. Empty string clears the field. */
+  patchProjectScript: (idOrSlug: string, text: string) =>
+    http<{ text: string | null }>(`/projects/${idOrSlug}/script`, {
+      method: 'PATCH',
+      body:   JSON.stringify({ text }),
+    }),
+
+  /** Fetch the full project row (incl. required prompt fields) for the Settings page. */
+  getProject: (idOrSlug: string) =>
+    http<ProjectFull>(`/projects/${idOrSlug}`),
+
+  /**
+   * Update editable project fields. Sending an empty string to a required
+   * prompt field is rejected by the backend (NOT NULL + CHECK constraint).
+   * Omit the field to keep its current value.
+   */
+  updateProject: (id: string, body: UpdateProjectBody) =>
+    http<ProjectFull>(`/projects/${id}`, {
+      method: 'PATCH',
+      body:   JSON.stringify(body),
+    }),
 
   // ── BGM (ACE-Step background music) ────────────────────────────────────
 
@@ -1010,6 +1194,36 @@ export interface MusicSegment {
   approvedJobId: string | null;
   createdAt:     string;
   jobs?:         AudioRenderJob[];
+}
+
+// ── Actions (pipeline-gate todo list) ─────────────────────────────────────
+
+export type ActionGateKey =
+  | 'upload_dataset_images'
+  | 'start_dataset'
+  | 'start_training'
+  | 'render_scene'
+  | 'approve_render'
+  | 'create_video'
+  | 'approve_video'
+  | 'upscale_video';
+
+export interface ActionItem {
+  gate:    1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  gateKey: ActionGateKey;
+  project: { id: string; slug: string; name: string };
+  character?: { id: string; code: string; displayName: string | null };
+  profile?:   { id: string; code: string };
+  scene?:     { id: string; sceneKey: string; title: string | null };
+  shot?:      { id: string; code: string };
+  /** Frontend path the "Open" button navigates to (relative to API_BASE host). */
+  link:   string;
+  /** Optional one-click action. Present on gates 2, 3, 8 only. */
+  action?: {
+    method: 'POST' | 'PATCH';
+    path:   string;
+    body?:  Record<string, unknown>;
+  };
 }
 
 export interface AudioRenderJob {

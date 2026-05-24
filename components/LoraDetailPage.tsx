@@ -15,9 +15,8 @@ import { TrainingHistoryChart } from './TrainingHistoryChart';
  * up the most recent training job for the profile to find its train.log.
  */
 export function LoraDetailPage({
-  projectId, profileId, loraId,
+  profileId, loraId,
 }: {
-  projectId: string;
   profileId: string;
   loraId:    string;
 }) {
@@ -71,7 +70,7 @@ export function LoraDetailPage({
     try {
       await api.deleteLoraVariant(profileId, variant.filename);
       // After delete, this variant no longer exists — bounce to list.
-      window.location.href = `/projects/${projectId}/characters/${profileId}/loras`;
+      window.location.href = `/characters/${profileId}/loras`;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(null);
@@ -79,8 +78,10 @@ export function LoraDetailPage({
   };
 
   return (
-    <main className="px-8 py-6 max-w-5xl mx-auto">
+    <main className="px-8 py-6">
       <header className="mb-6 flex items-baseline justify-between gap-4">
+        {/* Character code / profileCode subtitle is already in the sticky shell
+            header (h1) — don't duplicate. Only the variant label remains here. */}
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-3">
             {variant?.label ?? filename}
@@ -90,11 +91,6 @@ export function LoraDetailPage({
               </span>
             )}
           </h1>
-          {profile && (
-            <p className="text-zinc-500 text-sm font-mono mt-1">
-              {profile.character?.code} · {profile.profileCode}
-            </p>
-          )}
         </div>
         <div className="flex gap-2">
           {variant && !isActive && (

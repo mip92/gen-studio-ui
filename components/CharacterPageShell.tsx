@@ -1,18 +1,17 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { api, DashboardResponse, ProfileSummary, ProfileFull } from '../lib/api';
+import { api, ProfileSummary, ProfileFull } from '../lib/api';
 import { Breadcrumbs, BreadcrumbItem } from './Breadcrumbs';
+import { ScrollableTabs } from './ScrollableTabs';
 
 const POLL_MS = 5000;
 
 interface CharacterCtx {
-  dashboard:   DashboardResponse;
+  /** Per-profile readiness — sourced from `GET /profiles/:id/summary`. */
   profile:     ProfileSummary;
   profileFull: ProfileFull | null;
-  projectId:   string;
   profileId:   string;
   refresh:     () => Promise<void>;
   reloadProfile: () => Promise<void>;
@@ -54,30 +53,38 @@ const PHASE_LABEL: Record<ProfileSummary['phase'], string> = {
 };
 
 export function CharacterPageShell({
-  projectId, profileId, children,
+  profileId, children,
 }: {
-  projectId: string; profileId: string; children: React.ReactNode;
+  profileId: string;
+  children: React.ReactNode;
 }) {
-  const [dashboard,   setDashboard]   = useState<DashboardResponse | null>(null);
+  // Project-independent: the persona page knows about a profile, full stop.
+  // Project attachments live elsewhere (Состав проекта picker). Two parallel
+  // fetches keep the page snappy: ProfileSummary for badges/jobs/phase,
+  // ProfileFull for the editable promptBase / negative / angles / variety.
+  const [profile,     setProfile]     = useState<ProfileSummary | null>(null);
   const [profileFull, setProfileFull] = useState<ProfileFull | null>(null);
   const [error,       setError]       = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      const d = await api.dashboard(projectId);
-      setDashboard(d);
-      setError(null);
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-  }, [projectId]);
 
   const reloadProfile = useCallback(async () => {
     try {
       const p = await api.getProfile(profileId);
       setProfileFull(p);
-    } catch { /* ignore */ }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }, [profileId]);
 
-  useEffect(() => { refresh(); reloadProfile(); }, [refresh, reloadProfile]);
+  const refresh = useCallback(async () => {
+    try {
+      const s = await api.getProfileSummary(profileId);
+      setProfile(s);
+      setError(null);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }, [profileId]);
+
+  useEffect(() => { reloadProfile(); }, [reloadProfile]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   // Periodic refresh so dataset/training phase keeps updating.
   useEffect(() => {
@@ -92,44 +99,31 @@ export function CharacterPageShell({
       </main>
     );
   }
-  if (!dashboard) {
-    return <main className="px-8 py-6 text-zinc-500">Loading…</main>;
-  }
-
-  const profile = dashboard.profiles.find((p) => p.profileId === profileId);
   if (!profile) {
-    return (
-      <main className="px-8 py-6">
-        <div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">
-          Profile {profileId} not found
-        </div>
-      </main>
-    );
+    return <main className="px-8 py-6 text-zinc-500">Loading…</main>;
   }
 
   return (
     <CharacterContext.Provider value={{
-      dashboard, profile, profileFull, projectId, profileId,
+      profile, profileFull, profileId,
       refresh, reloadProfile, setProfileFull,
     }}>
-      <StickyHeader projectId={projectId} profileId={profileId} project={dashboard.project} profile={profile} />
+      <StickyHeader profileId={profileId} profile={profile} />
       {children}
     </CharacterContext.Provider>
   );
 }
 
 function StickyHeader({
-  projectId, profileId, project, profile,
+  profileId, profile,
 }: {
-  projectId: string;
   profileId: string;
-  project:   DashboardResponse['project'];
   profile:   ProfileSummary;
 }) {
   return (
     <div className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
-      <div className="max-w-7xl mx-auto px-8 pt-3 pb-0">
-        <CharacterBreadcrumbs projectId={projectId} profileId={profileId} project={project} profile={profile} />
+      <div className="px-8 pt-3 pb-0">
+        <CharacterBreadcrumbs profileId={profileId} profile={profile} />
         <div className="flex items-baseline justify-between mb-0">
           <div>
             <h1 className="text-xl font-semibold text-zinc-100">{profile.displayName ?? profile.profileCode}</h1>
@@ -139,60 +133,43 @@ function StickyHeader({
             {PHASE_LABEL[profile.phase]}
           </span>
         </div>
-        <TabsNav projectId={projectId} profileId={profileId} />
+        <TabsNav profileId={profileId} />
       </div>
     </div>
   );
 }
 
 function CharacterBreadcrumbs({
-  projectId, profileId, project, profile,
+  profileId, profile,
 }: {
-  projectId: string;
   profileId: string;
-  project:   DashboardResponse['project'];
   profile:   ProfileSummary;
 }) {
   const pathname = usePathname();
-  const base = `/projects/${projectId}/characters/${profileId}`;
+  const base = `/characters/${profileId}`;
   const tab = TABS.find((t) => pathname?.includes(`${base}/${t.slug}`));
 
   const items: BreadcrumbItem[] = [
-    { label: 'Overview',     href: '/' },
-    { label: 'Projects',     href: '/projects' },
-    { label: project.name,   href: `/projects/${projectId}` },
-    { label: 'Characters',   href: `/projects/${projectId}/characters` },
+    { label: 'Overview',          href: '/' },
+    { label: 'Персонажи',         href: '/characters' },
     { label: profile.profileCode, href: `${base}/description` },
     ...(tab ? [{ label: tab.label }] : []),
   ];
   return <Breadcrumbs items={items} />;
 }
 
-function TabsNav({ projectId, profileId }: { projectId: string; profileId: string }) {
+function TabsNav({ profileId }: { profileId: string }) {
   const pathname = usePathname();
-  const base = `/projects/${projectId}/characters/${profileId}`;
+  const base = `/characters/${profileId}`;
   const activeSlug = TABS.find((t) => pathname?.includes(`${base}/${t.slug}`))?.slug ?? '';
-
   return (
-    <div className="flex border-b border-zinc-800 -mb-px mt-3 overflow-x-auto" role="tablist">
-      {TABS.map((t) => {
-        const isActive = activeSlug === t.slug;
-        return (
-          <Link
-            key={t.slug}
-            href={`${base}/${t.slug}`}
-            role="tab"
-            aria-selected={isActive}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
-              isActive
-                ? 'text-blue-400 border-blue-500'
-                : 'text-zinc-500 border-transparent hover:text-zinc-300 hover:border-zinc-700'
-            }`}
-          >
-            {t.label}
-          </Link>
-        );
-      })}
-    </div>
+    <ScrollableTabs
+      className="mt-3"
+      tabs={TABS.map((t) => ({
+        href:   `${base}/${t.slug}`,
+        label:  t.label,
+        active: activeSlug === t.slug,
+      }))}
+    />
   );
 }
