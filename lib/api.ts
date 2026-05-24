@@ -137,6 +137,12 @@ export interface ShotPromptFields {
    *  falls back to `Project.defaultVideoNegative`, then the workflow JSON's
    *  hardcoded negative. Wired into node 10 of the i2v workflow. */
   motionNegative?:         string;
+  /** Per-shot baked motion-direction override. Wins over the project-level
+   *  defaultMotionPrompt / defaultStaticMotionPrompt fallback. Use it for
+   *  shots where the project fallback is wrong — e.g. static camera but
+   *  subject (train, water) should move. Per-render VideoRender.motionPrompt
+   *  set at queue time still beats this. */
+  motionPrompt?:           string;
   [key: string]: unknown;
 }
 
