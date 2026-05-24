@@ -260,17 +260,33 @@ export default function QueueTable({
     {
       id: 'queuedAt', accessorKey: 'queuedAt', enableSorting: true, enableColumnFilter: false,
       header: ({ column }) => <HeaderCell label="Queued" column={column} />,
-      cell: ({ getValue }) => <span className="text-xs text-zinc-400 whitespace-nowrap">{fmt(getValue() as string | null)}</span>,
+      cell: ({ getValue }) => <TimeCell iso={getValue() as string | null} />,
     },
     {
       id: 'startedAt', accessorKey: 'startedAt', enableSorting: true, enableColumnFilter: false,
       header: ({ column }) => <HeaderCell label="Started" column={column} />,
-      cell: ({ getValue }) => <span className="text-xs text-zinc-400 whitespace-nowrap">{fmt(getValue() as string | null) || '—'}</span>,
+      cell: ({ getValue }) => <TimeCell iso={getValue() as string | null} />,
     },
     {
       id: 'completedAt', accessorKey: 'completedAt', enableSorting: true, enableColumnFilter: false,
       header: ({ column }) => <HeaderCell label="Completed" column={column} />,
-      cell: ({ getValue }) => <span className="text-xs text-zinc-400 whitespace-nowrap">{fmt(getValue() as string | null) || '—'}</span>,
+      cell: ({ getValue }) => <TimeCell iso={getValue() as string | null} />,
+    },
+    {
+      id: 'duration', enableSorting: false, enableColumnFilter: false,
+      header: () => <span className="text-left">Duration</span>,
+      cell: ({ row }) => {
+        const r = row.original;
+        if (!r.startedAt) return <span className="text-xs text-zinc-600">—</span>;
+        const end = r.completedAt ? new Date(r.completedAt).getTime() : Date.now();
+        const ms  = end - new Date(r.startedAt).getTime();
+        const running = !r.completedAt;
+        return (
+          <span className={`text-xs font-mono whitespace-nowrap ${running ? 'text-amber-300' : 'text-zinc-300'}`}>
+            {fmtDuration(ms)}{running && ' ↻'}
+          </span>
+        );
+      },
     },
     {
       id: 'actions', enableSorting: false, enableColumnFilter: false,
@@ -636,17 +652,43 @@ function renderRowTargets(row: QueueRow, pl?: ProjectLinks, projectId?: string):
   return <>{charNode}<span className="text-zinc-500"> · </span>{profNode}</>;
 }
 
-function fmt(iso: string | null): string {
+function TimeCell({ iso }: { iso: string | null }) {
+  if (!iso) return <span className="text-xs text-zinc-600">—</span>;
+  return (
+    <div className="leading-tight" title={iso}>
+      <div className="text-xs text-zinc-300 font-mono whitespace-nowrap">{fmtAbs(iso)}</div>
+      <div className="text-[10px] text-zinc-500 whitespace-nowrap">{fmtRel(iso)}</div>
+    </div>
+  );
+}
+
+function fmtAbs(iso: string | null): string {
   if (!iso) return '';
   const d = new Date(iso);
-  const now = Date.now();
-  const dt = now - d.getTime();
-  // Negative dt = timestamp in "future" (server/client clock or TZ skew).
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  if (sameDay) return `${hh}:${mm}:${ss}`;
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function fmtRel(iso: string | null): string {
+  if (!iso) return '';
+  const dt = Date.now() - new Date(iso).getTime();
   if (dt < 0)             return 'just now';
   if (dt < 60_000)        return `${Math.floor(dt / 1000)}s ago`;
   if (dt < 3_600_000)     return `${Math.floor(dt / 60_000)}m ago`;
   if (dt < 86_400_000)    return `${Math.floor(dt / 3_600_000)}h ago`;
-  return d.toLocaleString();
+  return `${Math.floor(dt / 86_400_000)}d ago`;
+}
+function fmtDuration(ms: number): string {
+  if (ms < 0) ms = 0;
+  const s = Math.floor(ms / 1000);
+  if (s < 60)    return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60)    return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
 }
 
 function typeBadge(t: QueueJobType): string {
