@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { api, ProfileSummary, ProfileFull } from '../lib/api';
+import { api, ProfileSummary, ProfileFull, ProfileStyleReadiness } from '../lib/api';
 import { Breadcrumbs, BreadcrumbItem } from './Breadcrumbs';
 import { ScrollableTabs } from './ScrollableTabs';
 
@@ -13,6 +13,15 @@ interface CharacterCtx {
   profile:     ProfileSummary;
   profileFull: ProfileFull | null;
   profileId:   string;
+  /** Per-style identity-asset readiness — sourced from `GET /profiles/:id/style-readiness`.
+   *  Null while loading. Drives conditional UI: cartoon characters hide
+   *  dataset/training/LoRA controls + warnings. */
+  readiness:   ProfileStyleReadiness | null;
+  /** Effective identity pipeline for this character — derived from attached
+   *  projects' visualStyle. 'lora' = photoreal (needs dataset + LoRA training);
+   *  'anchor' = cartoon (needs only an anchor PNG); 'mixed' = attached to both;
+   *  'none' = library mode, no project attached yet. */
+  identityPipeline: 'lora' | 'anchor' | 'mixed' | 'none';
   refresh:     () => Promise<void>;
   reloadProfile: () => Promise<void>;
   setProfileFull: (p: ProfileFull) => void;
@@ -26,12 +35,15 @@ export function useCharacterCtx(): CharacterCtx {
   return ctx;
 }
 
-const TABS = [
-  { slug: 'description', label: 'Описание' },
-  { slug: 'reference',   label: 'Reference' },
-  { slug: 'dataset',     label: 'Датасет' },
-  { slug: 'training',    label: 'Тренировка' },
-  { slug: 'loras',       label: 'LoRA' },
+const ALL_TABS = [
+  { slug: 'description', label: 'Описание',   pipelines: ['lora', 'anchor', 'mixed', 'none'] as const },
+  { slug: 'reference',   label: 'Reference',  pipelines: ['lora', 'anchor', 'mixed', 'none'] as const },
+  // Dataset + Training + LoRA tabs only make sense for the photoreal pipeline.
+  // For cartoon (anchor-only) characters these are hidden — anchor lives on
+  // the Reference tab.
+  { slug: 'dataset',     label: 'Датасет',    pipelines: ['lora', 'mixed', 'none'] as const },
+  { slug: 'training',    label: 'Тренировка', pipelines: ['lora', 'mixed', 'none'] as const },
+  { slug: 'loras',       label: 'LoRA',       pipelines: ['lora', 'mixed', 'none'] as const },
 ] as const;
 
 const PHASE_COLOR: Record<ProfileSummary['phase'], string> = {
@@ -64,6 +76,7 @@ export function CharacterPageShell({
   // ProfileFull for the editable promptBase / negative / angles / variety.
   const [profile,     setProfile]     = useState<ProfileSummary | null>(null);
   const [profileFull, setProfileFull] = useState<ProfileFull | null>(null);
+  const [readiness,   setReadiness]   = useState<ProfileStyleReadiness | null>(null);
   const [error,       setError]       = useState<string | null>(null);
 
   const reloadProfile = useCallback(async () => {
@@ -77,14 +90,28 @@ export function CharacterPageShell({
 
   const refresh = useCallback(async () => {
     try {
-      const s = await api.getProfileSummary(profileId);
+      const [s, r] = await Promise.all([
+        api.getProfileSummary(profileId),
+        api.profileStyleReadiness(profileId).catch(() => null),
+      ]);
       setProfile(s);
+      if (r) setReadiness(r);
       setError(null);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [profileId]);
 
   useEffect(() => { reloadProfile(); }, [reloadProfile]);
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Derive the identity pipeline from attached projects' styles.
+  const attachedStyles = readiness?.attachedProjects ?? [];
+  const hasPhotoreal = attachedStyles.some((p) => p.visualStyle === 'photoreal_cinematic');
+  const hasCartoon   = attachedStyles.some((p) => p.visualStyle !== 'photoreal_cinematic');
+  const identityPipeline: 'lora' | 'anchor' | 'mixed' | 'none' =
+    attachedStyles.length === 0 ? 'none'
+      : (hasPhotoreal && hasCartoon) ? 'mixed'
+      : hasPhotoreal ? 'lora'
+      : 'anchor';
 
   // Periodic refresh so dataset/training phase keeps updating.
   useEffect(() => {
@@ -105,49 +132,80 @@ export function CharacterPageShell({
 
   return (
     <CharacterContext.Provider value={{
-      profile, profileFull, profileId,
+      profile, profileFull, profileId, readiness, identityPipeline,
       refresh, reloadProfile, setProfileFull,
     }}>
-      <StickyHeader profileId={profileId} profile={profile} />
+      <StickyHeader profileId={profileId} profile={profile} identityPipeline={identityPipeline} readiness={readiness} />
       {children}
     </CharacterContext.Provider>
   );
 }
 
 function StickyHeader({
-  profileId, profile,
+  profileId, profile, identityPipeline, readiness,
 }: {
-  profileId: string;
-  profile:   ProfileSummary;
+  profileId:        string;
+  profile:          ProfileSummary;
+  identityPipeline: 'lora' | 'anchor' | 'mixed' | 'none';
+  readiness:        ProfileStyleReadiness | null;
 }) {
+  // For cartoon-only characters, the dataset/LoRA phase badge is misleading
+  // — they don't need any of that. Show anchor-readiness instead.
+  const isCartoonOnly = identityPipeline === 'anchor';
+  const anchorReady   = readiness
+    ? Object.values(readiness.styles).some((s) => s.identityStack !== 'lora_face_lock' && s.ready)
+    : false;
+  const badgeClass = isCartoonOnly
+    ? (anchorReady ? 'bg-emerald-700 text-emerald-100' : 'bg-zinc-700 text-zinc-200')
+    : PHASE_COLOR[profile.phase];
+  const badgeText = isCartoonOnly
+    ? (anchorReady ? 'anchor готов' : 'нет anchor')
+    : PHASE_LABEL[profile.phase];
+
   return (
     <div className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
       <div className="px-8 pt-3 pb-0">
-        <CharacterBreadcrumbs profileId={profileId} profile={profile} />
+        <CharacterBreadcrumbs profileId={profileId} profile={profile} identityPipeline={identityPipeline} />
         <div className="flex items-baseline justify-between mb-0">
           <div>
             <h1 className="text-xl font-semibold text-zinc-100">{profile.displayName ?? profile.profileCode}</h1>
-            <p className="text-zinc-500 text-xs font-mono mt-0.5">{profile.profileCode}</p>
+            <p className="text-zinc-500 text-xs font-mono mt-0.5">
+              {profile.profileCode}
+              {' · '}
+              <span className={
+                identityPipeline === 'anchor' ? 'text-purple-400' :
+                identityPipeline === 'lora'   ? 'text-amber-400'  :
+                identityPipeline === 'mixed'  ? 'text-cyan-400'   :
+                'text-zinc-600'
+              }>
+                {identityPipeline === 'anchor' ? 'cartoon (anchor)' :
+                 identityPipeline === 'lora'   ? 'photoreal (LoRA)' :
+                 identityPipeline === 'mixed'  ? 'photoreal+cartoon' :
+                 'library (нет проекта)'}
+              </span>
+            </p>
           </div>
-          <span className={`text-xs px-3 py-1 rounded font-medium ${PHASE_COLOR[profile.phase]}`}>
-            {PHASE_LABEL[profile.phase]}
+          <span className={`text-xs px-3 py-1 rounded font-medium ${badgeClass}`}>
+            {badgeText}
           </span>
         </div>
-        <TabsNav profileId={profileId} />
+        <TabsNav profileId={profileId} identityPipeline={identityPipeline} />
       </div>
     </div>
   );
 }
 
 function CharacterBreadcrumbs({
-  profileId, profile,
+  profileId, profile, identityPipeline,
 }: {
-  profileId: string;
-  profile:   ProfileSummary;
+  profileId:        string;
+  profile:          ProfileSummary;
+  identityPipeline: 'lora' | 'anchor' | 'mixed' | 'none';
 }) {
   const pathname = usePathname();
   const base = `/characters/${profileId}`;
-  const tab = TABS.find((t) => pathname?.includes(`${base}/${t.slug}`));
+  const visible = ALL_TABS.filter((t) => (t.pipelines as readonly string[]).includes(identityPipeline));
+  const tab = visible.find((t) => pathname?.includes(`${base}/${t.slug}`));
 
   const items: BreadcrumbItem[] = [
     { label: 'Overview',          href: '/' },
@@ -158,14 +216,22 @@ function CharacterBreadcrumbs({
   return <Breadcrumbs items={items} />;
 }
 
-function TabsNav({ profileId }: { profileId: string }) {
+function TabsNav({
+  profileId, identityPipeline,
+}: {
+  profileId:        string;
+  identityPipeline: 'lora' | 'anchor' | 'mixed' | 'none';
+}) {
   const pathname = usePathname();
   const base = `/characters/${profileId}`;
-  const activeSlug = TABS.find((t) => pathname?.includes(`${base}/${t.slug}`))?.slug ?? '';
+  // Filter tabs by the character's identity pipeline. Cartoon characters
+  // (anchor-only) skip Dataset / Training / LoRA — those concepts don't apply.
+  const visible = ALL_TABS.filter((t) => (t.pipelines as readonly string[]).includes(identityPipeline));
+  const activeSlug = visible.find((t) => pathname?.includes(`${base}/${t.slug}`))?.slug ?? '';
   return (
     <ScrollableTabs
       className="mt-3"
-      tabs={TABS.map((t) => ({
+      tabs={visible.map((t) => ({
         href:   `${base}/${t.slug}`,
         label:  t.label,
         active: activeSlug === t.slug,

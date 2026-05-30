@@ -11,7 +11,7 @@
  * UI lags at most one tick behind queue state changes.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, NarrativeBlock, MusicSegment, AudioRenderJob } from '../lib/api';
 
 export function BgmList({ projectId }: { projectId: string }) {
@@ -472,6 +472,8 @@ function SegmentRow({
 
 function AudioPreview({ jobId }: { jobId: string }) {
   const [meta, setMeta] = useState<{ bytes: number; durationSec: number; bitrateKbps: number } | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     setMeta(null);
@@ -479,6 +481,15 @@ function AudioPreview({ jobId }: { jobId: string }) {
       .then((m) => { if (!cancelled) setMeta(m); })
       .catch(() => { /* meta is purely informational — silent fail */ });
     return () => { cancelled = true; };
+  }, [jobId]);
+
+  // Apply the 0.2 default ONCE per audio element. A callback ref like
+  // `ref={(el) => { el.volume = 0.2 }}` fires on every render and silently
+  // clobbers the user's manual slider position every poll cycle (the parent
+  // BgmList refreshes every 5s) — felt like the volume kept stepping down.
+  // useEffect runs only on mount of this jobId.
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = 0.2;
   }, [jobId]);
 
   const bytesMb = meta ? (meta.bytes / (1024 * 1024)).toFixed(1) : null;
@@ -491,10 +502,7 @@ function AudioPreview({ jobId }: { jobId: string }) {
         src={api.bgmJobFileUrl(jobId)}
         className="w-full"
         preload="metadata"
-        // ACE-Step renders are normalised loud. Default the preview to
-        // ~20% so it matches the BGM-under-voiceover mix the CapCut
-        // export uses (AudioSegment volume=0.2 there).
-        ref={(el) => { if (el) el.volume = 0.2; }}
+        ref={audioRef}
       />
       <div className="mt-0.5 text-[10px] text-zinc-500 font-mono">
         {meta

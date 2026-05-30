@@ -190,7 +190,7 @@ export interface ShotFull {
     scriptStartLine: number | null;
     scriptEndLine:   number | null;
   };
-  project?: { id: string; slug: string; name: string };
+  project?: { id: string; slug: string; name: string; visualStyle?: string };
 }
 
 export interface UpdateShotBody {
@@ -215,6 +215,54 @@ export interface ProjectListItem {
   slug:      string;
   name:      string;
   settings?: unknown;
+  /**
+   * Visual style id (FK to visual_styles). Drives workflow routing + LoRA
+   * pipeline + style-block injection. Defaults to 'photoreal_cinematic' for
+   * legacy projects. See docs/VISUAL_STYLE_ARCHITECTURE.md.
+   */
+  visualStyle?: string;
+}
+
+/** A row from the visual_styles registry. */
+export interface VisualStyle {
+  id:            string;
+  displayName:   string;
+  identityStack: string;
+  loraPipeline:  string;
+}
+
+/** Output of GET /profiles/:id/style-readiness — per-style identity asset state. */
+export interface ProfileStyleReadiness {
+  profileId:        string;
+  profileCode:      string;
+  characterCode:    string;
+  attachedProjects: Array<{ slug: string; visualStyle: string }>;
+  styles: Record<string, {
+    ready:         boolean;
+    identityStack: string;
+    loraPipeline:  string;
+    assets:        { loraPath: string | null; anchorPath: string | null };
+  }>;
+}
+
+/**
+ * A row from anchor_render_jobs (queue-managed render job).
+ *
+ * Lifecycle: pending → running → completed (with outputPath) | failed (with errorMessage).
+ * PipelineQueueService picks pending rows, auto-starts ComfyUI if needed,
+ * submits the workflow, polls for completion, copies the PNG into
+ * data/<slug>/reference/<profileCode>_anchor.png.
+ */
+export interface AnchorRenderJob {
+  id:             string;
+  profileId:      string;
+  status:         'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  comfyPromptId?: string | null;
+  outputPath?:    string | null;
+  errorMessage?:  string | null;
+  queuedAt:       string;
+  startedAt?:     string | null;
+  completedAt?:   string | null;
 }
 
 /** Full project row including the required prompt-content fields. */
@@ -226,8 +274,24 @@ export interface ProjectFull extends ProjectListItem {
   defaultStaticMotionPrompt: string;
   targetPlatform?:           string | null;
   safetyTier?:               string | null;
+  /** 'silero' | 'indextts2'; null = treated as 'silero'. */
+  ttsEngine?:                string | null;
+  /** Project-relative path to the voice reference wav (indextts2 only). */
+  ttsVoiceRefPath?:          string | null;
+  /** Visual style id — see ProjectListItem.visualStyle. */
+  visualStyle?:              string;
   createdAt?:                string;
   updatedAt?:                string;
+}
+
+export type TTSEngine = 'silero' | 'xtts2' | 'f5';
+export const TTS_ENGINES: readonly TTSEngine[] = ['silero', 'xtts2', 'f5'];
+
+export interface ProjectTTSEmotionRef {
+  id:        string;
+  name:      string;
+  filePath:  string;
+  createdAt: string;
 }
 
 export interface UpdateProjectBody {
@@ -319,7 +383,7 @@ export interface SceneSummary {
   shots:           SceneShot[];
 }
 
-export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale' | 'tts';
+export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale' | 'tts' | 'bgm' | 'anchor';
 
 /** Wire format from /pipeline/queue rows. Backend pairs slug + UUID so
  *  Link-builders can always go straight to the canonical /projects/<uuid>/
@@ -369,13 +433,71 @@ export interface QueueListResponse {
 }
 
 export interface ScenesResponse {
-  project: { id: string; slug: string; name: string };
+  project: { id: string; slug: string; name: string; visualStyle?: string };
   scenes:  SceneSummary[];
 }
 
 export const api = {
   listProjects: () =>
     http<ProjectListItem[]>(`/projects`),
+
+  // ── Visual styles registry + per-profile readiness ─────────────────────────
+
+  /** List all registered visual styles (for project-creation dropdown). */
+  listVisualStyles: () =>
+    http<VisualStyle[]>(`/projects/visual-styles`),
+
+  /** Per-style readiness for one character profile. */
+  profileStyleReadiness: (profileId: string) =>
+    http<ProfileStyleReadiness>(`/profiles/${profileId}/style-readiness`),
+
+  /**
+   * Enqueue anchor portrait render via the gen-studio queue. Returns the new
+   * (or existing pending/running) anchor_render_jobs row immediately. Caller
+   * polls listAnchorJobs() to learn completion. PipelineQueueService auto-starts
+   * ComfyUI if it's not running.
+   */
+  generateAnchor: (profileId: string) =>
+    http<AnchorRenderJob>(`/profiles/${profileId}/generate-anchor`, { method: 'POST' }),
+
+  /** Recent anchor-render jobs for a profile (newest first, 50 max). */
+  listAnchorJobs: (profileId: string) =>
+    http<AnchorRenderJob[]>(`/profiles/${profileId}/anchor-jobs`),
+
+  /** Probe whether an anchor PNG exists for this profile. */
+  getAnchor: (profileId: string) =>
+    http<{ profileId: string; anchorPath: string | null; exists: boolean }>(
+      `/profiles/${profileId}/anchor`,
+    ),
+
+  /**
+   * Raw PNG URL for <img src=...>. Pass a cache-bust integer (e.g. Date.now())
+   * to force the browser to refetch after a fresh render.
+   */
+  anchorRawUrl: (profileId: string, cacheBust?: number) =>
+    `${API_BASE}/profiles/${profileId}/anchor/raw${cacheBust ? `?t=${cacheBust}` : ''}`,
+
+  /** Delete the anchor portrait PNG (returns deleted paths). */
+  deleteAnchor: (profileId: string) =>
+    http<{ profileId: string; deleted: string[]; count: number }>(
+      `/profiles/${profileId}/anchor`,
+      { method: 'DELETE' },
+    ),
+
+  /** Upload an external file (PNG/JPG) as the anchor for this profile. */
+  uploadAnchor: async (profileId: string, file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(`${API_BASE}/profiles/${profileId}/upload-anchor`, {
+      method: 'POST',
+      body:   fd,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`${res.status} ${res.statusText}: ${text.slice(0, 200)}`);
+    }
+    return (await res.json()) as { profileId: string; anchorPath: string; sizeBytes: number };
+  },
 
   dashboard: (slug: string) =>
     http<DashboardResponse>(`/projects/${slug}/dashboard`),
@@ -461,7 +583,9 @@ export const api = {
       projectLinks: Array<{
         projectId: string;
         attachedAt: string;
-        project: { id: string; slug: string; name: string };
+        /** visualStyle exposed so character cards can render the right
+         *  identity-pipeline badge (LoRA for photoreal, anchor for cartoon). */
+        project: { id: string; slug: string; name: string; visualStyle?: string };
       }>;
     }>>(`/library/characters`),
 
@@ -894,6 +1018,12 @@ export const api = {
       rate?:             number;
       modelFilename?:    string;
       sentencePauseSec?: number;
+      /** Voice-clone (xtts2/f5) only — ignored when project is on silero. */
+      emotionPreset?:    string;
+      emotionIntensity?: number;
+      emotionRefName?:   string;
+      /** true = jump to the front of the TTS queue; false/undefined = end (FIFO). */
+      front?:            boolean;
     } = {},
   ) =>
     http<TTSJob>(`/tts/shots/${shotId}`, {
@@ -1006,6 +1136,47 @@ export const api = {
       method: 'PATCH',
       body:   JSON.stringify(body),
     }),
+
+  // ── Project TTS (engine + voice/emotion refs) ──────────────────────────
+
+  setProjectTTSEngine: (projectId: string, engine: TTSEngine) =>
+    http<{ id: string; slug: string; ttsEngine: string | null; ttsVoiceRefPath: string | null }>(
+      `/projects/${projectId}/tts/engine`, {
+        method: 'PATCH',
+        body:   JSON.stringify({ engine }),
+      },
+    ),
+
+  uploadProjectVoiceRef: async (projectId: string, file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(`${API_BASE}/projects/${projectId}/tts/voice-reference`, {
+      method: 'POST',
+      body:   fd,
+    });
+    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 300)}`);
+    return res.json() as Promise<{ ok: true; path: string; bytes: number }>;
+  },
+
+  deleteProjectVoiceRef: (projectId: string) =>
+    http<{ ok: true }>(`/projects/${projectId}/tts/voice-reference`, { method: 'DELETE' }),
+
+  listProjectEmotionRefs: (projectId: string) =>
+    http<ProjectTTSEmotionRef[]>(`/projects/${projectId}/tts/emotion-refs`),
+
+  uploadProjectEmotionRef: async (projectId: string, name: string, file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(`${API_BASE}/projects/${projectId}/tts/emotion-refs/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      body:   fd,
+    });
+    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 300)}`);
+    return res.json() as Promise<ProjectTTSEmotionRef>;
+  },
+
+  deleteProjectEmotionRef: (projectId: string, name: string) =>
+    http<{ ok: true }>(`/projects/${projectId}/tts/emotion-refs/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
   // ── BGM (ACE-Step background music) ────────────────────────────────────
 
@@ -1208,20 +1379,31 @@ export type ActionGateKey =
   | 'upload_dataset_images'
   | 'start_dataset'
   | 'start_training'
+  | 'generate_anchor'
   | 'render_scene'
   | 'approve_render'
   | 'create_video'
   | 'approve_video'
-  | 'upscale_video';
+  | 'upscale_video'
+  | 'approve_tts'
+  | 'approve_bgm';
 
 export interface ActionItem {
-  gate:    1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  gate:    1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
   gateKey: ActionGateKey;
   project: { id: string; slug: string; name: string };
   character?: { id: string; code: string; displayName: string | null };
   profile?:   { id: string; code: string };
   scene?:     { id: string; sceneKey: string; title: string | null };
   shot?:      { id: string; code: string };
+  /** Segment-anchored gates (BGM approval, gate 10). */
+  segment?: {
+    id:          string;
+    sortOrder:   number;
+    durationSec: number;
+    prompt:      string | null;
+    block:       { id: string; slug: string; title: string | null };
+  };
   /** Frontend path the "Open" button navigates to (relative to API_BASE host). */
   link:   string;
   /** Optional one-click action. Present on gates 2, 3, 8 only. */

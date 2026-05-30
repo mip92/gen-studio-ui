@@ -89,30 +89,60 @@ export function LibraryCharactersList() {
 function CharacterCard({ char, profile }: { char: LibChar; profile: LibProfile | null }) {
   const [previewFilename, setPreviewFilename] = useState<string | null>(null);
   const [datasetCount,    setDatasetCount]    = useState<number | null>(null);
+  const [anchorExists,    setAnchorExists]    = useState<boolean>(false);
+
+  // Attached project styles drive WHICH identity badge to surface. A character
+  // pinned only to cartoon projects shouldn't be tagged "нет датасета" — that
+  // metric doesn't apply to the IP-Adapter pipeline. A photoreal-only char
+  // keeps the legacy dataset/LoRA badge.
+  const styles       = char.projectLinks.map((l) => l.project.visualStyle ?? 'photoreal_cinematic');
+  const hasPhotoreal = styles.some((s) => s === 'photoreal_cinematic');
+  const hasCartoon   = styles.some((s) => s !== 'photoreal_cinematic');
+  const isCartoonOnly = hasCartoon && !hasPhotoreal;
+  const isLibraryOnly = styles.length === 0;
 
   useEffect(() => {
     if (!profile) return;
-    api.listImages(profile.id)
-      .then((r) => {
-        setDatasetCount(r.count);
-        const usable = r.images.find((i) => i.size > 50_000) ?? r.images[0];
-        setPreviewFilename(usable?.filename ?? null);
-      })
-      .catch(() => { setDatasetCount(0); });
-  }, [profile]);
+    // Cartoon-only characters preview their anchor PNG; photoreal characters
+    // preview a dataset image. Library-mode characters try anchor first, then
+    // dataset, so whichever exists shows up.
+    if (isCartoonOnly || isLibraryOnly) {
+      api.getAnchor(profile.id)
+        .then((r) => { setAnchorExists(r.exists); })
+        .catch(() => { setAnchorExists(false); });
+    }
+    if (!isCartoonOnly) {
+      api.listImages(profile.id)
+        .then((r) => {
+          setDatasetCount(r.count);
+          const usable = r.images.find((i) => i.size > 50_000) ?? r.images[0];
+          setPreviewFilename(usable?.filename ?? null);
+        })
+        .catch(() => { setDatasetCount(0); });
+    } else {
+      setDatasetCount(0);
+    }
+  }, [profile, isCartoonOnly, isLibraryOnly]);
 
   const loraReady = !!profile?.loraPath;
   const target    = profile?.targetImages ?? 0;
   const dcount    = datasetCount ?? 0;
 
-  // Asset badge: same logic the project-scoped list used.
-  const assetBadge: { label: string; cls: string } = loraReady
-    ? { label: 'LoRA готова', cls: 'bg-emerald-700 text-emerald-100' }
-    : dcount === 0
-      ? { label: 'нет датасета', cls: 'bg-zinc-700 text-zinc-200' }
-      : target > 0 && dcount < target
-        ? { label: `датасет ${dcount}/${target}`, cls: 'bg-yellow-700 text-yellow-100' }
-        : { label: `датасет ${dcount}`, cls: 'bg-purple-700 text-purple-100' };
+  // Asset badge: photoreal characters show dataset/LoRA progress; cartoon-only
+  // characters show anchor readiness instead.
+  const assetBadge: { label: string; cls: string } = isCartoonOnly
+    ? (anchorExists
+        ? { label: 'anchor готов', cls: 'bg-purple-700 text-purple-100' }
+        : { label: 'нет anchor',   cls: 'bg-zinc-700 text-zinc-200' })
+    : isLibraryOnly
+      ? { label: loraReady ? 'LoRA готова' : (anchorExists ? 'anchor готов' : 'library'), cls: loraReady ? 'bg-emerald-700 text-emerald-100' : (anchorExists ? 'bg-purple-700 text-purple-100' : 'bg-zinc-700 text-zinc-300') }
+      : loraReady
+        ? { label: 'LoRA готова', cls: 'bg-emerald-700 text-emerald-100' }
+        : dcount === 0
+          ? { label: 'нет датасета', cls: 'bg-zinc-700 text-zinc-200' }
+          : target > 0 && dcount < target
+            ? { label: `датасет ${dcount}/${target}`, cls: 'bg-yellow-700 text-yellow-100' }
+            : { label: `датасет ${dcount}`, cls: 'bg-purple-700 text-purple-100' };
 
   const href = profile ? `/characters/${profile.id}/description` : '#';
   const attachedProjects = char.projectLinks.map((l) => l.project.slug);
@@ -121,7 +151,27 @@ function CharacterCard({ char, profile }: { char: LibChar; profile: LibProfile |
     <div className="group bg-zinc-900 border border-zinc-800 hover:border-blue-700 rounded-lg overflow-hidden transition flex flex-col">
       <Link href={href} className="block flex-1">
         <div className="aspect-square bg-zinc-950 relative">
-          {previewFilename && profile ? (
+          {/* Preview source depends on identity pipeline:
+             - cartoon-only character → anchor PNG (data/<slug>/reference/<code>_anchor.png)
+             - photoreal character → first usable dataset image
+             - library-mode character → anchor if exists, else first dataset image */}
+          {profile && isCartoonOnly && anchorExists ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={api.anchorRawUrl(profile.id)}
+              alt={profile.profileCode}
+              className="w-full h-full object-cover"
+              loading="lazy"
+            />
+          ) : profile && isLibraryOnly && anchorExists && !previewFilename ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={api.anchorRawUrl(profile.id)}
+              alt={profile.profileCode}
+              className="w-full h-full object-cover"
+              loading="lazy"
+            />
+          ) : previewFilename && profile ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={api.imageUrl(profile.id, previewFilename)}
@@ -131,7 +181,11 @@ function CharacterCard({ char, profile }: { char: LibChar; profile: LibProfile |
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-zinc-600 text-sm">
-              {dcount > 0 ? '…' : (profile ? 'нет датасета' : 'нет профиля')}
+              {dcount > 0
+                ? '…'
+                : (profile
+                    ? (isCartoonOnly ? 'нет anchor' : 'нет датасета')
+                    : 'нет профиля')}
             </div>
           )}
           <div className="absolute top-2 right-2 flex flex-col items-end gap-1">

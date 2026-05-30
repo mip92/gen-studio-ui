@@ -210,13 +210,14 @@ export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: s
           }))}
           characters={characters}
           shotParticipants={shot.participants}
+          isCartoon={(shot.project?.visualStyle ?? 'photoreal_cinematic') !== 'photoreal_cinematic'}
           onChange={(parts) => setDraft((d) => ({ ...d, participants: parts }))}
         />
 
         {!editing && (
           <>
             <p className="text-zinc-600 text-xs mt-3">
-              Чтобы поменять персонажей или какую LoRA брать (например HERO_TEEN_15 vs HERO_OVERLOAD_16) — нажми «✎ редактировать» вверху.
+              Чтобы поменять персонажей или какой профиль брать (например HERO_TEEN_15 vs HERO_OVERLOAD_16) — нажми «✎ редактировать» вверху.
             </p>
             <RenderSection shot={shot} onShotChange={setShot} />
             <VideoSection projectId={projectId} shot={shot} />
@@ -268,7 +269,10 @@ export function Textarea({ value, rows, onChange }: { value: string; rows: numbe
   );
 }
 
-// ── Render section: gated on LoRA readiness ─────────────────────────────────
+// ── Render section: gated on identity readiness ─────────────────────────────
+// Cartoon projects (Project.visualStyle != 'photoreal_cinematic') carry identity
+// via profile.promptBase + triggerToken (and optional anchor PNG for IP-Adapter).
+// Photoreal projects need a trained LoRA per participant. Branch the gating.
 
 export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotChange: (s: ShotFull) => void }) {
   // The pipeline queue owns dispatch + ComfyUI polling + persisting outputs to
@@ -282,9 +286,27 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
   const initialRenderCount = useRef<number>(shot.renderedImages?.length ?? 0);
 
-  // Compute readiness per participant
+  const visualStyle = shot.project?.visualStyle ?? 'photoreal_cinematic';
+  const isCartoon   = visualStyle !== 'photoreal_cinematic';
+
+  // Per-participant identity readiness. Cartoon needs promptBase+triggerToken;
+  // photoreal needs a trained LoRA. Status carries one of:
+  //   ready    — identity asset present, render allowed
+  //   no_lora  — photoreal participant has no trained LoRA yet
+  //   no_id    — cartoon participant has no promptBase/triggerToken (seeding gap)
+  //   unbound  — participant exists in the slot but no character attached
   const checks = shot.participants.map((p) => {
     if (!p.character) return { p, status: 'unbound' as const, profileCode: null as string | null };
+    if (isCartoon) {
+      // Cartoon: identity carried by promptBase + triggerToken.
+      const profile = (p.profile && p.profile.promptBase && p.profile.triggerToken)
+        ? p.profile
+        : p.character.profiles?.find((pp) => pp.promptBase && pp.triggerToken);
+      if (!profile) return { p, status: 'no_id' as const, profileCode: null };
+      const explicit = !!p.profile;
+      return { p, status: 'ready' as const, profileCode: profile.profileCode, explicit };
+    }
+    // Photoreal: identity needs a trained LoRA.
     const profile = p.profile && p.profile.loraPath
       ? p.profile
       : p.character.profiles?.find((pp) => pp.loraPath);
@@ -300,8 +322,12 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
   // Are all bound participants' LoRAs ready?
   const allReady = charCount === 0 || checks.filter((c) => c.status !== 'unbound').every((c) => c.status === 'ready');
 
-  // Strategies registered: environment (0), single-character (1), dual-regional (2)
-  const supportedByStrategy = charCount === 0 || charCount === 1 || charCount === 2;
+  // Strategies registered per style.
+  //   photoreal: environment (0), single-character (1), dual-regional 2-LoRA (2)
+  //   cartoon:   environment (0), single-character (1), dual-regional text (2)
+  // Cartoon dual uses regional TEXT conditioning (ConditioningSetArea), no
+  // character LoRA / no IP-Adapter weights — so 2 is supported for both styles.
+  const supportedByStrategy = (charCount === 0 || charCount === 1 || charCount === 2);
 
   const canRender = allReady && supportedByStrategy && state.status !== 'queued' && state.status !== 'running';
 
@@ -371,8 +397,8 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
         )}
         {checks.map((c, i) => (
           <div key={i} className="flex gap-2 text-xs items-center">
-            <span className={`w-4 ${c.status === 'ready' ? 'text-emerald-400' : c.status === 'no_lora' ? 'text-amber-400' : 'text-red-400'}`}>
-              {c.status === 'ready' ? '✓' : c.status === 'no_lora' ? '⚠' : '✕'}
+            <span className={`w-4 ${c.status === 'ready' ? 'text-emerald-400' : (c.status === 'no_lora' || c.status === 'no_id') ? 'text-amber-400' : 'text-red-400'}`}>
+              {c.status === 'ready' ? '✓' : (c.status === 'no_lora' || c.status === 'no_id') ? '⚠' : '✕'}
             </span>
             <span className="text-zinc-500 font-mono w-24 flex-shrink-0">{c.p.label}</span>
             <span className="text-zinc-300 flex-1">
@@ -383,8 +409,9 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
                 {c.profileCode}{c.status === 'ready' && c.explicit ? ' (явно)' : c.status === 'ready' ? ' (авто)' : ''}
               </span>
             )}
-            {c.status === 'no_lora'  && <span className="text-amber-400">— LoRA не обучена</span>}
-            {c.status === 'unbound'  && <span className="text-red-400">— персонаж не привязан</span>}
+            {c.status === 'no_lora' && <span className="text-amber-400">— LoRA не обучена</span>}
+            {c.status === 'no_id'   && <span className="text-amber-400">— нет promptBase/triggerToken у профиля</span>}
+            {c.status === 'unbound' && <span className="text-red-400">— персонаж не привязан</span>}
           </div>
         ))}
       </div>
@@ -398,16 +425,33 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
 
       {charCount === 0 && (
         <div className="bg-zinc-800/40 border border-zinc-700/50 rounded p-3 mb-3 text-xs text-zinc-400">
-          Кадр без персонажей — рендерится по промпту (positive/negative из polя), без LoRA.
-          Workflow: <code>scene_environment</code>.
+          Кадр без персонажей — рендерится по промпту (positive/negative из поля).
+          Workflow: <code>{isCartoon ? 'scene_environment_graphic_novel' : 'scene_environment'}</code>.
         </div>
       )}
 
-      {charCount === 2 && (
+      {charCount === 1 && isCartoon && (
+        <div className="bg-zinc-800/40 border border-zinc-700/50 rounded p-3 mb-3 text-xs text-zinc-400">
+          Cartoon-кадр (1 персонаж) — идентичность через <code>promptBase</code> +{' '}
+          <code>triggerToken</code> (LoRA не нужна). Workflow:{' '}
+          <code>scene_single_character_graphic_novel</code>.
+        </div>
+      )}
+
+      {charCount === 2 && !isCartoon && (
         <div className="bg-zinc-800/40 border border-zinc-700/50 rounded p-3 mb-3 text-xs text-zinc-400">
           Кадр с 2 персонажами — regional prompter, левая половина = первый,
           правая = второй. Workflow: <code>scene_dual_character_regional</code>.
           Лица не сливаются, LoRA strength снижен до 0.85 для обоих.
+        </div>
+      )}
+
+      {charCount === 2 && isCartoon && (
+        <div className="bg-zinc-800/40 border border-zinc-700/50 rounded p-3 mb-3 text-xs text-zinc-400">
+          Cartoon-кадр (2 персонажа) — региональное разделение по тексту:
+          левая половина = первый participant, правая = второй. Идентичность из{' '}
+          <code>promptBase</code> каждого, без LoRA и без IP-Adapter-весов. Workflow:{' '}
+          <code>scene_dual_character_graphic_novel</code> (первая версия, тест).
         </div>
       )}
 
@@ -623,12 +667,16 @@ export interface ParticipantDraft {
 }
 
 export function ParticipantsEditor({
-  editing, participants, characters, shotParticipants, onChange,
+  editing, participants, characters, shotParticipants, isCartoon = false, onChange,
 }: {
   editing:          boolean;
   participants:     ParticipantDraft[];
   characters:       Awaited<ReturnType<typeof api.listCharacters>>;
   shotParticipants: ShotFull['participants'];
+  /** True when project.visualStyle != 'photoreal_cinematic'. Switches LoRA-label
+   *  copy to profile/identity wording and skips the "нет LoRA" amber state
+   *  (cartoon profiles render via promptBase + triggerToken, no LoRA needed). */
+  isCartoon?:       boolean;
   onChange:         (parts: ParticipantDraft[]) => void;
 }) {
   const updateRow = (idx: number, patch: Partial<ParticipantDraft>) => {
@@ -659,7 +707,11 @@ export function ParticipantsEditor({
           {shotParticipants.map((p) => {
             const profile = p.profile;
             const charProfiles = p.character?.profiles ?? [];
-            const usedProfile = profile ?? charProfiles.find((pp) => pp.loraPath);
+            const usedProfile = profile
+              ?? (isCartoon
+                ? charProfiles.find((pp) => pp.promptBase && pp.triggerToken)
+                : charProfiles.find((pp) => pp.loraPath));
+            const label = isCartoon ? 'Profile' : 'LoRA';
             return (
               <li key={p.id} className="flex gap-3 items-baseline">
                 <span className="text-zinc-500 font-mono text-xs w-24 flex-shrink-0">{p.label}</span>
@@ -672,7 +724,7 @@ export function ParticipantsEditor({
                 </span>
                 {usedProfile && (
                   <span className="text-xs font-mono text-zinc-400">
-                    LoRA: <span className={profile ? 'text-emerald-400' : 'text-amber-400'}>
+                    {label}: <span className={profile ? 'text-emerald-400' : 'text-amber-400'}>
                       {usedProfile.profileCode}
                     </span>
                     {!profile && <span className="text-zinc-600 ml-1">(авто)</span>}
@@ -709,12 +761,18 @@ export function ParticipantsEditor({
                   disabled={!p.characterId || charProfiles.length === 0}
                   className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-200 focus:border-blue-600 focus:outline-none disabled:opacity-50"
                 >
-                  <option value="">{charProfiles.length > 1 ? '— LoRA: авто —' : 'LoRA: авто'}</option>
-                  {charProfiles.map((pp) => (
-                    <option key={pp.id} value={pp.id}>
-                      {pp.profileCode}{pp.ageLabel ? ` (${pp.ageLabel})` : ''}{pp.loraPath ? ' ✓' : ' — нет LoRA'}
-                    </option>
-                  ))}
+                  <option value="">{(isCartoon ? 'Profile' : 'LoRA') + (charProfiles.length > 1 ? ': авто —' : ': авто')}</option>
+                  {charProfiles.map((pp) => {
+                    const ready = isCartoon
+                      ? !!(pp.promptBase && pp.triggerToken)
+                      : !!pp.loraPath;
+                    const badge = ready ? ' ✓' : (isCartoon ? ' — нет промпта' : ' — нет LoRA');
+                    return (
+                      <option key={pp.id} value={pp.id}>
+                        {pp.profileCode}{pp.ageLabel ? ` (${pp.ageLabel})` : ''}{badge}
+                      </option>
+                    );
+                  })}
                 </select>
                 <button
                   type="button" onClick={() => removeRow(idx)}
@@ -727,7 +785,8 @@ export function ParticipantsEditor({
           })}
           <p className="text-zinc-600 text-xs">
             Если у персонажа есть несколько профилей (HERO_TEEN_15 / HERO_OVERLOAD_16 / HERO_RECOVERY_17),
-            выбери в третьем поле какую LoRA использовать в этом кадре. «авто» = первая обученная.
+            выбери в третьем поле какой профиль использовать в этом кадре. «авто» = первый{' '}
+            {isCartoon ? 'с promptBase + triggerToken' : 'с обученной LoRA'}.
           </p>
         </div>
       )}

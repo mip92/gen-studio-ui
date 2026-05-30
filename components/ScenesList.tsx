@@ -113,6 +113,7 @@ export function ScenesList({ id }: { id: string }) {
         if (!s) return null;
         return (
           <SceneShotsTTSModal
+            projectId={id}
             sceneId={s.id}
             sceneTitle={s.title ?? s.sceneKey}
             shots={s.shots}
@@ -144,7 +145,6 @@ type SceneSum = {
 
 function SceneTTSControls({ sceneId, onOpenDetails }: { sceneId: string; onOpenDetails: () => void }) {
   const [sum,  setSum]  = useState<SceneSum | null>(null);
-  const [busy, setBusy] = useState<false | 'queue' | 'approve'>(false);
   const [err,  setErr]  = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -161,43 +161,10 @@ function SceneTTSControls({ sceneId, onOpenDetails }: { sceneId: string; onOpenD
     return () => clearInterval(t);
   }, [sum, refresh]);
 
-  const queueMissing = async () => {
-    if (!sum) return;
-    if (sum.needsQueueing <= 0) {
-      alert('Нечего ставить: у всех шотов уже есть wav (готовый или в очереди).');
-      return;
-    }
-    if (!confirm(`Поставить в очередь ${sum.needsQueueing} шотов? (серийная работа, по очереди)`)) return;
-    setBusy('queue'); setErr(null);
-    try {
-      await api.queueAllShotTTS(sceneId, { mode: 'missing' });
-      refresh();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const approveAll = async () => {
-    if (!sum || sum.waitingApprove <= 0) return;
-    if (!confirm(`Утвердить последнее завершённое аудио для ${sum.waitingApprove} шотов сцены?`)) return;
-    setBusy('approve'); setErr(null);
-    try {
-      const r = await api.approveAllCompletedTTS(sceneId);
-      refresh();
-      if (r.approved === 0) setErr('Никого не утвердили — нет готовых wav.');
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   if (!sum) {
     return (
       <button onClick={onOpenDetails} className="text-xs bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded">
-        🔊 озвучка
+        детали
       </button>
     );
   }
@@ -226,26 +193,6 @@ function SceneTTSControls({ sceneId, onOpenDetails }: { sceneId: string; onOpenD
         )}
         <span className="text-zinc-600">/ {sum.total}</span>
       </span>
-      {sum.needsQueueing > 0 && (
-        <button
-          onClick={queueMissing}
-          disabled={busy !== false}
-          title={`Поставить в очередь TTS для ${sum.needsQueueing} шотов без рендера`}
-          className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 text-white px-2 py-0.5 rounded"
-        >
-          {busy === 'queue' ? '⏳' : `🎙 поставить ${sum.needsQueueing}`}
-        </button>
-      )}
-      {sum.waitingApprove > 0 && (
-        <button
-          onClick={approveAll}
-          disabled={busy !== false}
-          title={`Утвердить последний wav для ${sum.waitingApprove} шотов`}
-          className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 text-white px-2 py-0.5 rounded"
-        >
-          {busy === 'approve' ? '⏳' : `✓ утвердить ${sum.waitingApprove}`}
-        </button>
-      )}
       <button
         onClick={onOpenDetails}
         className="bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded"
@@ -283,13 +230,12 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
   markBeforeNav: (targetId?: string) => void;
 }) {
   const router            = useRouter();
-  const [busy,    setBusy]    = useState<false | 'one' | 'five' | 'video' | 'upscale' | 'tts' | 'approve'>(false);
+  const [busy,    setBusy]    = useState<false | 'one' | 'five' | 'video' | 'upscale'>(false);
   const [enqueueErr, setErr]  = useState<string | null>(null);
   const narrationText                  = (shot as { narrationText?: string | null }).narrationText ?? null;
   const approvedTTSJobId               = (shot as { approvedTTSJobId?: string | null }).approvedTTSJobId ?? null;
   const ttsLatestStatus                = (shot as { ttsLatestStatus?: 'pending' | 'running' | null }).ttsLatestStatus ?? null;
   const ttsCompletedUnapproved         = (shot as { ttsCompletedUnapproved?: number }).ttsCompletedUnapproved ?? 0;
-  const ttsLatestCompletedUnapprovedId = (shot as { ttsLatestCompletedUnapprovedId?: string | null }).ttsLatestCompletedUnapprovedId ?? null;
 
   // Render is allowed iff every bound participant has a trained LoRA.
   // 0-participant shots (environment) are renderable. unbound (silhouette)
@@ -342,33 +288,6 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
     setErr(null);
     try {
       await api.upscaleVideo(shot.chosenVideoId);
-      onEnqueued();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const enqueueTTS = async () => {
-    setBusy('tts');
-    setErr(null);
-    try {
-      await api.startShotTTS(shot.id, { voice: 'eugene' });
-      onEnqueued();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const quickApprove = async () => {
-    if (!ttsLatestCompletedUnapprovedId) return;
-    setBusy('approve');
-    setErr(null);
-    try {
-      await api.approveTTSJob(ttsLatestCompletedUnapprovedId);
       onEnqueued();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -519,46 +438,11 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
             2) photo approved, no video   → render video
             3) video approved, no FHD     → upscale to FHD
             4) FHD ready / in-flight FHD  → no button (badge tells the story)
-          Plus an independent "🎙 озвучить" button on every row, hidden only
-          when narrationText is empty (TTS can't run on empty text). */}
+          TTS controls live in the scene-level "детали" modal — per-shot
+          render/approve buttons removed from this page to keep the row
+          focused on the image/video pipeline. */}
       <div onClick={stop} className="flex flex-col gap-1 flex-shrink-0">
-        {/* TTS stage progression — mirrors the photo/video/upscale flow above.
-            Exactly one TTS button per stage:
-              ① no text                      → no button (badge says "нет текста")
-              ② text, nothing rendered       → "🎙 озвучить"
-              ③ pending/running              → no button (badge says "⚙/⏳ tts")
-              ④ wav ready, awaiting approve  → "✓ утвердить (N)"
-              ⑤ approved                     → small secondary "🔁 переозвучить" */}
-        {narrationText && ttsLatestStatus === null && !approvedTTSJobId && ttsCompletedUnapproved === 0 && (
-          <button
-            onClick={(e) => { stop(e); enqueueTTS(); }}
-            disabled={busy !== false}
-            title="Поставить TTS-озвучку этого шота в очередь"
-            className="text-[11px] bg-amber-700 hover:bg-amber-600 disabled:opacity-30 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded whitespace-nowrap"
-          >
-            {busy === 'tts' ? '⏳ tts…' : '🎙 озвучить'}
-          </button>
-        )}
-        {ttsLatestCompletedUnapprovedId && !approvedTTSJobId && ttsLatestStatus === null && (
-          <button
-            onClick={(e) => { stop(e); quickApprove(); }}
-            disabled={busy !== false}
-            title={`Утвердить последний завершённый wav (${ttsCompletedUnapproved} вариант${ttsCompletedUnapproved === 1 ? '' : ttsCompletedUnapproved < 5 ? 'а' : 'ов'} доступно)`}
-            className="text-[11px] bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded whitespace-nowrap"
-          >
-            {busy === 'approve' ? '⏳ ✓' : `✓ утвердить${ttsCompletedUnapproved > 1 ? ` (${ttsCompletedUnapproved})` : ''}`}
-          </button>
-        )}
-        {approvedTTSJobId && ttsLatestStatus === null && (
-          <button
-            onClick={(e) => { stop(e); enqueueTTS(); }}
-            disabled={busy !== false}
-            title="Поставить новый wav в очередь — старый approval сохраняется"
-            className="text-[10px] bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-400 hover:text-zinc-200 px-2 py-0.5 rounded whitespace-nowrap"
-          >
-            {busy === 'tts' ? '⏳' : '🔁 переозвучить'}
-          </button>
-        )}
+
         {videoApproved ? (
           fhdReady || upscaleStatus === 'running' || upscaleStatus === 'pending' ? null : (
             <button

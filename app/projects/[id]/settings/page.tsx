@@ -2,6 +2,7 @@
 
 import { useEffect, useState, use } from 'react';
 import { api, ProjectFull, UpdateProjectBody } from '@/lib/api';
+import { ProjectTTSSettings } from '@/components/ProjectTTSSettings';
 
 type Status = 'idle' | 'loading' | 'saving' | 'saved' | 'error';
 
@@ -155,6 +156,15 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
             className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono leading-relaxed" />
         </Row>
       </section>
+
+      <hr className="border-zinc-800" />
+
+      <ProjectTTSSettings
+        projectId={project.id}
+        initialEngine={project.ttsEngine ?? null}
+        initialVoiceRefPath={project.ttsVoiceRefPath ?? null}
+        onProjectUpdated={(p) => setProject((prev) => prev ? { ...prev, ...p } : prev)}
+      />
     </main>
   );
 }

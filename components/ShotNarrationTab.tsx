@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { api, TTSJob, TTSVoice } from '../lib/api';
+import { api, TTSJob, TTSVoice, ProjectFull, ProjectTTSEmotionRef } from '../lib/api';
 import { useShotCtx } from './ShotPageShell';
 
-const VOICE_LABELS: Record<TTSVoice, string> = {
+const SILERO_VOICE_LABELS: Record<TTSVoice, string> = {
   eugene:  'Eugene (м, спокойный диктор)',
   aidar:   'Aidar (м, уверенный)',
   baya:    'Baya (ж, нейтральная)',
@@ -15,21 +15,52 @@ const VOICE_LABELS: Record<TTSVoice, string> = {
 };
 
 /**
- * Per-shot narration tab. Mirrors the bulk SceneShotsTTSModal but scoped to
- * one shot: text editor, render button, audio playback for the approved take,
- * history of past jobs.
+ * Per-shot narration tab — engine-aware. Reads project.ttsEngine and renders
+ * ONLY the controls the engine actually honours:
+ *   - silero      → voice dropdown
+ *   - xtts2 | f5  → emotion-reference picker (categorical presets are inert on
+ *                   these voice-clone engines — tone comes from the ref clip)
+ *   - f5          → additionally speed + sentence-pause (the only engine whose
+ *                   worker accepts --speed / --sentence-pause-sec)
+ * One ▶ Синтез button drives the job; backend snapshots the engine + knobs.
  */
 export function ShotNarrationTab() {
-  const { shot, reload, shotId } = useShotCtx();
+  const { shot, reload, shotId, projectId } = useShotCtx();
 
   const initialText = (shot as { narrationText?: string | null }).narrationText ?? '';
   const approvedId  = (shot as { approvedTTSJobId?: string | null }).approvedTTSJobId ?? null;
 
-  const [text,    setText]    = useState(initialText);
-  const [voice,   setVoice]   = useState<TTSVoice>('eugene');
-  const [jobs,    setJobs]    = useState<TTSJob[] | null>(null);
-  const [busy,    setBusy]    = useState<false | 'save' | 'render' | 'approve' | 'delete'>(false);
-  const [err,     setErr]     = useState<string | null>(null);
+  const [project,        setProject]        = useState<ProjectFull | null>(null);
+  const [emotionRefs,    setEmotionRefs]    = useState<ProjectTTSEmotionRef[]>([]);
+  const [text,           setText]           = useState(initialText);
+  const [voice,          setVoice]          = useState<TTSVoice>('baya');  // ж голос дефолтом — narrator is female
+  const [emotionRefName, setEmotionRefName] = useState<string>('');        // '' = neutral (just the voice ref)
+  const [speed,          setSpeed]          = useState<number>(1.0);       // f5 only → TTSJob.rate
+  const [pause,          setPause]          = useState<number>(0);         // f5 only → sentencePauseSec
+  const [front,          setFront]          = useState<boolean>(false);    // checked = jump to front of TTS queue (default off)
+  const [jobs,           setJobs]           = useState<TTSJob[] | null>(null);
+  const [historyOpen,    setHistoryOpen]    = useState<boolean>(false);
+  const [busy,           setBusy]           = useState<false | 'save' | 'render' | 'approve' | 'delete'>(false);
+  const [err,            setErr]            = useState<string | null>(null);
+
+  // Load project (for engine) + emotion refs once per projectId.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const p = await api.getProject(projectId);
+        if (cancelled) return;
+        setProject(p);
+        if ((p.ttsEngine ?? 'silero') !== 'silero') {
+          const refs = await api.listProjectEmotionRefs(projectId);
+          if (!cancelled) setEmotionRefs(refs);
+        }
+      } catch (e) {
+        if (!cancelled) setErr(asMessage(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]);
 
   const refreshJobs = useCallback(() => {
     api.listShotTTSJobs(shotId).then(setJobs).catch(() => setJobs([]));
@@ -45,60 +76,68 @@ export function ShotNarrationTab() {
     return () => clearInterval(t);
   }, [jobs, refreshJobs]);
 
-  // Reset textarea + voice when the underlying shot changes (route nav between shots).
-  useEffect(() => {
-    setText(initialText);
-  }, [initialText, shotId]);
+  // Reset textarea when route nav between shots.
+  useEffect(() => { setText(initialText); }, [initialText, shotId]);
 
-  const dirty = text !== initialText;
+  const engine    = (project?.ttsEngine ?? 'silero') as 'silero' | 'xtts2' | 'f5';
+  const dirty     = text !== initialText;
+  const canSynth  = text.trim().length > 0 && busy === false &&
+                    (engine === 'silero' || !!project?.ttsVoiceRefPath);
 
   const save = async () => {
     setBusy('save'); setErr(null);
     try {
       await api.setShotNarrationText(shotId, text);
       await reload();
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(asMessage(e)); }
     finally     { setBusy(false); }
   };
 
-  const render = async () => {
+  const synth = async () => {
     setBusy('render'); setErr(null);
     try {
       await api.setShotNarrationText(shotId, text);
-      await api.startShotTTS(shotId, { voice });
+      const body: Parameters<typeof api.startShotTTS>[1] = {};
+      if (engine === 'silero') {
+        body.voice = voice;
+      } else {
+        // Voice-clone (xtts2 | f5): tone comes only from the emotion-reference
+        // clip — categorical presets are inert, so we never send them. Empty
+        // selection = neutral (just the project voice reference).
+        if (emotionRefName) body.emotionRefName = emotionRefName;
+        if (engine === 'f5') {
+          body.rate             = speed;
+          body.sentencePauseSec = pause;
+        }
+      }
+      if (front) body.front = true;
+      await api.startShotTTS(shotId, body);
       await reload();
       refreshJobs();
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(asMessage(e)); }
     finally     { setBusy(false); }
   };
 
   const approve = async (jobId: string) => {
     setBusy('approve'); setErr(null);
-    try {
-      await api.approveTTSJob(jobId);
-      await reload();
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-    finally     { setBusy(false); }
+    try { await api.approveTTSJob(jobId); await reload(); }
+    catch (e) { setErr(asMessage(e)); }
+    finally   { setBusy(false); }
   };
 
   const clearApproval = async () => {
     setBusy('approve'); setErr(null);
-    try {
-      await api.clearShotTTSApproval(shotId);
-      await reload();
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-    finally     { setBusy(false); }
+    try { await api.clearShotTTSApproval(shotId); await reload(); }
+    catch (e) { setErr(asMessage(e)); }
+    finally   { setBusy(false); }
   };
 
   const deleteJob = async (jobId: string) => {
-    if (!confirm('Удалить этот wav? Если он был утверждён — статус сбросится.')) return;
+    if (!confirm('Удалить этот wav? Если был утверждён — статус сбросится.')) return;
     setBusy('delete'); setErr(null);
-    try {
-      await api.deleteTTSJob(jobId);
-      await reload();
-      refreshJobs();
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-    finally     { setBusy(false); }
+    try { await api.deleteTTSJob(jobId); await reload(); refreshJobs(); }
+    catch (e) { setErr(asMessage(e)); }
+    finally   { setBusy(false); }
   };
 
   const approvedJob = jobs?.find((j) => j.id === approvedId) ?? null;
@@ -111,121 +150,221 @@ export function ShotNarrationTab() {
         </div>
       )}
 
-      {/* Text editor */}
+      {/* Engine banner — quick visual hint of which engine drives this project */}
+      <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+        <span>Engine:</span>
+        <span className={engine !== 'silero' ? 'text-emerald-300' : 'text-zinc-300'}>
+          {engine === 'silero' ? 'Silero V5 ru' : engine === 'xtts2' ? 'XTTS-v2 (voice clone)' : 'F5-TTS Russian (voice clone)'}
+        </span>
+        {engine !== 'silero' && !project?.ttsVoiceRefPath && (
+          <span className="text-amber-400">— загрузи voice-reference в настройках проекта</span>
+        )}
+      </div>
+
+      {/* Editor */}
       <section className="bg-zinc-900 border border-zinc-800 rounded p-4 space-y-3">
-        <div className="flex items-baseline justify-between">
-          <label className="text-xs uppercase tracking-wider text-zinc-500">Текст озвучки (~5 сек на шот)</label>
-          {dirty && <span className="text-amber-400 text-[10px]">не сохранено</span>}
-        </div>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Что говорит диктор поверх этого кадра. Одна-две короткие фразы."
+          placeholder="Что говорит диктор поверх этого кадра."
           rows={4}
           className="w-full bg-zinc-950 border border-zinc-800 rounded p-3 text-sm text-zinc-200 font-sans resize-y"
         />
+
         <div className="flex items-center gap-3 flex-wrap">
-          <label className="text-xs flex items-center gap-2">
-            <span className="text-zinc-500 uppercase tracking-wider">Голос</span>
-            <select
-              value={voice}
-              onChange={(e) => setVoice(e.target.value as TTSVoice)}
-              className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200"
-            >
-              {(Object.keys(VOICE_LABELS) as TTSVoice[]).map((v) => (
-                <option key={v} value={v}>{VOICE_LABELS[v]}</option>
-              ))}
-            </select>
-          </label>
+          {engine === 'silero' && (
+            <label className="text-xs flex items-center gap-2">
+              <span className="text-zinc-500 uppercase tracking-wider">Голос</span>
+              <select
+                value={voice}
+                onChange={(e) => setVoice(e.target.value as TTSVoice)}
+                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200"
+              >
+                {(Object.keys(SILERO_VOICE_LABELS) as TTSVoice[]).map((v) => (
+                  <option key={v} value={v}>{SILERO_VOICE_LABELS[v]}</option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {engine !== 'silero' && (
+            <label className="text-xs flex items-center gap-2">
+              <span className="text-zinc-500 uppercase tracking-wider">Эмоция</span>
+              {emotionRefs.length > 0 ? (
+                <select
+                  value={emotionRefName}
+                  onChange={(e) => setEmotionRefName(e.target.value)}
+                  className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200"
+                >
+                  <option value="">— нейтрально (голос-референс) —</option>
+                  {emotionRefs.map((r) => (
+                    <option key={r.id} value={r.name}>{r.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <span className="text-[11px] text-zinc-500">
+                  нет референсов —{' '}
+                  <a href={`/projects/${projectId}/settings`} className="text-emerald-400 hover:underline">
+                    загрузить в настройках
+                  </a>
+                </span>
+              )}
+            </label>
+          )}
+
+          {engine === 'f5' && (
+            <>
+              <label className="text-xs flex items-center gap-2">
+                <span className="text-zinc-500 uppercase tracking-wider">Скорость</span>
+                <input
+                  type="range"
+                  min={0.5} max={2.0} step={0.05}
+                  value={speed}
+                  onChange={(e) => setSpeed(parseFloat(e.target.value))}
+                  className="w-32"
+                />
+                <span className="text-zinc-400 font-mono w-12 text-right">{speed.toFixed(2)}×</span>
+              </label>
+              <label className="text-xs flex items-center gap-2">
+                <span className="text-zinc-500 uppercase tracking-wider">Пауза</span>
+                <input
+                  type="number"
+                  min={0} max={30} step={0.5}
+                  value={pause}
+                  onChange={(e) => setPause(Math.max(0, Math.min(30, parseFloat(e.target.value) || 0)))}
+                  className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 font-mono w-16"
+                />
+                <span className="text-zinc-600 text-[10px]">сек/предложение</span>
+              </label>
+            </>
+          )}
+
           <div className="ml-auto flex gap-2">
-            <button
-              onClick={save}
-              disabled={busy !== false || !dirty}
-              className="bg-zinc-700 hover:bg-zinc-600 disabled:opacity-30 text-white text-xs px-3 py-1.5 rounded"
+            {dirty && (
+              <button
+                onClick={save}
+                disabled={busy !== false}
+                className="bg-zinc-700 hover:bg-zinc-600 disabled:opacity-30 text-white text-xs px-3 py-1.5 rounded"
+                title="Сохранить текст без синтеза"
+              >
+                {busy === 'save' ? '⏳' : '💾'}
+              </button>
+            )}
+            <label
+              className="flex items-center gap-1.5 text-xs text-zinc-400 self-center cursor-pointer select-none"
+              title="Поставить этот синтез в начало очереди. По умолчанию — в конец (обычная очередь)."
             >
-              {busy === 'save' ? '⏳ сохраняю…' : '💾 сохранить текст'}
-            </button>
+              <input
+                type="checkbox"
+                checked={front}
+                onChange={(e) => setFront(e.target.checked)}
+                className="accent-emerald-600"
+              />
+              в начало очереди
+            </label>
             <button
-              onClick={render}
-              disabled={busy !== false || text.trim().length === 0}
+              onClick={synth}
+              disabled={!canSynth}
               className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 text-white text-sm font-medium px-4 py-1.5 rounded"
+              title={engine !== 'silero' && !project?.ttsVoiceRefPath
+                ? 'Сначала загрузи voice-reference в настройках проекта'
+                : ''}
             >
-              {busy === 'render' ? '⏳ ставлю в очередь…' : '🔊 озвучить (Silero V5 ru)'}
+              {busy === 'render' ? '⏳' : '▶ Синтез'}
             </button>
           </div>
         </div>
       </section>
 
-      {/* Approved take */}
+      {/* Approved take — only banner that always stays open */}
       {approvedJob && (
         <section className="bg-emerald-950/30 border border-emerald-800 rounded p-4 space-y-2">
           <div className="flex items-baseline justify-between">
             <h3 className="text-xs uppercase tracking-wider text-emerald-300">Утверждённая озвучка</h3>
-            <button
-              onClick={clearApproval}
-              disabled={busy !== false}
-              className="text-[10px] text-zinc-400 hover:text-red-300"
-            >
+            <button onClick={clearApproval} disabled={busy !== false}
+              className="text-[10px] text-zinc-400 hover:text-red-300">
               ✕ снять утверждение
             </button>
           </div>
           <audio controls preload="none" src={api.ttsFileUrl(approvedJob.id)} className="w-full max-w-md" />
           <div className="text-[10px] font-mono text-zinc-500">
-            {approvedJob.voice} · {approvedJob.sampleRate} Hz · {approvedJob.outputFilename}
+            {jobMetaLabel(approvedJob)}
           </div>
         </section>
       )}
 
-      {/* Job history */}
-      <section className="bg-zinc-900 border border-zinc-800 rounded p-4 space-y-2">
-        <h3 className="text-xs uppercase tracking-wider text-zinc-500">История</h3>
-        {!jobs && <p className="text-zinc-500 text-sm">Загрузка…</p>}
-        {jobs && jobs.length === 0 && (
-          <p className="text-zinc-500 text-sm italic">— пока нет ни одной озвучки —</p>
+      {/* History — collapsible. Default closed; opens with N count. */}
+      <section className="bg-zinc-900 border border-zinc-800 rounded">
+        <button
+          onClick={() => setHistoryOpen((o) => !o)}
+          className="w-full flex items-center gap-2 px-4 py-2 text-xs uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
+        >
+          <span>{historyOpen ? '▼' : '▶'}</span>
+          <span>История</span>
+          {jobs && <span className="text-zinc-600">({jobs.length})</span>}
+        </button>
+        {historyOpen && (
+          <div className="px-4 pb-3 space-y-2">
+            {!jobs && <p className="text-zinc-500 text-sm">Загрузка…</p>}
+            {jobs && jobs.length === 0 && (
+              <p className="text-zinc-500 text-sm italic">— пока нет ни одной озвучки —</p>
+            )}
+            {jobs && jobs.map((j) => {
+              const isApproved = j.id === approvedId;
+              return (
+                <div key={j.id} className={
+                  `flex items-center gap-3 p-2 rounded border ${isApproved ? 'border-emerald-800 bg-emerald-950/20' : 'border-zinc-800'}`
+                }>
+                  <span className={
+                    j.status === 'completed' ? 'text-emerald-400'
+                    : j.status === 'running' ? 'text-amber-400'
+                    : j.status === 'pending' ? 'text-zinc-400'
+                    : j.status === 'failed' ? 'text-red-400'
+                    : 'text-zinc-600'
+                  }>
+                    {j.status === 'completed' ? '✓' : j.status === 'running' ? '⚙' : j.status === 'pending' ? '⏳' : j.status === 'failed' ? '✕' : '·'}
+                  </span>
+                  <span className="text-xs font-mono text-zinc-400">{jobMetaLabel(j)}</span>
+                  {j.status === 'completed' && (
+                    <audio controls preload="none" src={api.ttsFileUrl(j.id)} className="h-7 flex-1 max-w-md" />
+                  )}
+                  {j.status === 'failed' && (
+                    <span className="text-[10px] text-red-300/70 font-mono truncate flex-1">{j.errorMessage}</span>
+                  )}
+                  <span className="text-[10px] text-zinc-600 ml-auto">{new Date(j.queuedAt).toLocaleTimeString()}</span>
+                  {j.status === 'completed' && !isApproved && (
+                    <button onClick={() => approve(j.id)} disabled={busy !== false}
+                      className="text-[11px] bg-emerald-700 hover:bg-emerald-600 text-white px-2 py-0.5 rounded">
+                      утвердить
+                    </button>
+                  )}
+                  <button onClick={() => deleteJob(j.id)}
+                    disabled={busy !== false || j.status === 'running'}
+                    className="text-[11px] text-zinc-500 hover:text-red-400 disabled:opacity-30">
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         )}
-        {jobs && jobs.map((j) => {
-          const isApproved = j.id === approvedId;
-          return (
-            <div key={j.id} className={
-              `flex items-center gap-3 p-2 rounded border ${isApproved ? 'border-emerald-800 bg-emerald-950/20' : 'border-zinc-800'}`
-            }>
-              <span className={
-                j.status === 'completed' ? 'text-emerald-400'
-                : j.status === 'running' ? 'text-amber-400'
-                : j.status === 'pending' ? 'text-zinc-400'
-                : j.status === 'failed' ? 'text-red-400'
-                : 'text-zinc-600'
-              }>
-                {j.status === 'completed' ? '✓' : j.status === 'running' ? '⚙' : j.status === 'pending' ? '⏳' : j.status === 'failed' ? '✕' : '·'}
-              </span>
-              <span className="text-xs font-mono text-zinc-400">{j.voice} · {j.sampleRate}Hz</span>
-              {j.status === 'completed' && (
-                <audio controls preload="none" src={api.ttsFileUrl(j.id)} className="h-7 flex-1 max-w-md" />
-              )}
-              {j.status === 'failed' && (
-                <span className="text-[10px] text-red-300/70 font-mono truncate flex-1">{j.errorMessage}</span>
-              )}
-              <span className="text-[10px] text-zinc-600 ml-auto">{new Date(j.queuedAt).toLocaleTimeString()}</span>
-              {j.status === 'completed' && !isApproved && (
-                <button
-                  onClick={() => approve(j.id)}
-                  disabled={busy !== false}
-                  className="text-[11px] bg-emerald-700 hover:bg-emerald-600 text-white px-2 py-0.5 rounded"
-                >
-                  утвердить
-                </button>
-              )}
-              <button
-                onClick={() => deleteJob(j.id)}
-                disabled={busy !== false || j.status === 'running'}
-                className="text-[11px] text-zinc-500 hover:text-red-400 disabled:opacity-30"
-              >
-                ✕
-              </button>
-            </div>
-          );
-        })}
       </section>
     </main>
   );
+}
+
+function asMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** Compact engine-aware one-liner: silero shows voice+sr; voice-clone engines
+ *  show emotion-ref (or "нейтрально") + sr, plus speed for f5 when ≠ 1×. */
+function jobMetaLabel(j: TTSJob): string {
+  const engineLabel = (j as { engine?: string | null }).engine ?? 'silero';
+  if (engineLabel !== 'silero') {
+    const emo      = (j as { emotionRefName?: string | null }).emotionRefName ?? 'нейтрально';
+    const speedTag = j.rate && Math.abs(j.rate - 1) >= 0.01 ? ` · ${j.rate}×` : '';
+    return `${engineLabel} · ${emo} · ${j.sampleRate}Hz${speedTag}`;
+  }
+  return `${j.voice} · ${j.sampleRate}Hz`;
 }

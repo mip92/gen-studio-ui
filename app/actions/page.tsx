@@ -6,18 +6,25 @@ import { Breadcrumbs } from '../../components/Breadcrumbs';
 import { api, ActionItem, ActionGateKey, ProjectListItem } from '../../lib/api';
 
 const GATE_LABELS: Record<ActionGateKey, { num: number; ru: string }> = {
-  upload_dataset_images: { num: 1, ru: 'Загрузить изображения' },
-  start_dataset:         { num: 2, ru: 'Запустить датасет' },
-  start_training:        { num: 3, ru: 'Запустить тренировку LoRA' },
-  render_scene:          { num: 4, ru: 'Сгенерировать сцену' },
-  approve_render:        { num: 5, ru: 'Утвердить рендер' },
-  create_video:          { num: 6, ru: 'Создать видео' },
-  approve_video:         { num: 7, ru: 'Утвердить видео' },
-  upscale_video:         { num: 8, ru: 'Апскейл видео' },
+  upload_dataset_images: { num: 1,  ru: 'Загрузить изображения' },
+  start_dataset:         { num: 2,  ru: 'Запустить датасет' },
+  start_training:        { num: 3,  ru: 'Запустить тренировку LoRA' },
+  // Cartoon projects use only this gate for character setup. Slots into the
+  // same "phase 1" zone as the photoreal upload/dataset gates above.
+  generate_anchor:       { num: 1,  ru: 'Сгенерировать anchor (cartoon)' },
+  render_scene:          { num: 4,  ru: 'Сгенерировать сцену' },
+  approve_render:        { num: 5,  ru: 'Утвердить рендер' },
+  create_video:          { num: 6,  ru: 'Создать видео' },
+  approve_video:         { num: 7,  ru: 'Утвердить видео' },
+  upscale_video:         { num: 8,  ru: 'Апскейл видео' },
+  approve_tts:           { num: 9,  ru: 'Утвердить закадровый голос' },
+  approve_bgm:           { num: 10, ru: 'Утвердить фоновую музыку' },
 };
 
-// Gate order on the page — characters first (1-3), shots second (4-8).
+// Gate order on the page — characters first (anchor for cartoon OR 1-3 for
+// photoreal), shots second (4-9), BGM last (10).
 const GATE_ORDER: ActionGateKey[] = [
+  'generate_anchor',
   'upload_dataset_images',
   'start_dataset',
   'start_training',
@@ -26,6 +33,8 @@ const GATE_ORDER: ActionGateKey[] = [
   'create_video',
   'approve_video',
   'upscale_video',
+  'approve_tts',
+  'approve_bgm',
 ];
 
 const POLL_MS = 10_000;
@@ -161,7 +170,7 @@ export default function ActionsPage() {
                   </div>
                   <ul className="divide-y divide-zinc-800">
                     {list.map((item) => {
-                      const key = `${item.gateKey}-${item.profile?.id ?? item.shot?.id}`;
+                      const key = `${item.gateKey}-${item.profile?.id ?? item.shot?.id ?? item.segment?.id ?? item.scene?.id}`;
                       return (
                         <li key={key} className="px-4 py-2.5 flex items-center gap-3 text-sm">
                           <span className="flex-1 min-w-0 truncate text-zinc-200">
@@ -197,7 +206,8 @@ export default function ActionsPage() {
 }
 
 /** Render the human-readable target label for a row, depending on whether the
- *  gate is character-scoped (1-3) or shot-scoped (4-8). */
+ *  gate is character-scoped (1-3), shot-scoped (4-9), segment-scoped (10 BGM),
+ *  or the rarer scene-only case (gate 9 legacy scene-VO). */
 function Target({ item }: { item: ActionItem }) {
   if (item.character && item.profile) {
     const name = item.character.displayName || item.character.code;
@@ -214,6 +224,23 @@ function Target({ item }: { item: ActionItem }) {
       <>
         <span className="font-medium">{item.shot.code}</span>
         {sceneLabel && <span className="text-zinc-500"> · {sceneLabel}</span>}
+      </>
+    );
+  }
+  if (item.segment) {
+    const blockLabel = item.segment.block.title || item.segment.block.slug;
+    return (
+      <>
+        <span className="font-medium">{blockLabel} · сегмент {item.segment.sortOrder + 1}</span>
+        <span className="text-zinc-500"> · {item.segment.durationSec}s</span>
+      </>
+    );
+  }
+  if (item.scene) {
+    return (
+      <>
+        <span className="font-medium">{item.scene.title || item.scene.sceneKey}</span>
+        <span className="text-zinc-500"> · сцена</span>
       </>
     );
   }

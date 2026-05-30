@@ -22,7 +22,7 @@ import {
 
 const POLL_MS = 3000;
 
-const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_upscale', 'tts'];
+const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_upscale', 'tts', 'bgm', 'anchor'];
 const ALL_STATUSES = [
   'pending', 'blocked',
   'preparing', 'captioning', 'training', 'running',
@@ -698,7 +698,8 @@ function typeBadge(t: QueueJobType): string {
   if (t === 'video')         return 'bg-rose-950/40   text-rose-300   border-rose-900';
   if (t === 'video_upscale') return 'bg-pink-950/40   text-pink-300   border-pink-900';
   if (t === 'tts')           return 'bg-cyan-950/40   text-cyan-300   border-cyan-900';
-  return                            'bg-emerald-950/40 text-emerald-300 border-emerald-900';
+  if (t === 'anchor')        return 'bg-fuchsia-950/40 text-fuchsia-300 border-fuchsia-900';
+  return                            'bg-emerald-950/40 text-emerald-300 border-emerald-900';  // bgm
 }
 
 function statusBadge(s: string): string {

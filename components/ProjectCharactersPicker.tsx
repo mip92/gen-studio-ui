@@ -111,29 +111,49 @@ function PickerCard({
 }) {
   const [previewFilename, setPreviewFilename] = useState<string | null>(null);
   const [datasetCount,    setDatasetCount]    = useState<number | null>(null);
+  const [anchorExists,    setAnchorExists]    = useState<boolean>(false);
+
+  // Style of every project this character is currently attached to — drives
+  // which preview source (dataset vs anchor) to load and which badge to show.
+  const styles = char.projectLinks.map((l) => l.project.visualStyle ?? 'photoreal_cinematic');
+  const hasCartoon    = styles.some((s) => s !== 'photoreal_cinematic');
+  const hasPhotoreal  = styles.some((s) => s === 'photoreal_cinematic');
+  const isCartoonOnly = hasCartoon && !hasPhotoreal;
+  const isLibraryOnly = styles.length === 0;
 
   useEffect(() => {
     if (!profile) return;
-    api.listImages(profile.id)
-      .then((r) => {
-        setDatasetCount(r.count);
-        const usable = r.images.find((i) => i.size > 50_000) ?? r.images[0];
-        setPreviewFilename(usable?.filename ?? null);
-      })
-      .catch(() => { setDatasetCount(0); });
-  }, [profile]);
+    if (isCartoonOnly || isLibraryOnly) {
+      api.getAnchor(profile.id).then((r) => setAnchorExists(r.exists)).catch(() => setAnchorExists(false));
+    }
+    if (!isCartoonOnly) {
+      api.listImages(profile.id)
+        .then((r) => {
+          setDatasetCount(r.count);
+          const usable = r.images.find((i) => i.size > 50_000) ?? r.images[0];
+          setPreviewFilename(usable?.filename ?? null);
+        })
+        .catch(() => { setDatasetCount(0); });
+    } else {
+      setDatasetCount(0);
+    }
+  }, [profile, isCartoonOnly, isLibraryOnly]);
 
   const loraReady = !!profile?.loraPath;
   const target    = profile?.targetImages ?? 0;
   const dcount    = datasetCount ?? 0;
 
-  const assetBadge: { label: string; cls: string } = loraReady
-    ? { label: 'LoRA готова', cls: 'bg-emerald-700 text-emerald-100' }
-    : dcount === 0
-      ? { label: 'нет датасета', cls: 'bg-zinc-700 text-zinc-200' }
-      : target > 0 && dcount < target
-        ? { label: `датасет ${dcount}/${target}`, cls: 'bg-yellow-700 text-yellow-100' }
-        : { label: `датасет ${dcount}`, cls: 'bg-purple-700 text-purple-100' };
+  const assetBadge: { label: string; cls: string } = isCartoonOnly
+    ? (anchorExists
+        ? { label: 'anchor готов', cls: 'bg-purple-700 text-purple-100' }
+        : { label: 'нет anchor',   cls: 'bg-zinc-700 text-zinc-200' })
+    : loraReady
+      ? { label: 'LoRA готова', cls: 'bg-emerald-700 text-emerald-100' }
+      : dcount === 0
+        ? { label: 'нет датасета', cls: 'bg-zinc-700 text-zinc-200' }
+        : target > 0 && dcount < target
+          ? { label: `датасет ${dcount}/${target}`, cls: 'bg-yellow-700 text-yellow-100' }
+          : { label: `датасет ${dcount}`, cls: 'bg-purple-700 text-purple-100' };
 
   const detailHref = profile ? `/characters/${profile.id}/description` : '#';
 
@@ -142,7 +162,24 @@ function PickerCard({
       ${attached ? 'border-blue-700' : 'border-zinc-800 hover:border-zinc-600'}`}>
       <Link href={detailHref} className="block flex-1">
         <div className="aspect-square bg-zinc-950 relative">
-          {previewFilename && profile ? (
+          {/* Preview pick: cartoon-only → anchor PNG; photoreal → dataset; */}
+          {profile && isCartoonOnly && anchorExists ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={api.anchorRawUrl(profile.id)}
+              alt={profile.profileCode}
+              className={`w-full h-full object-cover transition ${attached ? '' : 'opacity-60 group-hover:opacity-100'}`}
+              loading="lazy"
+            />
+          ) : profile && isLibraryOnly && anchorExists && !previewFilename ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={api.anchorRawUrl(profile.id)}
+              alt={profile.profileCode}
+              className={`w-full h-full object-cover transition ${attached ? '' : 'opacity-60 group-hover:opacity-100'}`}
+              loading="lazy"
+            />
+          ) : previewFilename && profile ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={api.imageUrl(profile.id, previewFilename)}
@@ -152,7 +189,7 @@ function PickerCard({
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-zinc-600 text-sm">
-              {dcount > 0 ? '…' : (profile ? 'нет датасета' : 'нет профиля')}
+              {dcount > 0 ? '…' : (profile ? (isCartoonOnly ? 'нет anchor' : 'нет датасета') : 'нет профиля')}
             </div>
           )}
           <div className="absolute top-2 right-2 flex flex-col items-end gap-1">

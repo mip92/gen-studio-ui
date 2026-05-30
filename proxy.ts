@@ -8,15 +8,18 @@ import type { NextRequest } from 'next/server';
  * be a UUID, and every Link/href the app emits keeps the browser address bar
  * on one canonical id.
  *
- * The middleware fetches /projects once per request when a slug is detected.
+ * This proxy fetches /projects once per request when a slug is detected.
  * Hit rate is tiny (only when a user types or pastes a slug URL); routine
  * navigation already uses UUIDs and short-circuits past the API call.
+ *
+ * NOTE: this is the `proxy` file convention (Next.js v16 renamed `middleware`
+ * → `proxy`). Behaviour is identical to the old middleware.
  */
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:4000';
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // Only intercept /projects/<seg>/... — leave /, /projects, /characters, /queue alone.
@@ -46,7 +49,6 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  // Only run for /projects/* routes; everything else skips the middleware
-  // for free. The negative lookahead excludes static / image / API paths.
+  // Only run for /projects/* routes; everything else skips the proxy for free.
   matcher: ['/projects/:path*'],
 };

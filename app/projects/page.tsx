@@ -56,6 +56,20 @@ export default function ProjectsListPage() {
                 </div>
                 <span className="text-zinc-600 text-xl">→</span>
               </div>
+              {/* Visual style badge — drives which identity pipeline (LoRA vs anchor)
+                  and which workflows are available. See docs/VISUAL_STYLE_ARCHITECTURE.md. */}
+              {p.visualStyle && (
+                <span
+                  className={`inline-block px-2 py-0.5 text-[10px] font-mono rounded mb-2 ${
+                    p.visualStyle === 'photoreal_cinematic'
+                      ? 'bg-amber-900/40 text-amber-300 border border-amber-800'
+                      : 'bg-purple-900/40 text-purple-300 border border-purple-800'
+                  }`}
+                  title="Visual style — drives workflow + identity pipeline"
+                >
+                  {p.visualStyle}
+                </span>
+              )}
               <p className="text-xs text-zinc-500 mt-3">
                 Открыть dashboard персонажей и LoRA
               </p>
