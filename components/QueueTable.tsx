@@ -159,7 +159,7 @@ export default function QueueTable({
     }
   }, [data, links]);
 
-  const move = async (type: QueueJobType, id: string, direction: 'up' | 'down') => {
+  const move = async (type: QueueJobType, id: string, direction: 'up' | 'down' | 'top') => {
     setBusy(`${type}:${id}:${direction}`);
     try { await api.pipelineMove(type, id, direction); await refresh(); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
@@ -308,6 +308,18 @@ export default function QueueTable({
                 <button disabled={!!busy || r.isLastPending} onClick={() => move(r.type, r.id, 'down')}
                         className="text-zinc-500 hover:text-zinc-200 disabled:opacity-20 disabled:hover:text-zinc-500 px-1 leading-none" title="Move down">↓</button>
               </span>
+            )}
+            {/* Jump to the front of the pending queue (right behind the running
+                job — a running job can never be preempted). Disabled when the row
+                is already first in the FIFO, which also covers the lone-pending
+                case (a single pending row is both first and last). */}
+            {isPending && (
+              <button disabled={!!busy || r.isFirstPending}
+                      onClick={() => move(r.type, r.id, 'top')}
+                      className="text-xs text-emerald-400 hover:text-emerald-300 border border-emerald-900/50 hover:border-emerald-700 px-2 py-1 rounded disabled:opacity-30 disabled:hover:border-emerald-900/50 mr-2"
+                      title="Поднять в начало очереди (сразу после текущей задачи; выше запущенной поднять нельзя)">
+                {busy === `${r.type}:${r.id}:top` ? '…' : '⤒ в начало'}
+              </button>
             )}
             {canCancel && (
               <button onClick={() => cancel(r.type, r.id)}

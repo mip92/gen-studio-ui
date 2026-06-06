@@ -7,9 +7,9 @@ export default async function CharacterLayout({
   children: React.ReactNode;
   params: Promise<{ id: string; profileId: string }>;
 }) {
-  const { id, profileId } = await params;
+  const { profileId } = await params;
   return (
-    <CharacterPageShell projectId={id} profileId={profileId}>
+    <CharacterPageShell profileId={profileId}>
       {children}
     </CharacterPageShell>
   );

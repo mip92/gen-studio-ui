@@ -7,6 +7,10 @@ export interface ScrollableTab {
   href:   string;
   label:  string;
   active: boolean;
+  /** Render as a non-clickable, greyed-out tab (e.g. Видео on a static shot). */
+  disabled?: boolean;
+  /** Optional tooltip, shown on hover — handy to explain why a tab is disabled. */
+  title?: string;
 }
 
 /**
@@ -91,22 +95,36 @@ export function ScrollableTabs({
         role="tablist"
         className="flex overflow-x-auto no-scrollbar"
       >
-        {tabs.map((t) => (
-          <Link
-            key={t.href}
-            href={t.href}
-            ref={t.active ? activeRef : undefined}
-            role="tab"
-            aria-selected={t.active}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap shrink-0 ${
-              t.active
-                ? 'text-blue-400 border-blue-500'
-                : 'text-zinc-500 border-transparent hover:text-zinc-300 hover:border-zinc-700'
-            }`}
-          >
-            {t.label}
-          </Link>
-        ))}
+        {tabs.map((t) =>
+          t.disabled ? (
+            <span
+              key={t.href}
+              role="tab"
+              aria-selected={false}
+              aria-disabled
+              title={t.title}
+              className="px-4 py-2.5 text-sm font-medium border-b-2 -mb-px whitespace-nowrap shrink-0 text-zinc-700 border-transparent cursor-not-allowed"
+            >
+              {t.label}
+            </span>
+          ) : (
+            <Link
+              key={t.href}
+              href={t.href}
+              ref={t.active ? activeRef : undefined}
+              role="tab"
+              aria-selected={t.active}
+              title={t.title}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap shrink-0 ${
+                t.active
+                  ? 'text-blue-400 border-blue-500'
+                  : 'text-zinc-500 border-transparent hover:text-zinc-300 hover:border-zinc-700'
+              }`}
+            >
+              {t.label}
+            </Link>
+          ),
+        )}
       </div>
 
       {/* Right chevron — fades in only when more tabs hide past the right edge */}

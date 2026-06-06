@@ -12,6 +12,7 @@ export function ShotVideosTab() {
 
   const [motionPrompt, setMotionPrompt] = useState('');
   const [count, setCount]               = useState(1);
+  const [mode, setMode]                 = useState<'auto' | 'fast' | 'cfg'>('fast');
   const [videos, setVideos]             = useState<VideoRender[] | null>(null);
   const [busy, setBusy]                 = useState<false | 'start'>(false);
   const [error, setError]               = useState<string | null>(null);
@@ -55,6 +56,21 @@ export function ShotVideosTab() {
     return () => clearInterval(t);
   }, [videos, refresh]);
 
+  if (shot.renderMode === 'static') {
+    return (
+      <main className="px-8 py-6 max-w-7xl mx-auto">
+        <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <p className="text-zinc-400 text-sm">
+            Кадр <code className="text-zinc-300">{shot.shotCode}</code> помечен как статичный (<code className="text-zinc-300">renderMode=static</code>) — генерация видео для него отключена. В экспорте он анимируется эффектом Ken Burns из выбранного рендера.
+          </p>
+          <p className="text-zinc-500 text-xs mt-2">
+            Чтобы снять клип, переключите кадр в режим <code className="text-zinc-400">animated</code>.
+          </p>
+        </section>
+      </main>
+    );
+  }
+
   if (!shot.chosenRender) {
     return (
       <main className="px-8 py-6 max-w-7xl mx-auto">
@@ -73,6 +89,7 @@ export function ShotVideosTab() {
       await api.startVideoRender(shotId, {
         motionPrompt: motionPrompt.trim() || undefined,
         count,
+        mode,
       });
       setMotionPrompt('');
       refresh();
@@ -118,8 +135,27 @@ export function ShotVideosTab() {
               className="w-14 bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 text-center"
             />
           </label>
+          <label className="flex items-center gap-1 text-zinc-400 text-xs">
+            режим
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as 'auto' | 'fast' | 'cfg')}
+              className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200"
+            >
+              <option value="auto">авто (cfg для статичных шотов)</option>
+              <option value="fast">быстро (4-step, негатив НЕ работает)</option>
+              <option value="cfg">качество (cfg=4, негатив работает, ~5× медленнее)</option>
+            </select>
+          </label>
           {error && <span className="text-red-400 text-xs">{error}</span>}
         </div>
+        <p className="text-zinc-600 text-[11px] mt-2 leading-relaxed">
+          {mode === 'auto'
+            ? 'Авто: статичный шот (camera.movement = static) в комикс-проекте идёт через cfg (негатив работает), остальные — через быстрый 4-step. Без лишних кликов.'
+            : mode === 'fast'
+            ? 'Быстрый режим: lightx2v 4-step, cfg=1.0. Движение задаётся ТОЛЬКО позитивным промптом — motionNegative при cfg=1 игнорируется.'
+            : 'Режим качества: полный Wan 2.2, 20 шагов, cfg=4.0. motionNegative реально подавляет нежелательное движение (двигающаяся игрушка, питьё и т.п.), но рендер примерно в 5 раз дольше.'}
+        </p>
       </section>
 
       {/* Grid of all videos */}
@@ -235,8 +271,11 @@ function VideoCard({ video, projectId, shotId, markBeforeNav, isChosen, onApprov
         <div className="text-zinc-400 font-mono">
           {new Date(video.queuedAt).toLocaleString()}
         </div>
-        <div className="text-zinc-500">
-          {(params.width ?? '?')}×{(params.height ?? '?')} · {params.length ?? '?'}f @ {params.fps ?? '?'}fps · seed {params.seed ?? '—'}
+        <div className="text-zinc-500 flex items-center gap-2 flex-wrap">
+          <span>{(params.width ?? '?')}×{(params.height ?? '?')} · {params.length ?? '?'}f @ {params.fps ?? '?'}fps · seed {params.seed ?? '—'}</span>
+          {video.workflowFilename === 'video_wan22_i2v_cfg_api.json' && (
+            <span className="bg-purple-900/60 text-purple-200 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded" title="Полный Wan 2.2, cfg=4 — негатив работает">cfg</span>
+          )}
         </div>
         <div className="text-zinc-300 truncate" title={video.motionPrompt}>
           {video.motionPrompt || <em className="text-zinc-600">no prompt</em>}

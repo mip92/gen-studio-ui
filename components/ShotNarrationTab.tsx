@@ -35,11 +35,11 @@ export function ShotNarrationTab() {
   const [text,           setText]           = useState(initialText);
   const [voice,          setVoice]          = useState<TTSVoice>('baya');  // ж голос дефолтом — narrator is female
   const [emotionRefName, setEmotionRefName] = useState<string>('');        // '' = neutral (just the voice ref)
-  const [speed,          setSpeed]          = useState<number>(1.0);       // f5 only → TTSJob.rate
-  const [pause,          setPause]          = useState<number>(0);         // f5 only → sentencePauseSec
+  const [speed,          setSpeed]          = useState<number>(0.95);      // f5 only → TTSJob.rate (f5 default — slightly slowed)
+  const [pause,          setPause]          = useState<number>(1);         // f5 only → sentencePauseSec (f5 default — 1s between sentences)
   const [front,          setFront]          = useState<boolean>(false);    // checked = jump to front of TTS queue (default off)
   const [jobs,           setJobs]           = useState<TTSJob[] | null>(null);
-  const [historyOpen,    setHistoryOpen]    = useState<boolean>(false);
+  const [historyOpen,    setHistoryOpen]    = useState<boolean>(true);  // история открыта по умолчанию
   const [busy,           setBusy]           = useState<false | 'save' | 'render' | 'approve' | 'delete'>(false);
   const [err,            setErr]            = useState<string | null>(null);
 
@@ -139,8 +139,6 @@ export function ShotNarrationTab() {
     catch (e) { setErr(asMessage(e)); }
     finally   { setBusy(false); }
   };
-
-  const approvedJob = jobs?.find((j) => j.id === approvedId) ?? null;
 
   return (
     <main className="px-8 py-6 max-w-7xl mx-auto space-y-4">
@@ -276,24 +274,7 @@ export function ShotNarrationTab() {
         </div>
       </section>
 
-      {/* Approved take — only banner that always stays open */}
-      {approvedJob && (
-        <section className="bg-emerald-950/30 border border-emerald-800 rounded p-4 space-y-2">
-          <div className="flex items-baseline justify-between">
-            <h3 className="text-xs uppercase tracking-wider text-emerald-300">Утверждённая озвучка</h3>
-            <button onClick={clearApproval} disabled={busy !== false}
-              className="text-[10px] text-zinc-400 hover:text-red-300">
-              ✕ снять утверждение
-            </button>
-          </div>
-          <audio controls preload="none" src={api.ttsFileUrl(approvedJob.id)} className="w-full max-w-md" />
-          <div className="text-[10px] font-mono text-zinc-500">
-            {jobMetaLabel(approvedJob)}
-          </div>
-        </section>
-      )}
-
-      {/* History — collapsible. Default closed; opens with N count. */}
+      {/* History — the approved take is highlighted inline (no separate block). */}
       <section className="bg-zinc-900 border border-zinc-800 rounded">
         <button
           onClick={() => setHistoryOpen((o) => !o)}
@@ -313,7 +294,7 @@ export function ShotNarrationTab() {
               const isApproved = j.id === approvedId;
               return (
                 <div key={j.id} className={
-                  `flex items-center gap-3 p-2 rounded border ${isApproved ? 'border-emerald-800 bg-emerald-950/20' : 'border-zinc-800'}`
+                  `flex items-center gap-3 p-2 rounded border ${isApproved ? 'border-emerald-500 bg-emerald-950/30 ring-1 ring-emerald-500/50' : 'border-zinc-800'}`
                 }>
                   <span className={
                     j.status === 'completed' ? 'text-emerald-400'
@@ -337,6 +318,14 @@ export function ShotNarrationTab() {
                       className="text-[11px] bg-emerald-700 hover:bg-emerald-600 text-white px-2 py-0.5 rounded">
                       утвердить
                     </button>
+                  )}
+                  {isApproved && (
+                    <span className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-emerald-300 font-medium">✓ выбрано</span>
+                      <button onClick={clearApproval} disabled={busy !== false}
+                        className="text-[10px] text-zinc-500 hover:text-red-300"
+                        title="Снять выбор">снять</button>
+                    </span>
                   )}
                   <button onClick={() => deleteJob(j.id)}
                     disabled={busy !== false || j.status === 'running'}

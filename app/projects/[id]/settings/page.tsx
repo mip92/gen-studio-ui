@@ -1,10 +1,29 @@
 'use client';
 
 import { useEffect, useState, use } from 'react';
-import { api, ProjectFull, UpdateProjectBody } from '@/lib/api';
+import { api, ProjectFull, UpdateProjectBody, StyleLoraItem } from '@/lib/api';
 import { ProjectTTSSettings } from '@/components/ProjectTTSSettings';
 
 type Status = 'idle' | 'loading' | 'saving' | 'saved' | 'error';
+
+/** Read the currently-selected style LoRA name out of project.settings. */
+function styleLoraNameOf(settings: unknown): string {
+  const s = (settings as { styleLora?: unknown } | null | undefined)?.styleLora;
+  if (!s) return '';
+  if (typeof s === 'string') return s;
+  if (typeof s === 'object' && typeof (s as { name?: unknown }).name === 'string') {
+    return (s as { name: string }).name;
+  }
+  return '';
+}
+
+/** Shot-boundary transition preset out of project.settings. Anything other
+ *  than the literal 'comic' is the legacy rotation. */
+type TransitionPreset = 'default' | 'comic';
+function transitionPresetOf(settings: unknown): TransitionPreset {
+  const s = (settings as { transitionPreset?: unknown } | null | undefined)?.transitionPreset;
+  return s === 'comic' ? 'comic' : 'default';
+}
 
 export default function ProjectSettingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -15,16 +34,34 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
   const [status, setStatus] = useState<Status>('loading');
   const [error,  setError]  = useState<string | null>(null);
 
+  // Per-project comic style-LoRA. '' = use the workflow's baked default.
+  const [styleLoras, setStyleLoras]           = useState<StyleLoraItem[]>([]);
+  const [styleLora, setStyleLora]             = useState<string>('');
+  const [initialStyleLora, setInitialStyleLora] = useState<string>('');
+
+  // Shot-boundary transition preset for the CapCut export. '' default rotation
+  // vs 'comic' (Comic Tear 90% / Sticker 5% / Glitch Collage 5%).
+  const [transitionPreset, setTransitionPreset]             = useState<TransitionPreset>('default');
+  const [initialTransitionPreset, setInitialTransitionPreset] = useState<TransitionPreset>('default');
+
   useEffect(() => {
     (async () => {
       try {
         setStatus('loading');
-        const [proj, script] = await Promise.all([
+        const [proj, script, loras] = await Promise.all([
           api.getProject(id),
           api.getProjectScript(id),
+          api.listStyleLoras().catch(() => [] as StyleLoraItem[]),
         ]);
         setProject(proj);
         setScriptText(script.text ?? '');
+        setStyleLoras(loras);
+        const cur = styleLoraNameOf(proj.settings);
+        setStyleLora(cur);
+        setInitialStyleLora(cur);
+        const curPreset = transitionPresetOf(proj.settings);
+        setTransitionPreset(curPreset);
+        setInitialTransitionPreset(curPreset);
         setStatus('idle');
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -42,7 +79,10 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
     (draft[k] as string | undefined) ?? (project[k as keyof ProjectFull] as string | null ?? '') as string;
 
   const dirty =
-    Object.keys(draft).length > 0 || scriptText !== (project ? '' : '') /* always allow script save */;
+    Object.keys(draft).length > 0
+    || styleLora !== initialStyleLora
+    || transitionPreset !== initialTransitionPreset
+    || scriptText !== (project ? '' : '') /* always allow script save */;
 
   const onChange = <K extends keyof UpdateProjectBody>(k: K, val: string) => {
     setDraft((d) => ({ ...d, [k]: val }));
@@ -63,10 +103,24 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
           (promptPatch as any)[k] = draft[k];
         }
       }
+      // settings JSON override: PATCH replaces settings wholesale, so send the
+      // full merged object whenever styleLora OR transitionPreset changed.
+      // Empty/default values clear the key (falls back to JSON/export default).
+      if (styleLora !== initialStyleLora || transitionPreset !== initialTransitionPreset) {
+        const base = (project.settings as Record<string, unknown> | null) ?? {};
+        const nextSettings = { ...base };
+        if (styleLora) nextSettings.styleLora = { name: styleLora };
+        else delete nextSettings.styleLora;
+        if (transitionPreset === 'comic') nextSettings.transitionPreset = 'comic';
+        else delete nextSettings.transitionPreset;
+        promptPatch.settings = nextSettings;
+      }
       let nextProject = project;
       if (Object.keys(promptPatch).length > 0) {
         nextProject = await api.updateProject(project.id, promptPatch);
       }
+      setInitialStyleLora(styleLora);
+      setInitialTransitionPreset(transitionPreset);
       // scriptText goes through the separate endpoint (handles null/empty correctly).
       const currentScript = (await api.getProjectScript(project.id)).text ?? '';
       if (scriptText !== currentScript) {
@@ -114,6 +168,37 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
         <Row label="Название" hint="UI-метка проекта в шапке и списках.">
           <input type="text" value={v('name')} onChange={(e) => onChange('name', e.target.value)}
             className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm" />
+        </Row>
+
+        {project.visualStyle && project.visualStyle !== 'photoreal_cinematic' && (
+          <Row
+            label="Стиль (LoRA)"
+            hint="project.settings.styleLora — стилевая LoRA, подставляется в ноду 2 (LoraLoader) графnovel-воркфлоу при рендере. «По умолчанию» = LoRA, зашитая в воркфлоу. Файлы берутся из models/loras/style/.">
+            <select
+              value={styleLora}
+              onChange={(e) => setStyleLora(e.target.value)}
+              className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
+              <option value="">По умолчанию (из воркфлоу)</option>
+              {styleLora && !styleLoras.some((l) => l.name === styleLora) && (
+                <option value={styleLora}>{styleLora} (нет файла на диске)</option>
+              )}
+              {styleLoras.map((l) => (
+                <option key={l.name} value={l.name}>{l.label}</option>
+              ))}
+            </select>
+          </Row>
+        )}
+
+        <Row
+          label="Переходы между шотами (CapCut)"
+          hint="project.settings.transitionPreset — стиль переходов на стыках шотов при экспорте в CapCut. «Стандартный» = ротация 8 бесплатных переходов (затухание, наезды, сдвиги, глитч). «Комикс» = 漫画撕纸 (разрыв с угла) 90% + 便利贴 (стикер) 5% + 故障拼贴 (рваный коллаж) 5%, разложенные по случайным стыкам. Комикс-переходы — VIP (нужен CapCut Pro).">
+          <select
+            value={transitionPreset}
+            onChange={(e) => setTransitionPreset(e.target.value as TransitionPreset)}
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
+            <option value="default">Стандартный (ротация 8 переходов)</option>
+            <option value="comic">Комикс (разрыв 90% / стикер 5% / коллаж 5%)</option>
+          </select>
         </Row>
 
         <Row

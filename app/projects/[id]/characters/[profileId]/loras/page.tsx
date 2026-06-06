@@ -5,6 +5,6 @@ export default async function Page({
 }: {
   params: Promise<{ id: string; profileId: string }>;
 }) {
-  const { id, profileId } = await params;
-  return <LoraListPage projectId={id} profileId={profileId} />;
+  const { profileId } = await params;
+  return <LoraListPage profileId={profileId} />;
 }

@@ -136,7 +136,7 @@ export function CharacterDatasetTab() {
                 className="bg-zinc-800 border border-zinc-700 rounded px-2 py-0.5 text-xs">
                 <option value="">— выбери —</option>
                 {profilesWithDataset.map((p) => (
-                  <option key={p.profileId} value={p.profileId}>{p.profileCode} ({p.datasetCount})</option>
+                  <option key={p.profileId} value={p.profileId}>{p.characterCode} · {p.profileCode}</option>
                 ))}
               </select>
             )}

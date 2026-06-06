@@ -113,9 +113,9 @@ export interface ShotParticipant {
     id: string;
     code: string;
     displayName: string | null;
-    profiles?: Array<{ id: string; profileCode: string; loraPath: string | null; ageLabel: string | null }>;
+    profiles?: Array<{ id: string; profileCode: string; loraPath: string | null; ageLabel: string | null; promptBase: string | null; triggerToken: string | null }>;
   } | null;
-  profile?:    { id: string; profileCode: string; loraPath: string | null; ageLabel: string | null } | null;
+  profile?:    { id: string; profileCode: string; loraPath: string | null; ageLabel: string | null; promptBase: string | null; triggerToken: string | null } | null;
 }
 
 /** promptFields is freeform JSON, but these are the conventional keys. */
@@ -178,6 +178,8 @@ export interface ShotFull {
   chosenVideoId:       string | null;
   /** FK to a Location row. SceneRenderService prepends location.description into positive. */
   locationId:          string | null;
+  /** 'animated' (default) → renders a Wan clip; 'static' → still only, video disabled. */
+  renderMode:          string | null;
   participants:        ShotParticipant[];
   scene?: {
     id:              string;
@@ -200,6 +202,9 @@ export interface UpdateShotBody {
   workflowRouteKey?:   string;
   referenceProfileId?: string;
   participants?:       Array<{ label: string; characterId?: string | null; profileId?: string | null }>;
+  /** 'animated' → Wan i2v clip; 'static' → still only, video disabled. Per-shot
+   *  override of the act-level render mode. */
+  renderMode?:         string;
 }
 
 export interface CreateShotBody {
@@ -302,6 +307,20 @@ export interface UpdateProjectBody {
   defaultMotionPrompt?:        string;
   defaultStaticMotionPrompt?:  string;
   scriptText?:                 string;
+  /**
+   * Free-form project settings (JSONB). Replaces the whole object on PATCH —
+   * callers must send the full merged settings, not a partial. Holds e.g.
+   * { styleLora: { name } } for the per-project comic style-LoRA override.
+   */
+  settings?:                   Record<string, unknown>;
+}
+
+/** One graphic-novel style LoRA on disk (GET /projects/style-loras). */
+export interface StyleLoraItem {
+  /** Exact ComfyUI lora_name, e.g. "style\\EldritchComicsXL1.2.safetensors". */
+  name:  string;
+  /** Human-readable stem without extension. */
+  label: string;
 }
 
 export interface SceneShotParticipant {
@@ -397,6 +416,8 @@ export interface QueueRow {
   projectSlug:   string;
   /** Canonical project UUID; prefer over slug for hrefs. */
   projectId:     string | null;
+  /** Shot UUID for shot-anchored jobs (scene/video/video_upscale/shot-TTS); null otherwise. */
+  shotId:        string | null;
   triggerToken:  string | null;
   queuedAt:      string;
   startedAt:     string | null;
@@ -670,7 +691,7 @@ export const api = {
       id:          string;
       code:        string;
       displayName: string | null;
-      profiles:    Array<{ id: string; profileCode: string; loraPath: string | null; ageLabel: string | null }>;
+      profiles:    Array<{ id: string; profileCode: string; loraPath: string | null; ageLabel: string | null; promptBase: string | null; triggerToken: string | null }>;
     }>>(`/projects/${projectIdOrSlug}/characters`),
 
   characterUsage: (projectIdOrSlug: string, characterId: string) =>
@@ -913,7 +934,7 @@ export const api = {
     return http<QueueListResponse>(`/pipeline/queue${q ? `?${q}` : ''}`);
   },
 
-  pipelineMove: (type: QueueJobType, id: string, direction: 'up' | 'down') =>
+  pipelineMove: (type: QueueJobType, id: string, direction: 'up' | 'down' | 'top') =>
     http<{ moved: boolean; swappedWith?: { type: QueueJobType; id: string }; reason?: string }>(
       `/pipeline/queue/${type}/${id}/move`,
       { method: 'POST', body: JSON.stringify({ direction }) },
@@ -925,7 +946,7 @@ export const api = {
   // ── Video renders (Wan2.2 i2v from the shot's chosen render) ──────────────
   startVideoRender: (
     shotId: string,
-    body: { motionPrompt?: string; seed?: number; width?: number; height?: number; length?: number; fps?: number; count?: number } = {},
+    body: { motionPrompt?: string; seed?: number; width?: number; height?: number; length?: number; fps?: number; count?: number; mode?: 'auto' | 'fast' | 'cfg' } = {},
   ) =>
     http<VideoRender[]>(`/generation/shots/${shotId}/videos`, {
       method: 'POST',
@@ -1136,6 +1157,10 @@ export const api = {
       method: 'PATCH',
       body:   JSON.stringify(body),
     }),
+
+  /** List comic style-LoRAs on disk for the per-project style picker. */
+  listStyleLoras: () =>
+    http<StyleLoraItem[]>(`/projects/style-loras`),
 
   // ── Project TTS (engine + voice/emotion refs) ──────────────────────────
 
