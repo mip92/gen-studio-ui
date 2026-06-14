@@ -55,13 +55,13 @@ export function ShotPageShell({
 
   if (error) {
     return (
-      <main className="px-8 py-6">
+      <main className="px-4 sm:px-8 py-6">
         <div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div>
       </main>
     );
   }
   if (!shot) {
-    return <main className="px-8 py-6 text-zinc-500">Loading…</main>;
+    return <main className="px-4 sm:px-8 py-6 text-zinc-500">Loading…</main>;
   }
 
   return (
@@ -75,7 +75,7 @@ export function ShotPageShell({
 function StickyHeader({ projectId, shotId, shot }: { projectId: string; shotId: string; shot: ShotFull }) {
   return (
     <div className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
-      <div className="max-w-7xl mx-auto px-8 pt-3 pb-0">
+      <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-3 pb-0">
         <ShotBreadcrumbs projectId={projectId} shotId={shotId} shot={shot} />
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-xl font-semibold font-mono text-zinc-100">{shot.shotCode}</h1>

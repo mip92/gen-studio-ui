@@ -79,7 +79,7 @@ export function ShotPromptsTab() {
   };
 
   return (
-    <main className="px-8 py-6 max-w-7xl mx-auto">
+    <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
       <div className="mb-4 flex gap-2 justify-end">
         {!editing ? (
           <>
@@ -237,7 +237,13 @@ export function ShotPromptsTab() {
                         onChange={(v) => updatePf({ negative: v })} />}
         </Field>
 
-        <Field label="Motion negative (для видео i2v)" hint="Wan2.2 negative — fallback Project.defaultVideoNegative если пусто. Уходит в ноду 10 воркфлоу.">
+        <Field label="Motion prompt (для видео i2v)" hint="Wan2.2 positive motion — fallback Project.defaultMotionPrompt если пусто. На быстром i2v (cfg=1.0) рулит ТОЛЬКО он, негатив инертен: для env-кадров обязательно 'no people, no figures'.">
+          {!editing ? <Value v={pf.motionPrompt as string | undefined} multi />
+                    : <Textarea value={(dpf.motionPrompt as string | undefined) ?? ''} rows={3}
+                        onChange={(v) => updatePf({ motionPrompt: v })} />}
+        </Field>
+
+        <Field label="Motion negative (для видео i2v)" hint="Wan2.2 negative — fallback Project.defaultVideoNegative если пусто. Уходит в ноду 10 воркфлоу. NB: на быстром cfg=1.0 негатив НЕ срабатывает (fires только на cfg-воркфлоу).">
           {!editing ? <Value v={pf.motionNegative as string | undefined} multi />
                     : <Textarea value={(dpf.motionNegative as string | undefined) ?? ''} rows={3}
                         onChange={(v) => updatePf({ motionNegative: v })} />}

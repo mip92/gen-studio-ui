@@ -17,14 +17,14 @@ export default function ProjectsListPage() {
 
   return (
     <div className="bg-zinc-950 text-zinc-100">
-      <header className="border-b border-zinc-800 px-8 py-4">
+      <header className="border-b border-zinc-800 px-4 sm:px-8 py-4">
         <div className="max-w-7xl mx-auto">
           <Breadcrumbs items={[{ label: 'Overview', href: '/' }, { label: 'Projects' }]} />
           <h1 className="text-xl font-semibold">Проекты</h1>
         </div>
       </header>
 
-      <main className="p-8 max-w-7xl mx-auto">
+      <main className="p-4 sm:p-8 max-w-7xl mx-auto">
         {error && (
           <div className="bg-red-900/40 border border-red-700 rounded p-4 mb-4">
             <p className="text-red-200 font-mono text-sm">{error}</p>

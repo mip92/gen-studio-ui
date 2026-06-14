@@ -58,7 +58,7 @@ export function ShotVideosTab() {
 
   if (shot.renderMode === 'static') {
     return (
-      <main className="px-8 py-6 max-w-7xl mx-auto">
+      <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
         <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
           <p className="text-zinc-400 text-sm">
             Кадр <code className="text-zinc-300">{shot.shotCode}</code> помечен как статичный (<code className="text-zinc-300">renderMode=static</code>) — генерация видео для него отключена. В экспорте он анимируется эффектом Ken Burns из выбранного рендера.
@@ -73,7 +73,7 @@ export function ShotVideosTab() {
 
   if (!shot.chosenRender) {
     return (
-      <main className="px-8 py-6 max-w-7xl mx-auto">
+      <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
         <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
           <p className="text-zinc-400 text-sm">
             Сначала выберите финальный рендер на вкладке <Link href={`/projects/${projectId}/shots/${shotId}/render`} className="text-blue-400 hover:text-blue-300">Рендер кадра</Link> — он пойдёт первым кадром видео.
@@ -99,7 +99,7 @@ export function ShotVideosTab() {
   };
 
   return (
-    <main className="px-8 py-6 max-w-7xl mx-auto">
+    <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
       {/* Launcher */}
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mb-6">
         <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-3">Запустить новый рендер</h3>

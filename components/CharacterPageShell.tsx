@@ -121,13 +121,13 @@ export function CharacterPageShell({
 
   if (error) {
     return (
-      <main className="px-8 py-6">
+      <main className="px-4 sm:px-8 py-6">
         <div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div>
       </main>
     );
   }
   if (!profile) {
-    return <main className="px-8 py-6 text-zinc-500">Loading…</main>;
+    return <main className="px-4 sm:px-8 py-6 text-zinc-500">Loading…</main>;
   }
 
   return (
@@ -164,7 +164,7 @@ function StickyHeader({
 
   return (
     <div className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
-      <div className="px-8 pt-3 pb-0">
+      <div className="px-4 sm:px-8 pt-3 pb-0">
         <CharacterBreadcrumbs profileId={profileId} profile={profile} identityPipeline={identityPipeline} />
         <div className="flex items-baseline justify-between mb-0">
           <div>

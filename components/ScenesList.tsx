@@ -18,6 +18,21 @@ export function ScenesList({ id }: { id: string }) {
   const [createShotInScene, setCreateShotInScene] = useState<string | null>(null);
   const [ttsForScene, setTtsForScene]             = useState<string | null>(null);
   const [queue, setQueue] = useState<{ running: string[]; pending: string[] } | null>(null);
+  const [enqueuing, setEnqueuing] = useState(false);
+
+  const enqueueAll = async () => {
+    if (!confirm('Поставить на рендер ВСЕ кадры проекта, которые ещё не рендерились и не стоят в очереди?\n\nУже готовые (апрувнутые) и ждущие апрува — НЕ трогаются. Ничего не удаляется, только добавляется.')) return;
+    setEnqueuing(true);
+    try {
+      const r = await api.enqueueProjectPending(id);
+      alert(`Поставлено в очередь: ${r.enqueued}`);
+      refresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEnqueuing(false);
+    }
+  };
 
   const refresh = useCallback(() => {
     api.listScenes(id).then(setData).catch((e) => setError(e instanceof Error ? e.message : String(e)));
@@ -30,11 +45,11 @@ export function ScenesList({ id }: { id: string }) {
     return () => clearInterval(t);
   }, [refresh]);
 
-  if (error)  return <main className="px-8 py-6 max-w-7xl mx-auto"><div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div></main>;
-  if (!data)  return <main className="px-8 py-6 max-w-7xl mx-auto text-zinc-500">Loading…</main>;
+  if (error)  return <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto"><div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div></main>;
+  if (!data)  return <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto text-zinc-500">Loading…</main>;
 
   return (
-    <main className="px-8 py-6 max-w-7xl mx-auto">
+    <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
       <div className="flex justify-between items-center mb-4">
         <div className="flex items-center gap-3">
           <h2 className="text-sm uppercase tracking-wider text-zinc-500">Сцены и кадры</h2>
@@ -44,12 +59,22 @@ export function ScenesList({ id }: { id: string }) {
             </span>
           )}
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="text-xs bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded"
-        >
-          + новая сцена
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={enqueueAll}
+            disabled={enqueuing}
+            title="Поставить на рендер все кадры, которые ещё не рендерились и не в очереди (готовые/ждущие апрува не трогаются)"
+            className="text-xs bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3 py-1 rounded"
+          >
+            {enqueuing ? '…' : '▶ всё на рендер'}
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="text-xs bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded"
+          >
+            + новая сцена
+          </button>
+        </div>
       </div>
 
       {showCreate && (

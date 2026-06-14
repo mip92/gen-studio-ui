@@ -52,7 +52,7 @@ export function LoraListPage({
   void profile;
 
   return (
-    <main className="px-8 py-6">
+    <main className="px-4 sm:px-8 py-6">
       {error && (
         <div className="bg-red-900/40 border border-red-700 rounded p-3 text-red-200 font-mono text-xs mb-4">
           {error}

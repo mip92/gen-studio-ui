@@ -23,13 +23,13 @@ export default function QueueLayout({ children }: { children: React.ReactNode })
   return (
     <div className="bg-zinc-950 text-zinc-100">
       <div className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
-        <div className="max-w-7xl mx-auto px-8 pt-3 pb-0">
+        <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-3 pb-0">
           <Breadcrumbs items={crumbs} />
           <h1 className="text-xl font-semibold text-zinc-100">Очередь</h1>
           <TabsNav />
         </div>
       </div>
-      <main className="p-8 max-w-7xl mx-auto">{children}</main>
+      <main className="p-4 sm:p-8 max-w-7xl mx-auto">{children}</main>
     </div>
   );
 }

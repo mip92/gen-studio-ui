@@ -48,12 +48,12 @@ export function ProjectCharactersPicker({ projectSlug }: { projectSlug: string }
 
   if (error && !chars) {
     return (
-      <main className="px-8 py-6">
+      <main className="px-4 sm:px-8 py-6">
         <div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div>
       </main>
     );
   }
-  if (!chars) return <main className="px-8 py-6 max-w-7xl mx-auto text-zinc-500">Loading…</main>;
+  if (!chars) return <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto text-zinc-500">Loading…</main>;
 
   // Flatten character → profile cards (matches the global list). One card per
   // profile, with the character's attach checkbox at top-left.
@@ -64,7 +64,7 @@ export function ProjectCharactersPicker({ projectSlug }: { projectSlug: string }
   }
 
   return (
-    <main className="px-8 py-6">
+    <main className="px-4 sm:px-8 py-6">
       <div className="flex justify-between items-baseline mb-4">
         <div>
           <h1 className="text-2xl font-semibold">Состав проекта</h1>

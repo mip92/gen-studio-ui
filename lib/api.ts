@@ -1,7 +1,20 @@
 // Single source of truth for talking to the gen-studio NestJS backend.
 // All endpoints documented in the corresponding controllers.
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:3000';
+// API base differs by execution context:
+//  - browser → '/api' (relative). next.config rewrites proxy it to the backend,
+//    so it works from any device on the LAN with no hardcoded host and no CORS.
+//  - server  → absolute backend URL. Node fetch (RSC, middleware) needs it.
+export const API_BASE =
+  typeof window === 'undefined'
+    ? process.env.INTERNAL_API_BASE ?? 'http://localhost:4000'
+    : process.env.NEXT_PUBLIC_API_BASE ?? '/api';
+
+// Media (img/video/audio/href) is ALWAYS loaded by the browser, never fetched
+// server-side — so it must use the relative public path even during SSR, where
+// API_BASE points at localhost (unreachable from other devices on the LAN).
+// Using this for every <... src> URL is what makes images work from a phone.
+export const MEDIA_BASE = process.env.NEXT_PUBLIC_API_BASE ?? '/api';
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -496,7 +509,7 @@ export const api = {
    * to force the browser to refetch after a fresh render.
    */
   anchorRawUrl: (profileId: string, cacheBust?: number) =>
-    `${API_BASE}/profiles/${profileId}/anchor/raw${cacheBust ? `?t=${cacheBust}` : ''}`,
+    `${MEDIA_BASE}/profiles/${profileId}/anchor/raw${cacheBust ? `?t=${cacheBust}` : ''}`,
 
   /** Delete the anchor portrait PNG (returns deleted paths). */
   deleteAnchor: (profileId: string) =>
@@ -538,7 +551,7 @@ export const api = {
     ),
 
   imageUrl: (profileId: string, filename: string) =>
-    `${API_BASE}/datasets/profiles/${profileId}/images/${encodeURIComponent(filename)}/raw`,
+    `${MEDIA_BASE}/datasets/profiles/${profileId}/images/${encodeURIComponent(filename)}/raw`,
 
   // Reference image (used as ComfyUI LoadImage source for dataset gen)
   referenceInfo: (profileId: string) =>
@@ -548,7 +561,7 @@ export const api = {
     >(`/datasets/profiles/${profileId}/reference`),
 
   referenceUrl: (profileId: string, cacheBust?: number) =>
-    `${API_BASE}/datasets/profiles/${profileId}/reference/raw${cacheBust ? `?t=${cacheBust}` : ''}`,
+    `${MEDIA_BASE}/datasets/profiles/${profileId}/reference/raw${cacheBust ? `?t=${cacheBust}` : ''}`,
 
   uploadReference: async (profileId: string, file: File) => {
     const fd = new FormData();
@@ -731,6 +744,14 @@ export const api = {
       { method: 'POST', body: JSON.stringify(body) },
     ),
 
+  // Bulk-enqueue every not-yet-rendered, not-queued shot in a project (one click).
+  // Additive only — never wipes; skips rendered/approved/awaiting-approval/already-queued.
+  enqueueProjectPending: (projectId: string) =>
+    http<{ enqueued: number }>(
+      `/generation/shots/project/${projectId}/enqueue-pending`,
+      { method: 'POST' },
+    ),
+
   // ComfyUI live queue — list of running + pending prompt_ids
   comfyQueue: () =>
     http<{ running: string[]; pending: string[] }>(`/generation/comfy-queue`),
@@ -746,7 +767,7 @@ export const api = {
   // Prefer shotImageUrl() for shot renders — it reads from the project tree and
   // does not depend on ComfyUI being alive.
   comfyViewUrl: (filename: string, subfolder = '', type = 'output') =>
-    `${API_BASE}/generation/comfy-image?filename=${encodeURIComponent(filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`,
+    `${MEDIA_BASE}/generation/comfy-image?filename=${encodeURIComponent(filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`,
 
   /**
    * Stream a rendered shot image directly from disk
@@ -754,7 +775,7 @@ export const api = {
    * Doesn't depend on ComfyUI running — survives engine restarts.
    */
   shotImageUrl: (shotId: string, filename: string) =>
-    `${API_BASE}/shots/${shotId}/renders/${encodeURIComponent(filename)}/raw`,
+    `${MEDIA_BASE}/shots/${shotId}/renders/${encodeURIComponent(filename)}/raw`,
 
   // Shots
   getShot: (shotId: string) =>
@@ -961,10 +982,10 @@ export const api = {
 
   // For <video src> — backend streams the mp4 with proper content-type.
   videoFileUrl: (videoId: string) =>
-    `${API_BASE}/generation/videos/${videoId}/file`,
+    `${MEDIA_BASE}/generation/videos/${videoId}/file`,
 
   videoFhdFileUrl: (videoId: string) =>
-    `${API_BASE}/generation/videos/${videoId}/file-fhd`,
+    `${MEDIA_BASE}/generation/videos/${videoId}/file-fhd`,
 
   upscaleVideo: (videoId: string) =>
     http<VideoRender>(`/generation/videos/${videoId}/upscale`, { method: 'POST' }),
@@ -1007,7 +1028,7 @@ export const api = {
     http<TTSJob>(`/tts/jobs/${jobId}`),
 
   ttsFileUrl: (jobId: string) =>
-    `${API_BASE}/tts/jobs/${jobId}/file`,
+    `${MEDIA_BASE}/tts/jobs/${jobId}/file`,
 
   /** Mark a TTS job as the approved narration for its scene. Idempotent. */
   approveTTSJob: (jobId: string) =>
@@ -1295,7 +1316,7 @@ export const api = {
 
   /** Direct URL for the <audio> element to stream the rendered flac. */
   bgmJobFileUrl: (jobId: string) =>
-    `${API_BASE}/bgm/jobs/${jobId}/file`,
+    `${MEDIA_BASE}/bgm/jobs/${jobId}/file`,
 
   /** File size + computed bitrate for the rendered flac. Null when missing on disk. */
   getBgmJobMeta: (jobId: string) =>
@@ -1410,6 +1431,7 @@ export type ActionGateKey =
   | 'create_video'
   | 'approve_video'
   | 'upscale_video'
+  | 'render_tts'
   | 'approve_tts'
   | 'approve_bgm';
 

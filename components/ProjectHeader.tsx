@@ -53,16 +53,16 @@ export function ProjectHeader({
 
   return (
     <header className="border-b border-zinc-800 bg-zinc-950 sticky top-0 z-10">
-      <div className="px-8 pt-3 max-w-7xl mx-auto">
+      <div className="px-4 sm:px-8 pt-3 max-w-7xl mx-auto">
         <Breadcrumbs items={crumbs} />
       </div>
-      <div className="px-8 pb-4 max-w-7xl mx-auto flex items-center justify-between">
+      <div className="px-4 sm:px-8 pb-4 max-w-7xl mx-auto flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold">{projectName}</h1>
           <p className="text-zinc-500 text-xs font-mono truncate max-w-md">{id}</p>
         </div>
       </div>
-      <div className="px-8 max-w-7xl mx-auto">
+      <div className="px-4 sm:px-8 max-w-7xl mx-auto">
         <ScrollableTabs
           tabs={TABS.map((t) => ({
             href:   t.key ? `${base}/${t.key}` : base,

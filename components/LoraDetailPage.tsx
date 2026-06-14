@@ -78,7 +78,7 @@ export function LoraDetailPage({
   };
 
   return (
-    <main className="px-8 py-6">
+    <main className="px-4 sm:px-8 py-6">
       <header className="mb-6 flex items-baseline justify-between gap-4">
         {/* Character code / profileCode subtitle is already in the sticky shell
             header (h1) — don't duplicate. Only the variant label remains here. */}

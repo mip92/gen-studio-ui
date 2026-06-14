@@ -79,17 +79,17 @@ export function VideoDetail({
 
   if (error) {
     return (
-      <main className="px-8 py-6 max-w-5xl mx-auto">
+      <main className="px-4 sm:px-8 py-6 max-w-5xl mx-auto">
         <div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div>
       </main>
     );
   }
-  if (!video) return <main className="px-8 py-6 max-w-5xl mx-auto text-zinc-500">Loading…</main>;
+  if (!video) return <main className="px-4 sm:px-8 py-6 max-w-5xl mx-auto text-zinc-500">Loading…</main>;
 
   const params = video.params ?? {};
 
   return (
-    <main className="px-8 py-6 max-w-5xl mx-auto">
+    <main className="px-4 sm:px-8 py-6 max-w-5xl mx-auto">
       <div className="mb-4 flex items-baseline gap-3">
         <h1 className="text-lg font-semibold text-zinc-200">Видео-рендер</h1>
         <span className="font-mono text-xs text-zinc-500">{video.id.slice(0, 8)}</span>

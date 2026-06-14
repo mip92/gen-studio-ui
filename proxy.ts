@@ -17,7 +17,9 @@ import type { NextRequest } from 'next/server';
  */
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:4000';
+// Middleware runs server-side only — talk straight to the backend (never the
+// relative '/api', which has no meaning here).
+const API_BASE = process.env.INTERNAL_API_BASE ?? 'http://localhost:4000';
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;

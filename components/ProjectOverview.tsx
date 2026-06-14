@@ -44,7 +44,7 @@ export function ProjectOverview({ id }: { id: string }) {
   const total      = dashboard.profiles.length;
 
   return (
-    <main className="px-8 py-6 max-w-7xl mx-auto">
+    <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
       <div className="flex items-start justify-between mb-6 gap-4">
         <section className="grid grid-cols-2 md:grid-cols-4 gap-3 flex-1">
           <Stat label="Сцены"      value={String(scenes.scenes.length)} />
@@ -146,7 +146,7 @@ function TimingCard({
 }
 
 function Pad({ children }: { children: React.ReactNode }) {
-  return <main className="px-8 py-6 max-w-7xl mx-auto">{children}</main>;
+  return <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">{children}</main>;
 }
 
 function Err({ msg }: { msg: string }) {

@@ -17,8 +17,9 @@ const GATE_LABELS: Record<ActionGateKey, { num: number; ru: string }> = {
   create_video:          { num: 6,  ru: 'Создать видео' },
   approve_video:         { num: 7,  ru: 'Утвердить видео' },
   upscale_video:         { num: 8,  ru: 'Апскейл видео' },
-  approve_tts:           { num: 9,  ru: 'Утвердить закадровый голос' },
-  approve_bgm:           { num: 10, ru: 'Утвердить фоновую музыку' },
+  render_tts:            { num: 9,  ru: 'Озвучить — нет голоса' },
+  approve_tts:           { num: 10, ru: 'Утвердить закадровый голос' },
+  approve_bgm:           { num: 11, ru: 'Утвердить фоновую музыку' },
 };
 
 // Gate order on the page — characters first (anchor for cartoon OR 1-3 for
@@ -33,6 +34,7 @@ const GATE_ORDER: ActionGateKey[] = [
   'create_video',
   'approve_video',
   'upscale_video',
+  'render_tts',
   'approve_tts',
   'approve_bgm',
 ];
@@ -105,7 +107,7 @@ export default function ActionsPage() {
   return (
     <div className="bg-zinc-950 text-zinc-100 min-h-full">
       <div className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
-        <div className="max-w-7xl mx-auto px-8 pt-3 pb-3">
+        <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-3 pb-3">
           <Breadcrumbs items={[{ label: 'Overview', href: '/' }, { label: 'Действия' }]} />
           <div className="flex items-baseline gap-4 mt-1">
             <h1 className="text-xl font-semibold text-zinc-100">Действия</h1>
@@ -129,7 +131,7 @@ export default function ActionsPage() {
         </div>
       </div>
 
-      <main className="p-8 max-w-7xl mx-auto space-y-8">
+      <main className="p-4 sm:p-8 max-w-7xl mx-auto space-y-8">
         {error && (
           <div className="rounded border border-red-900 bg-red-950 text-red-200 text-sm px-4 py-3">
             <div className="font-semibold mb-1">Не удалось загрузить /actions</div>

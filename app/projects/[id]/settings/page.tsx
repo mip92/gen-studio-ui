@@ -71,7 +71,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
   }, [id]);
 
   if (status === 'loading' || !project) {
-    return <main className="px-8 py-6 max-w-7xl mx-auto"><p className="text-zinc-500">Загрузка…</p></main>;
+    return <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto"><p className="text-zinc-500">Загрузка…</p></main>;
   }
 
   // Pick the effective value for an input — draft overrides the saved project.
@@ -137,7 +137,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
   };
 
   return (
-    <main className="px-8 py-6 max-w-5xl mx-auto space-y-6">
+    <main className="px-4 sm:px-8 py-6 max-w-5xl mx-auto space-y-6">
       <header className="flex items-baseline justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold">Настройки проекта</h1>

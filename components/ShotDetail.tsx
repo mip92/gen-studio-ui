@@ -71,7 +71,7 @@ export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: s
   };
 
   return (
-    <main className="px-8 py-6 max-w-7xl mx-auto">
+    <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
       <Link href={`/projects/${projectId}/scenes`} className="text-zinc-500 hover:text-zinc-200 text-sm mb-4 inline-block">
         ← все сцены
       </Link>
@@ -231,7 +231,7 @@ export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: s
 // ── Small UI primitives ─────────────────────────────────────────────────────
 
 function Pad({ children }: { children: React.ReactNode }) {
-  return <main className="px-8 py-6">{children}</main>;
+  return <main className="px-4 sm:px-8 py-6">{children}</main>;
 }
 function Err({ msg }: { msg: string }) {
   return <div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{msg}</div>;

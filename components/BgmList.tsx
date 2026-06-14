@@ -32,15 +32,15 @@ export function BgmList({ projectId }: { projectId: string }) {
 
   if (error) {
     return (
-      <main className="px-8 py-6 max-w-7xl mx-auto">
+      <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
         <div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div>
       </main>
     );
   }
-  if (!blocks) return <main className="px-8 py-6 max-w-7xl mx-auto text-zinc-500">Loading…</main>;
+  if (!blocks) return <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto text-zinc-500">Loading…</main>;
 
   return (
-    <main className="px-8 py-6 max-w-7xl mx-auto">
+    <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-sm uppercase tracking-wider text-zinc-500">Фоновая музыка · ACE-Step</h2>
         <div className="text-xs text-zinc-500">

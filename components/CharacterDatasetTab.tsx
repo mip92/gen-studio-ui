@@ -118,7 +118,7 @@ export function CharacterDatasetTab() {
                  : `⚙ генерируется… (${profile.datasetCount} картинок)`;
 
   return (
-    <main className="px-8 py-6">
+    <main className="px-4 sm:px-8 py-6">
       {/* Generate dataset */}
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 mb-6 space-y-4">
         <h2 className="text-sm uppercase tracking-wider text-zinc-500">Сгенерировать датасет</h2>

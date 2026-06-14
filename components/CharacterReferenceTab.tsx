@@ -26,7 +26,7 @@ export function CharacterReferenceTab() {
   const showAnchorPath = identityPipeline === 'anchor' || identityPipeline === 'mixed' || identityPipeline === 'none';
 
   return (
-    <main className="px-8 py-6 space-y-4">
+    <main className="px-4 sm:px-8 py-6 space-y-4">
       {showLoraPath   && <ReferenceUploader profileId={profileId} />}
       {showAnchorPath && <CharacterAnchorPanel profileId={profileId} />}
     </main>

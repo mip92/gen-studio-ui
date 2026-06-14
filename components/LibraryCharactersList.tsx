@@ -39,12 +39,12 @@ export function LibraryCharactersList() {
 
   if (error && !chars) {
     return (
-      <main className="px-8 py-6">
+      <main className="px-4 sm:px-8 py-6">
         <div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div>
       </main>
     );
   }
-  if (!chars) return <main className="px-8 py-6 max-w-7xl mx-auto text-zinc-500">Loading…</main>;
+  if (!chars) return <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto text-zinc-500">Loading…</main>;
 
   // Flatten character → profile cards. A character with N profiles gets N cards.
   // Library characters with zero profiles are still shown (rare; will render
@@ -56,7 +56,7 @@ export function LibraryCharactersList() {
   }
 
   return (
-    <main className="px-8 py-6">
+    <main className="px-4 sm:px-8 py-6">
       <Breadcrumbs items={[
         { label: 'Overview',   href: '/' },
         { label: 'Персонажи' },

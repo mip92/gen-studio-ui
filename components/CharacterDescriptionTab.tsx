@@ -8,7 +8,7 @@ export function CharacterDescriptionTab() {
   const { profileId, profile, profileFull, setProfileFull, refresh } = useCharacterCtx();
 
   return (
-    <main className="px-8 py-6">
+    <main className="px-4 sm:px-8 py-6">
       {/* Stats grid */}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <Stat label="датасет" value={`${profile.datasetCount} img`} />

@@ -27,7 +27,7 @@ export function CharacterTrainingTab() {
                  : `⚙ обучается… (${profile.lastTrainingJob!.status})`;
 
   return (
-    <main className="px-8 py-6 space-y-6">
+    <main className="px-4 sm:px-8 py-6 space-y-6">
       <TrainingProgress trainingJob={profile.lastTrainingJob} />
 
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
