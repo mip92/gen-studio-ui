@@ -16,6 +16,8 @@ export function VideoDetail({
   const [error,        setError]        = useState<string | null>(null);
   const [upscaleBusy,  setUpscaleBusy]  = useState(false);
   const [upscaleError, setUpscaleError] = useState<string | null>(null);
+  const [interpBusy,   setInterpBusy]   = useState(false);
+  const [interpError,  setInterpError]  = useState<string | null>(null);
   const [approveBusy,  setApproveBusy]  = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [deleteBusy,   setDeleteBusy]   = useState(false);
@@ -33,7 +35,8 @@ export function VideoDetail({
     if (!video) return;
     const renderInFlight  = video.status === 'pending' || video.status === 'running';
     const upscaleInFlight = video.upscaleStatus === 'pending' || video.upscaleStatus === 'running';
-    if (!renderInFlight && !upscaleInFlight) return;
+    const interpInFlight  = video.interpStatus === 'pending' || video.interpStatus === 'running';
+    if (!renderInFlight && !upscaleInFlight && !interpInFlight) return;
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
   }, [video, load]);
@@ -47,6 +50,18 @@ export function VideoDetail({
       setUpscaleError(e instanceof Error ? e.message : String(e));
     } finally {
       setUpscaleBusy(false);
+    }
+  };
+
+  const startInterpolate = async () => {
+    setInterpBusy(true); setInterpError(null);
+    try {
+      const updated = await api.interpolateVideo(videoId);
+      setVideo(updated);
+    } catch (e) {
+      setInterpError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setInterpBusy(false);
     }
   };
 
@@ -217,6 +232,73 @@ export function VideoDetail({
         </section>
       )}
 
+      {/* FPS interpolation — MANDATORY, only after the FHD upscale is done.
+          This is the clip CapCut export ships, so it's required before export. */}
+      {video.upscaleStatus === 'completed' && (
+        <section className="bg-zinc-900 border border-amber-800/40 rounded p-4 mb-4">
+          <div className="flex items-baseline justify-between mb-2">
+            <h2 className="text-sm font-semibold text-zinc-300">
+              Плавность · интерполяция FPS (RIFE → 2×) <span className="text-amber-400/80 text-xs">обязательно перед экспортом</span>
+            </h2>
+            <InterpStatusBadge status={video.interpStatus} />
+          </div>
+
+          {(!video.interpStatus || video.interpStatus === 'cancelled') && (
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                onClick={startInterpolate}
+                disabled={interpBusy}
+                className="bg-amber-700 hover:bg-amber-600 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded"
+              >
+                {interpBusy ? '⏳ ставим в очередь…' : '🎞️ увеличить FPS (2×)'}
+              </button>
+              <span className="text-zinc-500 text-xs">
+                Прогонит FHD-клип через интерполяцию кадров и удвоит частоту кадров для плавного движения.
+              </span>
+              {interpError && <span className="text-red-400 text-xs">{interpError}</span>}
+            </div>
+          )}
+
+          {video.interpStatus === 'running' && (
+            <div className="text-blue-300 text-sm">⚙ Интерполяция идёт в ComfyUI…</div>
+          )}
+          {video.interpStatus === 'pending' && (
+            <div className="text-amber-300 text-sm">⏳ В очереди.</div>
+          )}
+          {video.interpStatus === 'failed' && (
+            <div className="space-y-2">
+              <div className="text-red-300 text-sm">
+                ✕ Не удалось: {video.interpErrorMessage ?? 'неизвестная ошибка'}
+              </div>
+              <button
+                onClick={startInterpolate}
+                disabled={interpBusy}
+                className="bg-zinc-700 hover:bg-zinc-600 disabled:opacity-30 text-white text-xs px-3 py-1 rounded"
+              >
+                ↻ повторить
+              </button>
+            </div>
+          )}
+          {video.interpStatus === 'completed' && video.interpFilename && (
+            <div className="space-y-2">
+              <video
+                src={api.videoSmoothFileUrl(video.id)}
+                controls
+                loop
+                className="w-full bg-black rounded"
+              />
+              <a
+                href={api.videoSmoothFileUrl(video.id)}
+                download
+                className="inline-block text-blue-400 hover:text-blue-300 text-xs"
+              >
+                ⬇ скачать плавный клип ({video.interpFilename})
+              </a>
+            </div>
+          )}
+        </section>
+      )}
+
       {video.status === 'pending' && (
         <div className="bg-amber-900/30 border border-amber-700/40 rounded p-4 text-amber-200 text-sm mb-4">
           ⏳ В очереди. ComfyUI запустит рендер как только освободится GPU.
@@ -289,5 +371,17 @@ function UpscaleStatusBadge({ status }: { status: VideoRender['upscaleStatus'] }
     failed:    { label: '✕ failed',    cls: 'text-red-300 bg-red-900/40' },
   };
   const m = map[status];
+  return <span className={`${m.cls} text-[11px] uppercase tracking-wider px-2 py-0.5 rounded`}>{m.label}</span>;
+}
+
+function InterpStatusBadge({ status }: { status: VideoRender['interpStatus'] }) {
+  if (!status || status === 'cancelled') return <span className="text-amber-500/70 text-[10px] uppercase tracking-wider">ещё не сделано</span>;
+  const map: Record<string, { label: string; cls: string }> = {
+    pending:   { label: '⏳ pending',       cls: 'text-amber-300 bg-amber-900/40' },
+    running:   { label: '⚙ interpolating', cls: 'text-blue-300 bg-blue-900/40' },
+    completed: { label: '✓ smooth ready',   cls: 'text-emerald-300 bg-emerald-900/40' },
+    failed:    { label: '✕ failed',         cls: 'text-red-300 bg-red-900/40' },
+  };
+  const m = map[status] ?? { label: status, cls: 'text-zinc-300 bg-zinc-800/40' };
   return <span className={`${m.cls} text-[11px] uppercase tracking-wider px-2 py-0.5 rounded`}>{m.label}</span>;
 }

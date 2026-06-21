@@ -255,7 +255,7 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
   markBeforeNav: (targetId?: string) => void;
 }) {
   const router            = useRouter();
-  const [busy,    setBusy]    = useState<false | 'one' | 'five' | 'video' | 'upscale'>(false);
+  const [busy,    setBusy]    = useState<false | 'one' | 'five' | 'video' | 'upscale' | 'interp'>(false);
   const [enqueueErr, setErr]  = useState<string | null>(null);
   const narrationText                  = (shot as { narrationText?: string | null }).narrationText ?? null;
   const approvedTTSJobId               = (shot as { approvedTTSJobId?: string | null }).approvedTTSJobId ?? null;
@@ -278,6 +278,13 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
                        ?? null;
   const fhdReady       = shot.chosenVideo?.upscaleStatus === 'completed'
                        && !!shot.chosenVideo?.upscaledFilename;
+  // FPS-interpolation state — the mandatory step after FHD. Surfaced once the
+  // upscale completed; its own badge + quick button mirror the upscale stage.
+  const interpStatus   = shot.pipelineInterp?.status
+                       ?? shot.chosenVideo?.interpStatus
+                       ?? null;
+  const interpReady    = shot.chosenVideo?.interpStatus === 'completed'
+                       && !!shot.chosenVideo?.interpFilename;
 
   const enqueue = async (n: number, tag: 'one' | 'five') => {
     setBusy(tag);
@@ -321,6 +328,20 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
     }
   };
 
+  const enqueueInterp = async () => {
+    if (!shot.chosenVideoId) return;
+    setBusy('interp');
+    setErr(null);
+    try {
+      await api.interpolateVideo(shot.chosenVideoId);
+      onEnqueued();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const stop = (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); };
 
   return (
@@ -329,6 +350,7 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
       onClick={() => { markBeforeNav(shot.id); router.push(`/projects/${projectId}/shots/${shot.id}`); }}
       className={`px-5 py-3 flex gap-4 text-sm hover:bg-zinc-800/30 transition items-start cursor-pointer ${
         queueStatus !== 'idle' || videoStatus || upscaleStatus === 'pending' || upscaleStatus === 'running'
+          || interpStatus === 'pending' || interpStatus === 'running'
           ? 'bg-amber-950/20'
           : ''
       }`}
@@ -436,6 +458,19 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
           {upscaleStatus === 'pending' && (
             <span className="text-amber-300 bg-amber-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⏳ FHD</span>
           )}
+          {interpStatus === 'running' && (
+            <span className="text-blue-300 bg-blue-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⚙ FPS</span>
+          )}
+          {interpStatus === 'pending' && (
+            <span className="text-amber-300 bg-amber-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⏳ FPS</span>
+          )}
+          {interpReady && (
+            <span className="text-emerald-300 bg-emerald-900/30 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">FPS ✓</span>
+          )}
+          {/* FHD done but interpolation still missing — flag the mandatory gap. */}
+          {fhdReady && !interpReady && interpStatus !== 'running' && interpStatus !== 'pending' && (
+            <span className="text-amber-400 bg-amber-900/30 border border-amber-800 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⏩ нужен FPS</span>
+          )}
           {shot.cameraFraming && (
             <span className="text-zinc-500 bg-zinc-800/60 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono">
               📷 {shot.cameraFraming}
@@ -469,15 +504,29 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
       <div onClick={stop} className="flex flex-col gap-1 flex-shrink-0">
 
         {videoApproved ? (
-          fhdReady || upscaleStatus === 'running' || upscaleStatus === 'pending' ? null : (
-            <button
-              onClick={(e) => { stop(e); enqueueUpscale(); }}
-              disabled={busy !== false}
-              title="Прогнать выбранное видео через 4x-UltraSharp → 1920×1080"
-              className="text-[11px] bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded whitespace-nowrap"
-            >
-              {busy === 'upscale' ? '⏳ FHD…' : '🔼 апскейл FHD'}
-            </button>
+          !fhdReady ? (
+            upscaleStatus === 'running' || upscaleStatus === 'pending' ? null : (
+              <button
+                onClick={(e) => { stop(e); enqueueUpscale(); }}
+                disabled={busy !== false}
+                title="Прогнать выбранное видео через 4x-UltraSharp → 1920×1080"
+                className="text-[11px] bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded whitespace-nowrap"
+              >
+                {busy === 'upscale' ? '⏳ FHD…' : '🔼 апскейл FHD'}
+              </button>
+            )
+          ) : (
+            // FHD ready → mandatory FPS interpolation stage.
+            interpReady || interpStatus === 'running' || interpStatus === 'pending' ? null : (
+              <button
+                onClick={(e) => { stop(e); enqueueInterp(); }}
+                disabled={busy !== false}
+                title="Увеличить FPS (интерполяция кадров) — обязательно перед экспортом в CapCut"
+                className="text-[11px] bg-amber-700 hover:bg-amber-600 disabled:opacity-30 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded whitespace-nowrap"
+              >
+                {busy === 'interp' ? '⏳ FPS…' : '⏩ увеличить FPS'}
+              </button>
+            )
           )
         ) : photoApproved ? (
           <button

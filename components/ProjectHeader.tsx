@@ -9,6 +9,7 @@ const TABS = [
   { key: 'characters', label: 'Состав' },
   { key: 'scenes',     label: 'Сцены' },
   { key: 'locations',  label: 'Локации' },
+  { key: 'props',      label: 'Предметы' },
   { key: 'bgm',        label: 'Музыка' },
   { key: 'settings',   label: 'Настройки' },
 ];

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, CapcutReadiness, ScenesResponse, DashboardResponse } from '../lib/api';
+import { api, CapcutReadiness, ScenesResponse, DashboardResponse, ProjectFull } from '../lib/api';
 
 type Stats = Awaited<ReturnType<typeof api.getProjectStats>>;
 
@@ -11,6 +11,7 @@ export function ProjectOverview({ id }: { id: string }) {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [readiness, setReadiness] = useState<CapcutReadiness   | null>(null);
   const [stats,     setStats]     = useState<Stats             | null>(null);
+  const [project,   setProject]   = useState<ProjectFull       | null>(null);
   const [error,     setError]     = useState<string | null>(null);
 
   const refreshReadiness = () => {
@@ -20,16 +21,18 @@ export function ProjectOverview({ id }: { id: string }) {
   useEffect(() => {
     (async () => {
       try {
-        const [s, d, r, st] = await Promise.all([
+        const [s, d, r, st, pr] = await Promise.all([
           api.listScenes(id),
           api.dashboard(id),
           api.capcutReadiness(id).catch(() => null),
           api.getProjectStats(id).catch(() => null),
+          api.getProject(id).catch(() => null),
         ]);
         setScenes(s);
         setDashboard(d);
         setReadiness(r);
         setStats(st);
+        setProject(pr);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -58,6 +61,12 @@ export function ProjectOverview({ id }: { id: string }) {
           onAfterExport={refreshReadiness}
         />
       </div>
+
+      <PublishCard
+        projectId={id}
+        initialUrl={project?.youtubeUrl ?? null}
+        onChange={(url) => setProject((p) => (p ? { ...p, youtubeUrl: url } : p))}
+      />
 
       <section>
         <h2 className="text-sm uppercase tracking-wider text-zinc-500 mb-3">Статистика пайплайна</h2>
@@ -100,6 +109,107 @@ export function ProjectOverview({ id }: { id: string }) {
         )}
       </section>
     </main>
+  );
+}
+
+/**
+ * "Project done" control. Paste the published YouTube URL → the project is
+ * marked finished and /actions stops surfacing pipeline gates for it. Shows the
+ * live link + a "снять отметку" when set, an input + "пометить готовым" when not.
+ */
+function PublishCard({
+  projectId, initialUrl, onChange,
+}: {
+  projectId: string;
+  initialUrl: string | null;
+  onChange: (url: string | null) => void;
+}) {
+  const [url,   setUrl]   = useState(initialUrl ?? '');
+  const [busy,  setBusy]  = useState(false);
+  const [err,   setErr]   = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+
+  // Keep the input in sync if the parent reloads the project.
+  useEffect(() => { setUrl(initialUrl ?? ''); setEditing(false); }, [initialUrl]);
+
+  const save = async (value: string) => {
+    setBusy(true); setErr(null);
+    try {
+      const updated = await api.updateProject(projectId, { youtubeUrl: value });
+      onChange(updated.youtubeUrl ?? null);
+      setEditing(false);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const published = !!initialUrl && !editing;
+
+  return (
+    <section className={`rounded-lg border p-4 mb-6 ${published ? 'border-emerald-700/60 bg-emerald-950/20' : 'border-zinc-800 bg-zinc-900'}`}>
+      {published ? (
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-emerald-300 text-sm font-semibold">✅ Проект готов — видео опубликовано</span>
+          <a
+            href={initialUrl!}
+            target="_blank"
+            rel="noreferrer"
+            className="text-blue-400 hover:text-blue-300 text-sm font-mono break-all underline"
+          >
+            {initialUrl}
+          </a>
+          <span className="text-zinc-500 text-xs">/actions больше не требует действий по этому проекту.</span>
+          <button
+            onClick={() => setEditing(true)}
+            className="ml-auto text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1 rounded"
+          >
+            ✎ изменить
+          </button>
+          <button
+            onClick={() => save('')}
+            disabled={busy}
+            className="text-xs bg-amber-900/70 hover:bg-amber-700 disabled:opacity-30 text-white px-3 py-1 rounded"
+          >
+            {busy ? '⏳…' : '↩ снять отметку'}
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="text-sm font-semibold text-zinc-300">Ссылка на готовое видео (YouTube)</div>
+          <div className="text-zinc-500 text-xs">
+            Вставь ссылку на опубликованный ролик — проект пометится готовым, и в /actions перестанут
+            требоваться доп. действия (рендер / FHD / увеличение FPS / озвучка).
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://youtu.be/…"
+              className="flex-1 min-w-[260px] bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-200 font-mono focus:outline-none focus:border-emerald-600"
+            />
+            <button
+              onClick={() => save(url)}
+              disabled={busy || !url.trim()}
+              className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded whitespace-nowrap"
+            >
+              {busy ? '⏳…' : '✓ пометить готовым'}
+            </button>
+            {initialUrl && (
+              <button
+                onClick={() => { setEditing(false); setUrl(initialUrl); }}
+                className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-2 rounded"
+              >
+                отмена
+              </button>
+            )}
+          </div>
+          {err && <div className="text-red-400 text-xs">{err}</div>}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -173,6 +283,8 @@ function ExportCapcutButton({
   const reasonLabel = (r: string) => ({
     no_chosen_video:  'нет утверждённого видео',
     no_upscale:       'нет FHD-апскейла',
+    no_interp:        'нет интерполяции FPS',
+    no_chosen_render: 'нет утверждённого кадра',
     no_shots:         'в сцене нет кадров',
   } as Record<string, string>)[r] ?? r;
 

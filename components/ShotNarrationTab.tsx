@@ -40,8 +40,9 @@ export function ShotNarrationTab() {
   const [front,          setFront]          = useState<boolean>(false);    // checked = jump to front of TTS queue (default off)
   const [jobs,           setJobs]           = useState<TTSJob[] | null>(null);
   const [historyOpen,    setHistoryOpen]    = useState<boolean>(true);  // история открыта по умолчанию
-  const [busy,           setBusy]           = useState<false | 'save' | 'render' | 'approve' | 'delete'>(false);
+  const [busy,           setBusy]           = useState<false | 'save' | 'render' | 'approve' | 'delete' | 'trim'>(false);
   const [err,            setErr]            = useState<string | null>(null);
+  const [notice,         setNotice]         = useState<string | null>(null);
 
   // Load project (for engine) + emotion refs once per projectId.
   useEffect(() => {
@@ -140,11 +141,38 @@ export function ShotNarrationTab() {
     finally   { setBusy(false); }
   };
 
+  // Trim the leading "понь" reference-bleed artifact (reversible). A clean
+  // render with no artifact is reported back untouched.
+  const trimArtifact = async (jobId: string) => {
+    setBusy('trim'); setErr(null); setNotice(null);
+    try {
+      const r = await api.trimTTSArtifact(jobId);
+      setNotice(r.trimmed
+        ? `«Понь» обрезан (−${r.cutMs ?? '?'} мс).`
+        : `«Понь» не найден — файл не тронут${r.reason ? ` (${r.reason})` : ''}.`);
+      refreshJobs();
+    } catch (e) { setErr(asMessage(e)); }
+    finally   { setBusy(false); }
+  };
+
+  const revertArtifact = async (jobId: string) => {
+    setBusy('trim'); setErr(null); setNotice(null);
+    try { await api.revertTTSArtifact(jobId); setNotice('Оригинал восстановлен.'); refreshJobs(); }
+    catch (e) { setErr(asMessage(e)); }
+    finally   { setBusy(false); }
+  };
+
   return (
     <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto space-y-4">
       {err && (
         <div className="bg-red-900/40 border border-red-700 rounded p-3 text-red-200 text-xs font-mono whitespace-pre-wrap break-all">
           {err}
+        </div>
+      )}
+      {notice && (
+        <div className="bg-zinc-800/60 border border-zinc-600 rounded p-2 text-zinc-200 text-xs flex items-center justify-between gap-2">
+          <span>{notice}</span>
+          <button onClick={() => setNotice(null)} className="text-zinc-500 hover:text-zinc-200">✕</button>
         </div>
       )}
 
@@ -326,6 +354,21 @@ export function ShotNarrationTab() {
                         className="text-[10px] text-zinc-500 hover:text-red-300"
                         title="Снять выбор">снять</button>
                     </span>
+                  )}
+                  {/* «понь»-обрезка доступна ТОЛЬКО на утверждённой озвучке */}
+                  {j.status === 'completed' && isApproved && !j.trimmedArtifact && (
+                    <button onClick={() => trimArtifact(j.id)} disabled={busy !== false}
+                      title="Обрезать ведущий артефакт «понь» (обратимо)"
+                      className="text-[11px] bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded disabled:opacity-30">
+                      ✂ понь
+                    </button>
+                  )}
+                  {j.status === 'completed' && isApproved && j.trimmedArtifact && (
+                    <button onClick={() => revertArtifact(j.id)} disabled={busy !== false}
+                      title="Вернуть оригинал (отменить обрезку «понь»)"
+                      className="text-[11px] bg-amber-800 hover:bg-amber-700 text-white px-2 py-0.5 rounded disabled:opacity-30">
+                      ↩ вернуть
+                    </button>
                   )}
                   <button onClick={() => deleteJob(j.id)}
                     disabled={busy !== false || j.status === 'running'}

@@ -156,6 +156,7 @@ function typeBadge(t: string): string {
   if (t === 'scene')         return 'bg-amber-950/40  text-amber-300  border-amber-900';
   if (t === 'video')         return 'bg-rose-950/40   text-rose-300   border-rose-900';
   if (t === 'video_upscale') return 'bg-pink-950/40   text-pink-300   border-pink-900';
+  if (t === 'video_interp')  return 'bg-orange-950/40 text-orange-300 border-orange-900';
   if (t === 'tts')           return 'bg-cyan-950/40   text-cyan-300   border-cyan-900';
   return                            'bg-emerald-950/40 text-emerald-300 border-emerald-900';
 }

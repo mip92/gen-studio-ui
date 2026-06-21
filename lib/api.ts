@@ -177,6 +177,18 @@ export interface Location {
   updatedAt?:  string;
 }
 
+/** Object anchor — a key story prop (separate from characters). */
+export interface Prop {
+  id:          string;
+  projectId:   string;
+  code:        string;
+  name:        string;
+  description: string;
+  anchorPath?: string | null;
+  createdAt?:  string;
+  updatedAt?:  string;
+}
+
 export interface ShotFull {
   id:                  string;
   projectId:           string;
@@ -301,6 +313,9 @@ export interface ProjectFull extends ProjectListItem {
   ttsVoiceoverId?:           string | null;
   /** Visual style id — see ProjectListItem.visualStyle. */
   visualStyle?:              string;
+  /** Published YouTube URL of the finished video. When set the project is DONE
+   *  and /actions hides all pipeline gates for it. Null = still in production. */
+  youtubeUrl?:               string | null;
   createdAt?:                string;
   updatedAt?:                string;
 }
@@ -355,6 +370,9 @@ export interface UpdateProjectBody {
    * { styleLora: { name } } for the per-project comic style-LoRA override.
    */
   settings?:                   Record<string, unknown>;
+  /** Published YouTube URL of the finished video. Non-empty marks the project
+   *  DONE (hides /actions gates); empty string clears it (back to production). */
+  youtubeUrl?:                 string;
 }
 
 /** One graphic-novel style LoRA on disk (GET /projects/style-loras). */
@@ -402,11 +420,15 @@ export interface SceneShot {
     outputFilename:   string | null;
     upscaleStatus:    'pending' | 'running' | 'completed' | 'failed' | null;
     upscaledFilename: string | null;
+    interpStatus?:    'pending' | 'running' | 'completed' | 'failed' | null;
+    interpFilename?:  string | null;
   } | null;
   /** Oldest pending|running video render — used to badge "⚙ video" in the row. */
   pipelineVideo:   { id: string; status: string; queuedAt: string } | null;
   /** Pending|running upscale on the chosen video, if any. */
   pipelineUpscale: { id: string; status: string } | null;
+  /** Pending|running FPS interpolation on the chosen video, if any. */
+  pipelineInterp?: { id: string; status: string } | null;
 
   // ── Per-shot narration (new in 2026-05) ───────────────────────────────────
   /** ~5s Russian voiceover text for this shot. Per-shot TTS replaces the
@@ -444,7 +466,7 @@ export interface SceneSummary {
   shots:           SceneShot[];
 }
 
-export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale' | 'tts' | 'bgm' | 'anchor';
+export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale' | 'video_interp' | 'tts' | 'bgm' | 'anchor';
 
 /** Wire format from /pipeline/queue rows. Backend pairs slug + UUID so
  *  Link-builders can always go straight to the canonical /projects/<uuid>/
@@ -862,6 +884,39 @@ export const api = {
       { method: 'PATCH', body: JSON.stringify({ locationId }) },
     ),
 
+  // Props — project-scoped OBJECT anchors, separate from characters. A prop is the
+  // reusable description of a key story object (token, scarf, thermos, tiles…). On a
+  // prop-hero shot the renderer makes the object dominate the frame so it actually
+  // gets drawn instead of "just a room".
+  listProps: (projectId: string) =>
+    http<Prop[]>(`/projects/${projectId}/props`),
+
+  getProp: (propId: string) =>
+    http<Prop>(`/props/${propId}`),
+
+  createProp: (projectId: string, body: { code: string; name: string; description: string }) =>
+    http<Prop>(`/projects/${projectId}/props`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  updateProp: (propId: string, body: { code?: string; name?: string; description?: string }) =>
+    http<Prop>(`/props/${propId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  deleteProp: (propId: string) =>
+    http<{ id: string; deleted: boolean }>(`/props/${propId}`, {
+      method: 'DELETE',
+    }),
+
+  assignShotProp: (shotId: string, propId: string | null) =>
+    http<{ id: string; shotCode: string; propId: string | null }>(
+      `/shots/${shotId}/prop`,
+      { method: 'PATCH', body: JSON.stringify({ propId }) },
+    ),
+
   // Pipeline timing + waste statistics for the Overview page.
   getProjectStats: (idOrSlug: string) =>
     http<{
@@ -1016,8 +1071,19 @@ export const api = {
   videoFhdFileUrl: (videoId: string) =>
     `${MEDIA_BASE}/generation/videos/${videoId}/file-fhd`,
 
+  videoSmoothFileUrl: (videoId: string) =>
+    `${MEDIA_BASE}/generation/videos/${videoId}/file-smooth`,
+
   upscaleVideo: (videoId: string) =>
     http<VideoRender>(`/generation/videos/${videoId}/upscale`, { method: 'POST' }),
+
+  /** Queue the mandatory FPS interpolation (RIFE/FILM → 2× framerate) on the
+   *  upscaled clip. Backend rejects with 400 if the upscale isn't completed. */
+  interpolateVideo: (videoId: string, multiplier?: number) =>
+    http<VideoRender>(`/generation/videos/${videoId}/interpolate`, {
+      method: 'POST',
+      body:   JSON.stringify(multiplier ? { multiplier } : {}),
+    }),
 
   deleteVideo: (videoId: string) =>
     http<{ deleted: true; id: string }>(`/generation/videos/${videoId}`, { method: 'DELETE' }),
@@ -1074,6 +1140,17 @@ export const api = {
   /** Hard-delete a TTS job (DB row + .wav on disk). Refuses if status='running'. */
   deleteTTSJob: (jobId: string) =>
     http<{ deleted: true; id: string }>(`/tts/jobs/${jobId}`, { method: 'DELETE' }),
+
+  /** Trim the leading "понь" reference-bleed artifact off a completed narration.
+   *  Reversible (original backed up). trimmed:false means no artifact was found. */
+  trimTTSArtifact: (jobId: string) =>
+    http<{ trimmed: boolean; reason?: string; cutMs?: number; durationMs?: number | null }>(
+      `/tts/jobs/${jobId}/trim-artifact`, { method: 'POST' }),
+
+  /** Undo trimTTSArtifact — restore the narration wav from its pre-trim backup. */
+  revertTTSArtifact: (jobId: string) =>
+    http<{ reverted: boolean; durationMs?: number | null }>(
+      `/tts/jobs/${jobId}/trim-artifact/revert`, { method: 'POST' }),
 
   /** Bulk-purge failed + cancelled jobs for a scene. */
   purgeFailedTTSJobs: (sceneId: string) =>
@@ -1410,7 +1487,7 @@ export interface CapcutReadiness {
   missingShots:  Array<{
     shotCode: string;
     shotId:   string;
-    reason:   'no_chosen_video' | 'no_upscale';
+    reason:   'no_chosen_video' | 'no_upscale' | 'no_interp' | 'no_chosen_render';
   }>;
   missingScenes: Array<{
     sceneKey: string;
@@ -1438,6 +1515,9 @@ export interface TTSJob {
   queuedAt:       string;
   startedAt:      string | null;
   completedAt:    string | null;
+  /** Shot-job listings only: true when the leading "понь" artifact has been
+   *  trimmed (a pre-trim backup exists) — i.e. the trim is revertable. */
+  trimmedArtifact?: boolean;
 }
 
 export interface VideoRender {
@@ -1461,6 +1541,16 @@ export interface VideoRender {
   upscaleStartedAt:     string | null;
   upscaleCompletedAt:   string | null;
   upscaleErrorMessage:  string | null;
+  // FPS interpolation (RIFE/FILM → 2× framerate). MANDATORY step after upscale;
+  // the smoothed clip is what CapCut export ships. Only queueable once
+  // upscaleStatus='completed'.
+  interpStatus:         'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | null;
+  interpFilename:       string | null;
+  interpPromptId:       string | null;
+  interpMultiplier:     number | null;
+  interpStartedAt:      string | null;
+  interpCompletedAt:    string | null;
+  interpErrorMessage:   string | null;
 }
 
 // ── BGM (ACE-Step background music) ──────────────────────────────────────
@@ -1507,6 +1597,7 @@ export type ActionGateKey =
   | 'create_video'
   | 'approve_video'
   | 'upscale_video'
+  | 'interpolate_video'
   | 'render_tts'
   | 'approve_tts'
   | 'approve_bgm';

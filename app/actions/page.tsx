@@ -17,9 +17,10 @@ const GATE_LABELS: Record<ActionGateKey, { num: number; ru: string }> = {
   create_video:          { num: 6,  ru: 'Создать видео' },
   approve_video:         { num: 7,  ru: 'Утвердить видео' },
   upscale_video:         { num: 8,  ru: 'Апскейл видео' },
-  render_tts:            { num: 9,  ru: 'Озвучить — нет голоса' },
-  approve_tts:           { num: 10, ru: 'Утвердить закадровый голос' },
-  approve_bgm:           { num: 11, ru: 'Утвердить фоновую музыку' },
+  interpolate_video:     { num: 9,  ru: 'Увеличить FPS (обязательно)' },
+  render_tts:            { num: 10, ru: 'Озвучить — нет голоса' },
+  approve_tts:           { num: 11, ru: 'Утвердить закадровый голос' },
+  approve_bgm:           { num: 12, ru: 'Утвердить фоновую музыку' },
 };
 
 // Gate order on the page — characters first (anchor for cartoon OR 1-3 for
@@ -34,6 +35,7 @@ const GATE_ORDER: ActionGateKey[] = [
   'create_video',
   'approve_video',
   'upscale_video',
+  'interpolate_video',
   'render_tts',
   'approve_tts',
   'approve_bgm',
