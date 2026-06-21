@@ -19,10 +19,11 @@ import {
   QueueSortField,
   ProjectListItem,
 } from '../lib/api';
+import { HeaderCell, MultiSelect, MultiSelectLabeled } from './table/TableControls';
 
 const POLL_MS = 3000;
 
-const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_upscale', 'tts', 'bgm', 'anchor'];
+const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_upscale', 'video_interp', 'tts', 'bgm', 'anchor'];
 const ALL_STATUSES = [
   'pending', 'blocked',
   'preparing', 'captioning', 'training', 'running',
@@ -431,165 +432,6 @@ export default function QueueTable({
   );
 }
 
-// ── Header cell with built-in sort toggle + optional filter dropdown ─────────
-
-function HeaderCell({ label, column, filter }: {
-  label:   string;
-  column:  { getCanSort: () => boolean; getIsSorted: () => false | 'asc' | 'desc'; toggleSorting: (desc?: boolean) => void };
-  filter?: React.ReactNode;
-}) {
-  const sorted = column.getIsSorted();
-  return (
-    <div className="flex flex-col gap-1">
-      <button
-        onClick={() => column.toggleSorting(sorted === 'asc')}
-        disabled={!column.getCanSort()}
-        className="flex items-center gap-1 text-left hover:text-zinc-200 disabled:hover:text-inherit disabled:cursor-default"
-      >
-        <span className={sorted ? 'text-zinc-100' : ''}>{label}</span>
-        {sorted && <span className="text-emerald-400">{sorted === 'asc' ? '↑' : '↓'}</span>}
-      </button>
-      {filter}
-    </div>
-  );
-}
-
-// ── Multi-select dropdown for column filters ─────────────────────────────────
-
-function MultiSelect({ options, value, onChange }: {
-  options:  readonly string[];
-  value:    string[];
-  onChange: (next: string[]) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
-
-  const toggle = (opt: string) => {
-    const set = new Set(value);
-    if (set.has(opt)) set.delete(opt); else set.add(opt);
-    onChange([...set]);
-  };
-
-  const label = value.length === 0 ? 'all' : `${value.length} selected`;
-
-  return (
-    <div ref={wrapRef} className="relative inline-block">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className={`text-[10px] normal-case font-normal px-2 py-0.5 rounded border transition-colors ${
-          value.length > 0
-            ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200'
-            : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'
-        }`}
-      >
-        {label} <span className="opacity-60">▾</span>
-      </button>
-      {open && (
-        <div className="absolute z-10 mt-1 left-0 min-w-[140px] bg-zinc-900 border border-zinc-700 rounded shadow-lg py-1">
-          {value.length > 0 && (
-            <button
-              type="button"
-              onClick={() => onChange([])}
-              className="block w-full text-left px-3 py-1 text-[11px] text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800"
-            >
-              clear
-            </button>
-          )}
-          {options.map((opt) => (
-            <label key={opt} className="flex items-center gap-2 px-3 py-1 text-[11px] text-zinc-300 hover:bg-zinc-800 cursor-pointer">
-              <input type="checkbox" checked={value.includes(opt)} onChange={() => toggle(opt)}
-                     className="accent-emerald-500" />
-              {opt}
-            </label>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Multi-select where the visible label differs from the stored value — e.g.
- *  Project filter shows project names but sends slugs to the backend. */
-function MultiSelectLabeled({ options, value, onChange }: {
-  options:  { value: string; label: string }[];
-  value:    string[];
-  onChange: (next: string[]) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
-
-  const toggle = (val: string) => {
-    const set = new Set(value);
-    if (set.has(val)) set.delete(val); else set.add(val);
-    onChange([...set]);
-  };
-
-  const buttonLabel = value.length === 0
-    ? 'all'
-    : value.length === 1
-      ? (options.find((o) => o.value === value[0])?.label ?? value[0])
-      : `${value.length} selected`;
-
-  return (
-    <div ref={wrapRef} className="relative inline-block">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className={`text-[10px] normal-case font-normal px-2 py-0.5 rounded border transition-colors max-w-[140px] truncate ${
-          value.length > 0
-            ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200'
-            : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'
-        }`}
-        title={buttonLabel}
-      >
-        {buttonLabel} <span className="opacity-60">▾</span>
-      </button>
-      {open && (
-        <div className="absolute z-10 mt-1 left-0 min-w-[180px] bg-zinc-900 border border-zinc-700 rounded shadow-lg py-1 max-h-[300px] overflow-y-auto">
-          {options.length === 0 && (
-            <div className="px-3 py-1 text-[11px] text-zinc-600 italic">no options</div>
-          )}
-          {value.length > 0 && (
-            <button
-              type="button"
-              onClick={() => onChange([])}
-              className="block w-full text-left px-3 py-1 text-[11px] text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800"
-            >
-              clear
-            </button>
-          )}
-          {options.map((opt) => (
-            <label key={opt.value} className="flex items-center gap-2 px-3 py-1 text-[11px] text-zinc-300 hover:bg-zinc-800 cursor-pointer">
-              <input type="checkbox" checked={value.includes(opt.value)} onChange={() => toggle(opt.value)}
-                     className="accent-emerald-500" />
-              <span className="truncate">{opt.label}</span>
-            </label>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function renderRowTargets(row: QueueRow, pl?: ProjectLinks, projectId?: string): React.ReactNode {
   const cls = 'underline-offset-2 hover:underline hover:text-white';
 
@@ -602,12 +444,12 @@ function renderRowTargets(row: QueueRow, pl?: ProjectLinks, projectId?: string):
   // (scene render / video / video_upscale / shot-level TTS); the projectLinks
   // map lookup is the legacy fallback.
   const fallbackShotId = (() => {
-    const lookupCode = row.profileCode.replace(/\s*↑FHD\s*$/, '');
+    const lookupCode = row.profileCode.replace(/\s*↑FHD\s*$/, '').replace(/\s*⏩FPS\s*$/, '');
     return pl?.shots.get(lookupCode)?.shotId ?? null;
   })();
   const shotId  = row.shotId ?? fallbackShotId;
   const sceneInfo = (() => {
-    const lookupCode = row.profileCode.replace(/\s*↑FHD\s*$/, '');
+    const lookupCode = row.profileCode.replace(/\s*↑FHD\s*$/, '').replace(/\s*⏩FPS\s*$/, '');
     return pl?.shots.get(lookupCode) ?? null;
   })();
 
@@ -620,11 +462,12 @@ function renderRowTargets(row: QueueRow, pl?: ProjectLinks, projectId?: string):
     if (type === 'scene')         return `/projects/${projSeg}/shots/${shotId}/render`;
     if (type === 'video')         return `/projects/${projSeg}/shots/${shotId}/videos`;
     if (type === 'video_upscale') return `/projects/${projSeg}/shots/${shotId}/videos`;
+    if (type === 'video_interp')  return `/projects/${projSeg}/shots/${shotId}/videos`;
     if (type === 'tts')           return `/projects/${projSeg}/shots/${shotId}/narration`;
     return null;
   }
 
-  if (row.type === 'scene' || row.type === 'video' || row.type === 'video_upscale') {
+  if (row.type === 'scene' || row.type === 'video' || row.type === 'video_upscale' || row.type === 'video_interp') {
     const sceneHref = sceneInfo ? `/projects/${projSeg}/scenes#${sceneInfo.sceneKey}` : null;
     const shotHref  = shotTabHrefFor(row.type);
     const sceneNode = sceneHref
@@ -709,6 +552,7 @@ function typeBadge(t: QueueJobType): string {
   if (t === 'scene')         return 'bg-amber-950/40  text-amber-300  border-amber-900';
   if (t === 'video')         return 'bg-rose-950/40   text-rose-300   border-rose-900';
   if (t === 'video_upscale') return 'bg-pink-950/40   text-pink-300   border-pink-900';
+  if (t === 'video_interp')  return 'bg-orange-950/40 text-orange-300 border-orange-900';
   if (t === 'tts')           return 'bg-cyan-950/40   text-cyan-300   border-cyan-900';
   if (t === 'anchor')        return 'bg-fuchsia-950/40 text-fuchsia-300 border-fuchsia-900';
   return                            'bg-emerald-950/40 text-emerald-300 border-emerald-900';  // bgm
