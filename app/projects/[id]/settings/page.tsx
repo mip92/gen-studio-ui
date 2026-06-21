@@ -248,6 +248,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
         projectId={project.id}
         initialEngine={project.ttsEngine ?? null}
         initialVoiceRefPath={project.ttsVoiceRefPath ?? null}
+        initialVoiceoverId={project.ttsVoiceoverId ?? null}
         onProjectUpdated={(p) => setProject((prev) => prev ? { ...prev, ...p } : prev)}
       />
     </main>

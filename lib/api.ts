@@ -294,8 +294,11 @@ export interface ProjectFull extends ProjectListItem {
   safetyTier?:               string | null;
   /** 'silero' | 'indextts2'; null = treated as 'silero'. */
   ttsEngine?:                string | null;
-  /** Project-relative path to the voice reference wav (indextts2 only). */
+  /** Project-relative path to the voice reference wav (mirror of the assigned
+   *  voiceover's shared path; voice-clone engines only). */
   ttsVoiceRefPath?:          string | null;
+  /** FK to the assigned shared Voiceover (закадровая озвучка), or null. */
+  ttsVoiceoverId?:           string | null;
   /** Visual style id — see ProjectListItem.visualStyle. */
   visualStyle?:              string;
   createdAt?:                string;
@@ -310,6 +313,32 @@ export interface ProjectTTSEmotionRef {
   name:      string;
   filePath:  string;
   createdAt: string;
+}
+
+/** A shared, reusable voice-clone reference (закадровая озвучка). Stored once
+ *  in the library and assigned to any number of projects. */
+/** A project this voice is assigned to (compact form for the voices table/detail). */
+export interface VoiceoverProjectRef {
+  id:   string;
+  slug: string;
+  name: string;
+}
+
+export interface Voiceover {
+  id:            string;
+  slug:          string;
+  name:          string;
+  filePath:      string;
+  ext:           string;
+  bytes:         number;
+  checksum:      string;
+  /** Optional provenance link (e.g. the YouTube clip the ref was taken from). */
+  sourceUrl:     string | null;
+  /** How many projects currently reference this voice. */
+  assignedCount: number;
+  /** The projects that reference this voice. */
+  projects:      VoiceoverProjectRef[];
+  createdAt:     string;
 }
 
 export interface UpdateProjectBody {
@@ -1193,6 +1222,9 @@ export const api = {
       },
     ),
 
+  /** Upload a NEW clip: lands it in the shared library (dedup by md5) AND
+   *  assigns it to this project. To reuse an existing voice, call
+   *  assignProjectVoiceover instead — no upload. */
   uploadProjectVoiceRef: async (projectId: string, file: File) => {
     const fd = new FormData();
     fd.append('file', file);
@@ -1201,11 +1233,55 @@ export const api = {
       body:   fd,
     });
     if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 300)}`);
-    return res.json() as Promise<{ ok: true; path: string; bytes: number }>;
+    return res.json() as Promise<{ ok: true; path: string; bytes: number; voiceoverId: string }>;
   },
 
+  /** Assign an existing library voiceover to a project (or unassign with null). */
+  assignProjectVoiceover: (projectId: string, voiceoverId: string | null) =>
+    http<{ id: string; slug: string; ttsEngine: string | null; ttsVoiceRefPath: string | null; ttsVoiceoverId: string | null }>(
+      `/projects/${projectId}/tts/voiceover`, {
+        method: 'PUT',
+        body:   JSON.stringify({ voiceoverId }),
+      },
+    ),
+
+  /** Unassign the project's voice (keeps the shared library file intact). */
   deleteProjectVoiceRef: (projectId: string) =>
-    http<{ ok: true }>(`/projects/${projectId}/tts/voice-reference`, { method: 'DELETE' }),
+    http<{ id: string; ttsVoiceRefPath: string | null; ttsVoiceoverId: string | null }>(
+      `/projects/${projectId}/tts/voice-reference`, { method: 'DELETE' }),
+
+  // ── Voiceover library (shared закадровая озвучка) ──────────────────────────
+
+  listVoiceovers: () => http<Voiceover[]>(`/voiceovers`),
+
+  /** One voiceover with the projects it's assigned to (detail page). */
+  getVoiceover: (id: string) => http<Voiceover>(`/voiceovers/${id}`),
+
+  /** Add a clip to the library directly (dedup by md5). */
+  createVoiceover: async (file: File, opts?: { name?: string; slug?: string; sourceUrl?: string }) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    if (opts?.name)      fd.append('name', opts.name);
+    if (opts?.slug)      fd.append('slug', opts.slug);
+    if (opts?.sourceUrl) fd.append('sourceUrl', opts.sourceUrl);
+    const res = await fetch(`${API_BASE}/voiceovers`, { method: 'POST', body: fd });
+    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 300)}`);
+    return res.json() as Promise<Voiceover>;
+  },
+
+  /** Edit a voiceover's label / slug / source link. sourceUrl='' clears it. */
+  renameVoiceover: (id: string, body: { name?: string; slug?: string; sourceUrl?: string | null }) =>
+    http<Voiceover>(`/voiceovers/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  /** Set the EXACT list of projects assigned to this voice (bidirectional assign). */
+  setVoiceoverProjects: (id: string, projectIds: string[]) =>
+    http<Voiceover>(`/voiceovers/${id}/projects`, { method: 'PUT', body: JSON.stringify({ projectIds }) }),
+
+  deleteVoiceover: (id: string, force = false) =>
+    http<{ ok: true }>(`/voiceovers/${id}${force ? '?force=true' : ''}`, { method: 'DELETE' }),
+
+  /** Absolute URL to stream a voiceover clip for an <audio> preview. */
+  voiceoverRawUrl: (id: string) => `${API_BASE}/voiceovers/${id}/raw`,
 
   listProjectEmotionRefs: (projectId: string) =>
     http<ProjectTTSEmotionRef[]>(`/projects/${projectId}/tts/emotion-refs`),

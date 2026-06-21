@@ -57,6 +57,7 @@ export function SidebarNavContent({ onNavigate }: { onNavigate?: () => void }) {
           <NavLink href="/"           label="Overview"   active={pathname === '/'} onNavigate={onNavigate} />
           <NavLink href="/projects"   label="Projects"   active={pathname === '/projects'} onNavigate={onNavigate} />
           <NavLink href="/characters" label="Персонажи"  active={pathname.startsWith('/characters')} onNavigate={onNavigate} />
+          <NavLink href="/voices"     label="Озвучка"    active={pathname.startsWith('/voices')} onNavigate={onNavigate} />
           <NavLink href="/actions"    label="Действия"   active={pathname.startsWith('/actions')} onNavigate={onNavigate} />
         </Section>
 

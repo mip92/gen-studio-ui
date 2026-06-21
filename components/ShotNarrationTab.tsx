@@ -35,7 +35,7 @@ export function ShotNarrationTab() {
   const [text,           setText]           = useState(initialText);
   const [voice,          setVoice]          = useState<TTSVoice>('baya');  // ж голос дефолтом — narrator is female
   const [emotionRefName, setEmotionRefName] = useState<string>('');        // '' = neutral (just the voice ref)
-  const [speed,          setSpeed]          = useState<number>(0.95);      // f5 only → TTSJob.rate (f5 default — slightly slowed)
+  const [speed,          setSpeed]          = useState<number>(0.85);      // f5 only → TTSJob.rate (default 0.85 — slowed, user request 2026-06-18)
   const [pause,          setPause]          = useState<number>(1);         // f5 only → sentencePauseSec (f5 default — 1s between sentences)
   const [front,          setFront]          = useState<boolean>(false);    // checked = jump to front of TTS queue (default off)
   const [jobs,           setJobs]           = useState<TTSJob[] | null>(null);
