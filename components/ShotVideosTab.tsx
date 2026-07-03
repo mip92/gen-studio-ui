@@ -7,15 +7,46 @@ import { useShotCtx } from './ShotPageShell';
 import { useScrollRestore } from '../lib/useScrollRestore';
 
 export function ShotVideosTab() {
-  const { shot, projectId, shotId, reload } = useShotCtx();
+  const { shot, setShot, projectId, shotId, reload } = useShotCtx();
   const markBeforeNav = useScrollRestore(`videos-grid:${shotId}`);
 
-  const [motionPrompt, setMotionPrompt] = useState('');
+  // Pre-fill from the shot's baked motion direction in the DB
+  // (promptFields.motionPrompt) so what's stored is visible & editable — the
+  // backend already falls back to it at render time, but the user couldn't see
+  // it before. Re-sync only when navigating to a different shot so we never
+  // clobber what the user is typing for the current one.
+  const [motionPrompt, setMotionPrompt] = useState(shot.promptFields?.motionPrompt ?? '');
+  useEffect(() => { setMotionPrompt(shot.promptFields?.motionPrompt ?? ''); }, [shotId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [count, setCount]               = useState(1);
-  const [mode, setMode]                 = useState<'auto' | 'fast' | 'cfg'>('fast');
+  // Default = fast (4-step, no negative influence). cfg/auto are ~5× slower, so
+  // they're an explicit opt-in — picking the slow path by default made routine
+  // video renders crawl.
+  const [mode, setMode]                 = useState<'fast' | 'cfg'>('fast');
   const [videos, setVideos]             = useState<VideoRender[] | null>(null);
   const [busy, setBusy]                 = useState<false | 'start'>(false);
   const [error, setError]               = useState<string | null>(null);
+  const [savingPrompt, setSavingPrompt] = useState(false);
+  const [savedTick, setSavedTick]       = useState(false);
+
+  // The stored, persistent motion prompt of the shot (promptFields.motionPrompt).
+  // The textarea is a per-render override that pre-fills from it; "save as shot
+  // prompt" persists the current text back so it's reused by every future render.
+  const storedMotion = (shot.promptFields?.motionPrompt as string | undefined) ?? '';
+  const isDirty = motionPrompt.trim() !== storedMotion.trim();
+
+  const saveToShot = async () => {
+    setSavingPrompt(true); setError(null); setSavedTick(false);
+    try {
+      const updated = await api.updateShot(shotId, {
+        promptFields: { ...(shot.promptFields ?? {}), motionPrompt: motionPrompt.trim() },
+      });
+      setShot(updated);
+      setSavedTick(true);
+      setTimeout(() => setSavedTick(false), 2500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setSavingPrompt(false); }
+  };
 
   const refresh = useCallback(() => {
     api.listVideosForShot(shotId).then(setVideos).catch(() => setVideos([]));
@@ -58,7 +89,7 @@ export function ShotVideosTab() {
 
   if (shot.renderMode === 'static') {
     return (
-      <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
+      <main className="px-4 sm:px-8 py-6">
         <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
           <p className="text-zinc-400 text-sm">
             Кадр <code className="text-zinc-300">{shot.shotCode}</code> помечен как статичный (<code className="text-zinc-300">renderMode=static</code>) — генерация видео для него отключена. В экспорте он анимируется эффектом Ken Burns из выбранного рендера.
@@ -73,7 +104,7 @@ export function ShotVideosTab() {
 
   if (!shot.chosenRender) {
     return (
-      <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
+      <main className="px-4 sm:px-8 py-6">
         <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
           <p className="text-zinc-400 text-sm">
             Сначала выберите финальный рендер на вкладке <Link href={`/projects/${projectId}/shots/${shotId}/render`} className="text-blue-400 hover:text-blue-300">Рендер кадра</Link> — он пойдёт первым кадром видео.
@@ -91,7 +122,9 @@ export function ShotVideosTab() {
         count,
         mode,
       });
-      setMotionPrompt('');
+      // Reset to the DB-baked value (not blank) so the field keeps showing the
+      // shot's stored motion direction after queuing.
+      setMotionPrompt(shot.promptFields?.motionPrompt ?? '');
       refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -99,7 +132,7 @@ export function ShotVideosTab() {
   };
 
   return (
-    <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
+    <main className="px-4 sm:px-8 py-6">
       {/* Launcher */}
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mb-6">
         <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-3">Запустить новый рендер</h3>
@@ -112,9 +145,25 @@ export function ShotVideosTab() {
           value={motionPrompt}
           rows={3}
           onChange={(e) => setMotionPrompt(e.target.value)}
-          placeholder="Motion prompt — что должно происходить в кадре (камера, движение тела). Можно оставить пустым."
-          className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-200 font-mono mb-3"
+          placeholder="Motion prompt — что должно происходить в кадре (движение тела, камера). Предзаполнен сохранённым промптом кадра; можно оставить пустым."
+          className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-200 font-mono mb-2"
         />
+
+        {/* Persist the current text back to the shot so it becomes the default for
+            every future render (otherwise the textarea is a one-off override). */}
+        <div className="flex items-center gap-3 mb-3">
+          <button
+            onClick={saveToShot}
+            disabled={savingPrompt || !isDirty}
+            title="Записать этот промпт в кадр (promptFields.motionPrompt) — станет промптом по умолчанию для всех будущих рендеров"
+            className="text-xs bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-200 border border-zinc-700 px-3 py-1.5 rounded"
+          >
+            {savingPrompt ? '…' : '💾 сохранить как промпт кадра'}
+          </button>
+          {savedTick && <span className="text-emerald-400 text-xs">✓ сохранено в кадр</span>}
+          {isDirty && !savedTick && <span className="text-amber-400 text-xs">● отличается от сохранённого в кадре</span>}
+          {!isDirty && !savedTick && <span className="text-zinc-600 text-xs">совпадает с сохранённым промптом кадра</span>}
+        </div>
 
         <div className="flex gap-2 flex-wrap items-center">
           <button
@@ -139,22 +188,19 @@ export function ShotVideosTab() {
             режим
             <select
               value={mode}
-              onChange={(e) => setMode(e.target.value as 'auto' | 'fast' | 'cfg')}
+              onChange={(e) => setMode(e.target.value as 'fast' | 'cfg')}
               className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200"
             >
-              <option value="auto">авто (cfg для статичных шотов)</option>
-              <option value="fast">быстро (4-step, негатив НЕ работает)</option>
+              <option value="fast">быстро (4-step, ~2-3 мин, негатив НЕ работает)</option>
               <option value="cfg">качество (cfg=4, негатив работает, ~5× медленнее)</option>
             </select>
           </label>
           {error && <span className="text-red-400 text-xs">{error}</span>}
         </div>
         <p className="text-zinc-600 text-[11px] mt-2 leading-relaxed">
-          {mode === 'auto'
-            ? 'Авто: статичный шот (camera.movement = static) в комикс-проекте идёт через cfg (негатив работает), остальные — через быстрый 4-step. Без лишних кликов.'
-            : mode === 'fast'
-            ? 'Быстрый режим: lightx2v 4-step, cfg=1.0. Движение задаётся ТОЛЬКО позитивным промптом — motionNegative при cfg=1 игнорируется.'
-            : 'Режим качества: полный Wan 2.2, 20 шагов, cfg=4.0. motionNegative реально подавляет нежелательное движение (двигающаяся игрушка, питьё и т.п.), но рендер примерно в 5 раз дольше.'}
+          {mode === 'fast'
+            ? 'Быстрый режим (по умолчанию): lightx2v 4-step, cfg=1.0, ~2-3 мин. Движение задаётся ТОЛЬКО позитивным промптом — motionNegative при cfg=1 игнорируется.'
+            : 'Режим качества: полный Wan 2.2, 20 шагов, cfg=4.0. motionNegative реально подавляет нежелательное движение, но рендер примерно в 5 раз дольше.'}
         </p>
       </section>
 

@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useState } from 'react';
-import { api, ProjectListItem } from '../lib/api';
+import { useState } from 'react';
+import { ProjectListItem, isProjectArchived } from '../lib/api';
 
 /**
  * Persistent left-side navigation. On desktop (md+) it's a sticky column via
@@ -11,18 +11,22 @@ import { api, ProjectListItem } from '../lib/api';
  * from <MobileNav> — both share <SidebarNavContent> so there's one source of
  * truth for the links.
  *
+ * The project list is fetched once server-side (root layout → `projects` prop),
+ * so this component is purely presentational + interactive: no data fetching,
+ * no loading flash.
+ *
  * Sections:
- *   - top-level: Projects, Queue (with the 3 tabs as sub-links)
- *   - current project (only when the URL is /projects/[id]/...): Overview,
- *     Персонажи, Сцены, plus a project picker so the user can jump between
- *     projects without going back to the root.
+ *   - Главное: Overview, Projects (collapsible list of active projects),
+ *     Персонажи, Озвучка, Действия, Архив.
+ *   - Очередь.
+ *   - current project (only on /projects/[id]/...): Overview, Состав, Сцены, Музыка.
  *
  * Active route is highlighted by comparing usePathname() against each link.
  */
-export function Sidebar() {
+export function Sidebar({ projects }: { projects: ProjectListItem[] }) {
   return (
     <aside className="hidden md:flex md:flex-col w-56 shrink-0 border-r border-zinc-800 bg-zinc-950 sticky top-0 h-screen overflow-y-auto">
-      <SidebarNavContent />
+      <SidebarNavContent projects={projects} />
     </aside>
   );
 }
@@ -32,18 +36,26 @@ export function Sidebar() {
  * into both the desktop <aside> and the mobile drawer. `onNavigate` (when given)
  * fires on every link tap — the drawer uses it to close itself.
  */
-export function SidebarNavContent({ onNavigate }: { onNavigate?: () => void }) {
+export function SidebarNavContent({
+  projects,
+  onNavigate,
+}: {
+  projects: ProjectListItem[];
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname() ?? '/';
   const projectId = extractProjectId(pathname);
 
-  const [projects, setProjects] = useState<ProjectListItem[] | null>(null);
-  useEffect(() => {
-    api.listProjects().then(setProjects).catch(() => setProjects([]));
-  }, []);
+  // Only active (in-production) projects live in the sidebar; finished ones move
+  // to /projects/archived so the menu stays short as the catalogue grows.
+  const activeProjects = projects.filter((p) => !isProjectArchived(p));
 
   const project = projectId
-    ? projects?.find((p) => p.id === projectId || p.slug === projectId)
+    ? projects.find((p) => p.id === projectId || p.slug === projectId)
     : null;
+
+  // The "Projects" list is collapsed by default — click the chevron to reveal it.
+  const [projectsOpen, setProjectsOpen] = useState(false);
 
   return (
     <>
@@ -54,11 +66,59 @@ export function SidebarNavContent({ onNavigate }: { onNavigate?: () => void }) {
 
       <nav className="px-2 pb-4 flex-1 space-y-4">
         <Section title="Главное">
-          <NavLink href="/"           label="Overview"   active={pathname === '/'} onNavigate={onNavigate} />
-          <NavLink href="/projects"   label="Projects"   active={pathname === '/projects'} onNavigate={onNavigate} />
-          <NavLink href="/characters" label="Персонажи"  active={pathname.startsWith('/characters')} onNavigate={onNavigate} />
-          <NavLink href="/voices"     label="Озвучка"    active={pathname.startsWith('/voices')} onNavigate={onNavigate} />
-          <NavLink href="/actions"    label="Действия"   active={pathname.startsWith('/actions')} onNavigate={onNavigate} />
+          <NavLink href="/" label="Overview" active={pathname === '/'} onNavigate={onNavigate} />
+
+          {/* Projects — a collapsible disclosure. The label links to the
+              /projects grid (clicking it navigates there); the chevron on the
+              RIGHT toggles the inline list of active projects so you can jump
+              between them without leaving the page. */}
+          <div>
+            <div className="flex items-stretch gap-0.5">
+              <Link
+                href="/projects"
+                onClick={onNavigate}
+                className={`flex-1 px-2 py-1.5 rounded text-sm transition-colors truncate ${
+                  pathname === '/projects'
+                    ? 'bg-zinc-800 text-zinc-100'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+                }`}
+              >
+                Projects
+              </Link>
+              <button
+                type="button"
+                onClick={() => setProjectsOpen((o) => !o)}
+                aria-expanded={projectsOpen}
+                aria-label={projectsOpen ? 'Свернуть проекты' : 'Развернуть проекты'}
+                className="shrink-0 px-1.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900"
+              >
+                <Chevron open={projectsOpen} />
+              </button>
+            </div>
+
+            {projectsOpen && (
+              <div className="mt-0.5 ml-3 pl-2 border-l border-zinc-800 space-y-0.5">
+                {activeProjects.length === 0 ? (
+                  <div className="px-2 py-1 text-xs text-zinc-600">Нет активных</div>
+                ) : (
+                  activeProjects.map((p) => (
+                    <NavLink
+                      key={p.id}
+                      href={`/projects/${p.id}`}
+                      label={p.name}
+                      active={p.id === projectId || p.slug === projectId}
+                      onNavigate={onNavigate}
+                    />
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+
+          <NavLink href="/characters" label="Персонажи" active={pathname.startsWith('/characters')} onNavigate={onNavigate} />
+          <NavLink href="/voices"     label="Озвучка"   active={pathname.startsWith('/voices')} onNavigate={onNavigate} />
+          <NavLink href="/actions"    label="Действия"  active={pathname.startsWith('/actions')} onNavigate={onNavigate} />
+          <NavLink href="/projects/archived" label="Архив" active={pathname.startsWith('/projects/archived')} onNavigate={onNavigate} />
         </Section>
 
         <Section title="Очередь">
@@ -73,16 +133,6 @@ export function SidebarNavContent({ onNavigate }: { onNavigate?: () => void }) {
             <NavLink href={`/projects/${projectId}/characters`} label="Состав"    active={pathname.startsWith(`/projects/${projectId}/characters`)} onNavigate={onNavigate} />
             <NavLink href={`/projects/${projectId}/scenes`}     label="Сцены"     active={pathname.startsWith(`/projects/${projectId}/scenes`) || pathname.startsWith(`/projects/${projectId}/shots`)} onNavigate={onNavigate} />
             <NavLink href={`/projects/${projectId}/bgm`}        label="Музыка"    active={pathname.startsWith(`/projects/${projectId}/bgm`)} onNavigate={onNavigate} />
-          </Section>
-        )}
-
-        {projects && projects.length > 1 && (
-          <Section title="Другие проекты">
-            {projects
-              .filter((p) => !projectId || (p.id !== projectId && p.slug !== projectId))
-              .map((p) => (
-                <NavLink key={p.id} href={`/projects/${p.id}`} label={p.name} active={false} onNavigate={onNavigate} />
-              ))}
           </Section>
         )}
       </nav>
@@ -115,8 +165,28 @@ function NavLink({ href, label, active, onNavigate }: { href: string; label: str
   );
 }
 
-/** Pull the [id] out of `/projects/[id]/...`. Returns null on any other route. */
+/** Right-pointing chevron that rotates down when the section is open. */
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      width="12" height="12" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+      className={`transition-transform ${open ? 'rotate-90' : ''}`}
+    >
+      <polyline points="9 6 15 12 9 18" />
+    </svg>
+  );
+}
+
+/**
+ * Pull the [id] out of `/projects/[id]/...`. Returns null on any other route,
+ * including the reserved `/projects/archived` list (which is not a project id).
+ */
 function extractProjectId(pathname: string): string | null {
   const m = pathname.match(/^\/projects\/([^/]+)/);
-  return m ? m[1] : null;
+  if (!m) return null;
+  return RESERVED_PROJECT_SEGMENTS.has(m[1]) ? null : m[1];
 }
+
+/** Static segments under /projects/ that are pages, not project ids. */
+const RESERVED_PROJECT_SEGMENTS = new Set(['archived']);

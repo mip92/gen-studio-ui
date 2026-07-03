@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   flexRender,
@@ -13,7 +13,8 @@ import {
   type SortingState,
 } from '@tanstack/react-table';
 import { api, type Voiceover } from '../../lib/api';
-import { Breadcrumbs } from '../../components/Breadcrumbs';
+import { PageHeader } from '../../components/PageHeader';
+import { AddVoiceModal } from '../../components/AddVoiceModal';
 import { HeaderCell, MultiSelect, MultiSelectLabeled } from '../../components/table/TableControls';
 
 /**
@@ -27,10 +28,7 @@ import { HeaderCell, MultiSelect, MultiSelectLabeled } from '../../components/ta
 export default function VoicesPage() {
   const [voices, setVoices]   = useState<Voiceover[] | null>(null);
   const [error, setError]     = useState<string | null>(null);
-  const [busy, setBusy]       = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newUrl, setNewUrl]   = useState('');
-  const fileRef               = useRef<HTMLInputElement>(null);
+  const [showAdd, setShowAdd] = useState(false);
 
   const [sorting, setSorting]             = useState<SortingState>([{ id: 'name', desc: false }]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -42,24 +40,6 @@ export default function VoicesPage() {
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
 
   useEffect(() => { reload(); }, []);
-
-  const onUpload = async (file: File | undefined) => {
-    if (!file) return;
-    setBusy(true); setError(null);
-    try {
-      await api.createVoiceover(file, {
-        name:      newName.trim() || undefined,
-        sourceUrl: newUrl.trim()  || undefined,
-      });
-      setNewName(''); setNewUrl('');
-      await reload();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-      if (fileRef.current) fileRef.current.value = '';
-    }
-  };
 
   const rows = voices ?? [];
 
@@ -92,7 +72,8 @@ export default function VoicesPage() {
       id: 'preview', enableSorting: false, enableColumnFilter: false,
       header: () => <span className="text-left">Превью</span>,
       cell: ({ row }) => (
-        <audio controls preload="none" src={api.voiceoverRawUrl(row.original.id)} className="h-8 max-w-[14rem]" />
+        <audio key={row.original.checksum} controls preload="none"
+          src={`${api.voiceoverRawUrl(row.original.id)}?v=${row.original.checksum}`} className="h-8 max-w-[14rem]" />
       ),
     },
     {
@@ -205,47 +186,39 @@ export default function VoicesPage() {
 
   return (
     <div className="bg-zinc-950 text-zinc-100">
-      <header className="border-b border-zinc-800 px-4 sm:px-8 py-4">
-        <div className="max-w-7xl mx-auto">
-          <Breadcrumbs items={[{ label: 'Overview', href: '/' }, { label: 'Озвучка' }]} />
-          <h1 className="text-xl font-semibold">Озвучка — актёры</h1>
-          <p className="text-xs text-zinc-500 mt-1 max-w-3xl">
+      <PageHeader
+        crumbs={[{ label: 'Overview', href: '/' }, { label: 'Озвучка' }]}
+        title="Озвучка — актёры"
+        subtitle={
+          <span className="block max-w-3xl">
             Общая библиотека голосов для voice-clone движков (XTTS-v2 / F5). Один голос хранится
             один раз в <code className="text-zinc-600">data/_voices/&lt;slug&gt;/</code> и назначается
             любому числу проектов. Загруженные файлы с одинаковым содержимым склеиваются по md5.
-          </p>
-        </div>
-      </header>
+          </span>
+        }
+      />
 
-      <main className="p-4 sm:p-8 max-w-7xl mx-auto space-y-6">
+      <main className="p-4 sm:p-8 space-y-6">
         {error && (
           <div className="bg-red-900/40 border border-red-700 rounded p-3 text-red-200 font-mono text-xs whitespace-pre-wrap">
             {error}
           </div>
         )}
 
-        {/* Add a new voice to the library */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 flex flex-wrap items-end gap-3">
-          <div className="flex flex-col gap-1">
-            <label className="text-[10px] uppercase tracking-wider text-zinc-500">Имя (необязательно)</label>
-            <input value={newName} onChange={(e) => setNewName(e.target.value)}
-              placeholder="напр. Захар (мужской, низкий)"
-              className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm w-64" />
-          </div>
-          <div className="flex flex-col gap-1 flex-1 min-w-[16rem]">
-            <label className="text-[10px] uppercase tracking-wider text-zinc-500">Ссылка-источник (YouTube, необязательно)</label>
-            <input value={newUrl} onChange={(e) => setNewUrl(e.target.value)}
-              placeholder="https://youtube.com/watch?v=…"
-              className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm w-full font-mono" />
-          </div>
-          <label className={`text-sm px-4 py-2 rounded cursor-pointer self-end ${
-            busy ? 'bg-zinc-800 text-zinc-500 cursor-wait' : 'bg-emerald-700 hover:bg-emerald-600 text-white'
-          }`}>
-            {busy ? 'Загрузка…' : '⬆ Добавить голос'}
-            <input ref={fileRef} type="file" accept="audio/*" hidden disabled={busy}
-              onChange={(e) => onUpload(e.target.files?.[0])} />
-          </label>
+        {/* Add a new voice to the library — YouTube link or file, with a trim step */}
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 flex items-center justify-between gap-3">
+          <p className="text-xs text-zinc-500">
+            Добавь голос с YouTube или из файла — аудио скачивается на сервер, дальше выберешь фрагмент на волне.
+          </p>
+          <button onClick={() => setShowAdd(true)}
+            className="text-sm px-4 py-2 rounded bg-emerald-700 hover:bg-emerald-600 text-white whitespace-nowrap">
+            ＋ Добавить голос
+          </button>
         </div>
+
+        {showAdd && (
+          <AddVoiceModal onClose={() => setShowAdd(false)} onCreated={reload} />
+        )}
 
         {!voices && !error && <p className="text-zinc-500">Loading…</p>}
 

@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { api, ShotFull, ShotPromptFields, UpdateShotBody, VideoRender } from '../lib/api';
+import { api, ShotFull, ShotPromptFields, UpdateShotBody, VideoRender, CandidateVerdict } from '../lib/api';
 
 export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: string }) {
   const router = useRouter();
@@ -71,7 +71,7 @@ export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: s
   };
 
   return (
-    <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
+    <main className="px-4 sm:px-8 py-6">
       <Link href={`/projects/${projectId}/scenes`} className="text-zinc-500 hover:text-zinc-200 text-sm mb-4 inline-block">
         ← все сцены
       </Link>
@@ -289,6 +289,17 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
   const visualStyle = shot.project?.visualStyle ?? 'photoreal_cinematic';
   const isCartoon   = visualStyle !== 'photoreal_cinematic';
 
+  // ── Per-generation tweaks (NOT the pipeline) ───────────────────────────────
+  // The workflow/pipeline (visual style + comic LoRA + Flux base) is configured
+  // ONCE per project (project.visualStyle + settings.styleLora/fluxBaseModel on
+  // the Settings page) — NOT per scene. Here we only expose lightweight
+  // per-generation knobs: how many variants, and optional sampler tweaks.
+  const isFluxStyle = visualStyle === 'graphic_novel_flux';
+  const [batchSize,    setBatchSize]    = useState<number>(5);
+  const [steps,        setSteps]        = useState<number | ''>('');
+  const [guidance,     setGuidance]     = useState<number | ''>('');
+  const [loraStrength, setLoraStrength] = useState<number | ''>('');
+
   // Per-participant identity readiness. Cartoon needs promptBase+triggerToken;
   // photoreal needs a trained LoRA. Status carries one of:
   //   ready    — identity asset present, render allowed
@@ -364,7 +375,17 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
     setState({ status: 'queued' });
     initialRenderCount.current = shot.renderedImages?.length ?? 0;
     try {
-      const job = await api.enqueueShotRender(shot.id, { seed: Math.floor(Math.random() * 2 ** 32) });
+      const body: Parameters<typeof api.enqueueShotRender>[1] = {
+        seed:      Math.floor(Math.random() * 2 ** 32),
+        batchSize,
+      };
+      if (steps        !== '') body.steps        = Number(steps);
+      if (guidance     !== '') body.guidance     = Number(guidance);
+      if (loraStrength !== '') body.loraStrength = Number(loraStrength);
+      // No visualStyle here on purpose — the pipeline is a per-PROJECT setting
+      // (Settings page), not a per-scene choice. The backend resolves the style
+      // from the project.
+      const job = await api.enqueueShotRender(shot.id, body);
       setState({ status: 'queued', sceneJobId: job.id });
     } catch (e) {
       setState({ status: 'error', error: e instanceof Error ? e.message : String(e) });
@@ -385,7 +406,54 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
     } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
   };
 
+  // ── Image validation (Ollama vision picks the best candidate) ──────────────
+  const [pendingValId, setPendingValId] = useState<string | null>(null);
+  const [promptDraft, setPromptDraft]   = useState('');
+  const [applyingPrompt, setApplyingPrompt] = useState(false);
+  const handleValidate = async () => {
+    try {
+      const res = await api.validateShot(shot.id);
+      if (!res.queued) { alert('Для проверки нужно ≥2 вариантов (или проверка уже в очереди).'); return; }
+      setPendingValId(res.jobId);
+      // Backend cleared the old pick on re-check — refresh so it disappears now.
+      try { onShotChange(await api.getShot(shot.id)); } catch { /* poll will catch up */ }
+    } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+  };
+  // Poll the shot until the queued validation job reaches a terminal state.
+  useEffect(() => {
+    if (!pendingValId) return;
+    const t = setInterval(async () => {
+      try {
+        const fresh = await api.getShot(shot.id);
+        onShotChange(fresh);
+        const job = fresh.validationJobs?.find((j) => j.id === pendingValId);
+        if (job && (job.status === 'completed' || job.status === 'failed')) setPendingValId(null);
+      } catch { /* keep polling */ }
+    }, 4000);
+    return () => clearInterval(t);
+  }, [pendingValId, shot.id, onShotChange]);
+
   const renders = shot.renderedImages ?? [];
+  const latestValidation = shot.validationJobs?.[0];
+  const verdictByFile = new Map<string, CandidateVerdict>();
+  for (const v of latestValidation?.result ?? []) verdictByFile.set(v.filename, v);
+  const validating = pendingValId !== null
+    || latestValidation?.status === 'running' || latestValidation?.status === 'pending';
+  // When the last completed validation picked NOTHING (all candidates failed),
+  // the vision model proposes an improved prompt for the user to review/approve.
+  const suggestion = latestValidation?.status === 'completed' && !latestValidation.chosenFilename
+    ? (latestValidation.suggestedPrompt ?? null)
+    : null;
+  useEffect(() => { if (suggestion != null) setPromptDraft(suggestion); }, [suggestion]);
+  const applyPrompt = async (rerender: boolean) => {
+    if (!promptDraft.trim()) return;
+    setApplyingPrompt(true);
+    try {
+      const updated = await api.applySuggestedPrompt(shot.id, promptDraft.trim(), rerender);
+      onShotChange(updated);
+    } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+    finally { setApplyingPrompt(false); }
+  };
 
   return (
     <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mt-6">
@@ -426,7 +494,7 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
       {charCount === 0 && (
         <div className="bg-zinc-800/40 border border-zinc-700/50 rounded p-3 mb-3 text-xs text-zinc-400">
           Кадр без персонажей — рендерится по промпту (positive/negative из поля).
-          Workflow: <code>{isCartoon ? 'scene_environment_graphic_novel' : 'scene_environment'}</code>.
+          Workflow: <code>{!isCartoon ? 'scene_environment' : visualStyle === 'graphic_novel_flux' ? 'scene_environment_flux_comic' : 'scene_environment_graphic_novel'}</code>.
         </div>
       )}
 
@@ -434,7 +502,7 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
         <div className="bg-zinc-800/40 border border-zinc-700/50 rounded p-3 mb-3 text-xs text-zinc-400">
           Cartoon-кадр (1 персонаж) — идентичность через <code>promptBase</code> +{' '}
           <code>triggerToken</code> (LoRA не нужна). Workflow:{' '}
-          <code>scene_single_character_graphic_novel</code>.
+          <code>{visualStyle === 'graphic_novel_flux' ? 'scene_single_character_flux_comic' : 'scene_single_character_graphic_novel'}</code>.
         </div>
       )}
 
@@ -451,9 +519,62 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
           Cartoon-кадр (2 персонажа) — региональное разделение по тексту:
           левая половина = первый participant, правая = второй. Идентичность из{' '}
           <code>promptBase</code> каждого, без LoRA и без IP-Adapter-весов. Workflow:{' '}
-          <code>scene_dual_character_graphic_novel</code> (первая версия, тест).
+          <code>{visualStyle === 'graphic_novel_flux' ? 'scene_dual_character_flux_comic' : 'scene_dual_character_graphic_novel'}</code>{' '}(первая версия, тест).
         </div>
       )}
+
+      {/* ── Per-generation tweaks (the pipeline itself is configured once per project) ── */}
+      <div className="bg-zinc-800/40 border border-zinc-700/50 rounded p-3 mb-3 space-y-2">
+        <div className="flex items-center gap-3 flex-wrap">
+          <label className="text-xs text-zinc-400 flex items-center gap-1">
+            вариантов
+            <input
+              type="number" min={1} max={8} value={batchSize}
+              onChange={(e) => setBatchSize(Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
+              className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 w-16"
+            />
+          </label>
+
+          <label className="text-xs text-zinc-400 flex items-center gap-1">
+            steps
+            <input
+              type="number" min={1} max={60} value={steps} placeholder="авто"
+              onChange={(e) => setSteps(e.target.value === '' ? '' : Number(e.target.value))}
+              className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 w-16"
+            />
+          </label>
+
+          {isFluxStyle && (
+            <label className="text-xs text-zinc-400 flex items-center gap-1" title="FluxGuidance (cfg на Flux всегда 1.0)">
+              guidance
+              <input
+                type="number" min={0} max={10} step={0.5} value={guidance} placeholder="3.5"
+                onChange={(e) => setGuidance(e.target.value === '' ? '' : Number(e.target.value))}
+                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 w-16"
+              />
+            </label>
+          )}
+
+          {isCartoon && (
+            <label className="text-xs text-zinc-400 flex items-center gap-1" title="Сила style-LoRA (node 2)">
+              LoRA
+              <input
+                type="number" min={0} max={2} step={0.05} value={loraStrength} placeholder="1.0"
+                onChange={(e) => setLoraStrength(e.target.value === '' ? '' : Number(e.target.value))}
+                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 w-16"
+              />
+            </label>
+          )}
+        </div>
+
+        {isFluxStyle && (
+          <p className="text-[11px] text-zinc-500 leading-relaxed">
+            Flux-комикс: модель/стиль настраивается ОДИН раз на проект (вкладка «Настройки» →
+            <code>Flux база</code> + <code>Стиль (LoRA)</code>). Идентичность — <code>promptBase</code>,
+            плюс Flux Redux по анкеру, если он есть и установлены модели Redux.
+          </p>
+        )}
+      </div>
 
       <div className="flex gap-2 items-center flex-wrap">
         <button
@@ -463,8 +584,8 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
         >
           {state.status === 'queued'  ? '⏳ в очереди…'
           : state.status === 'running' ? '⚙ рендерится…'
-          : renders.length > 0          ? `+ ещё 5 вариантов в очередь (всего: ${renders.length})`
-          : '🎬 в очередь — 5 вариантов'}
+          : renders.length > 0          ? `+ ещё ${batchSize} вариантов в очередь (всего: ${renders.length})`
+          : `🎬 в очередь — ${batchSize} вариантов`}
         </button>
         {state.sceneJobId && (state.status === 'queued' || state.status === 'running') && (
           <Link href="/queue" className="text-xs text-zinc-500 hover:text-zinc-300 font-mono">
@@ -480,13 +601,64 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
       {/* Gallery of all rendered variants */}
       {renders.length > 0 && (
         <div className="mt-5">
-          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
-            Варианты ({renders.length})
-            {shot.chosenRender && <span className="ml-3 text-emerald-400 normal-case tracking-normal">✓ выбран: <span className="font-mono">{shot.chosenRender}</span></span>}
+          <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mb-2">
+            <span className="text-xs uppercase tracking-wider text-zinc-500">Варианты ({renders.length})</span>
+            {shot.chosenRender && <span className="text-xs text-emerald-400">✓ выбран: <span className="font-mono">{shot.chosenRender}</span></span>}
+            {renders.length >= 2 && (
+              <button
+                onClick={handleValidate}
+                disabled={validating}
+                className="text-xs bg-indigo-700/80 hover:bg-indigo-600 disabled:opacity-50 text-white px-2 py-0.5 rounded"
+                title="Vision-модель (qwen3-vl) оценит все варианты и выберет лучший под промпт"
+              >
+                {validating ? '🤖 проверяю…' : '🤖 перепроверить'}
+              </button>
+            )}
+            {latestValidation?.status === 'failed' && (
+              <span className="text-xs text-red-400" title={latestValidation.errorMessage ?? ''}>✕ проверка не удалась</span>
+            )}
           </div>
+
+          {suggestion && (
+            <div className="mb-3 bg-amber-950/30 border border-amber-800/60 rounded p-3">
+              <div className="text-xs text-amber-300 mb-2">
+                🤖 Ни один вариант не прошёл проверку — ИИ предлагает новый промпт (можно отредактировать):
+              </div>
+              <textarea
+                value={promptDraft}
+                onChange={(e) => setPromptDraft(e.target.value)}
+                rows={4}
+                className="w-full bg-zinc-950 border border-zinc-700 rounded p-2 text-xs text-zinc-200 font-mono leading-relaxed"
+              />
+              <div className="flex gap-2 mt-2 items-center">
+                <button
+                  onClick={() => applyPrompt(false)}
+                  disabled={applyingPrompt || !promptDraft.trim()}
+                  className="text-xs bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3 py-1 rounded"
+                >
+                  ✓ Применить промпт
+                </button>
+                <button
+                  onClick={() => applyPrompt(true)}
+                  disabled={applyingPrompt || !promptDraft.trim()}
+                  className="text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white px-3 py-1 rounded"
+                  title="Записать промпт, удалить неудачные варианты и поставить новый рендер в очередь"
+                >
+                  ✓ Применить и перерендерить
+                </button>
+                {applyingPrompt && <span className="text-xs text-zinc-500">…</span>}
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
             {renders.map((r, idx) => {
               const chosen = r.filename === shot.chosenRender;
+              const verdict = verdictByFile.get(r.filename);
+              const aiPicked = latestValidation?.chosenFilename === r.filename;
+              const scoreColor = verdict == null || verdict.score < 0 ? 'bg-zinc-700 text-zinc-300'
+                : verdict.score >= 75 ? 'bg-emerald-700 text-white'
+                : verdict.score >= 50 ? 'bg-amber-600 text-white'
+                : 'bg-red-700 text-white';
               return (
                 <div
                   key={r.filename}
@@ -500,8 +672,24 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
                     className="w-full h-auto"
                     loading="lazy"
                   />
-                  <div className="absolute top-2 left-2 bg-black/70 backdrop-blur text-[10px] text-zinc-300 font-mono px-2 py-0.5 rounded pointer-events-none">
-                    {r.filename}
+                  <div className="absolute top-2 left-2 flex flex-col gap-1 items-start pointer-events-none">
+                    <div className="bg-black/70 backdrop-blur text-[10px] text-zinc-300 font-mono px-2 py-0.5 rounded">
+                      {r.filename}
+                    </div>
+                    {verdict && (
+                      <div className="flex gap-1 items-center">
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${scoreColor}`}>
+                          {verdict.score < 0 ? '⚠ err' : `${verdict.score}`}
+                        </span>
+                        {verdict.score >= 0 && (
+                          <span className={`text-[10px] px-1 py-0.5 rounded ${verdict.matchesPrompt ? 'bg-emerald-900/80 text-emerald-300' : 'bg-red-900/80 text-red-300'}`}>
+                            {verdict.matchesPrompt ? 'по промпту' : 'не по промпту'}
+                          </span>
+                        )}
+                        {verdict.severe && <span className="text-[10px] bg-red-700 text-white px-1 py-0.5 rounded">⛔ брак</span>}
+                        {aiPicked && <span className="text-[10px] bg-indigo-700 text-white px-1 py-0.5 rounded">🤖 лучший</span>}
+                      </div>
+                    )}
                   </div>
                   <div className="absolute top-2 right-2 flex gap-1">
                     {!chosen ? (
@@ -526,9 +714,14 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
                       ✕
                     </button>
                   </div>
+                  {verdict && verdict.issues.length > 0 && (
+                    <div className={`absolute left-0 right-0 ${chosen ? 'bottom-6' : 'bottom-0'} bg-black/75 backdrop-blur text-[10px] text-amber-300 px-2 py-1 pointer-events-none`}>
+                      ⚠ {verdict.issues.slice(0, 3).join(' · ')}
+                    </div>
+                  )}
                   {chosen && (
                     <div className="absolute bottom-0 left-0 right-0 bg-emerald-700/90 text-white text-xs text-center py-1 font-medium pointer-events-none">
-                      выбрано для сцены
+                      {aiPicked ? '🤖 выбрано ИИ' : 'выбрано для сцены'}
                     </div>
                   )}
                 </div>

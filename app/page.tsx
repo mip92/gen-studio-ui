@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, ProjectListItem, QueueListResponse, QueueRow } from '../lib/api';
-import { Breadcrumbs } from '../components/Breadcrumbs';
+import { PageHeader } from '../components/PageHeader';
 
 const POLL_MS = 5000;
 
@@ -51,15 +51,13 @@ export default function OverviewPage() {
 
   return (
     <div className="bg-zinc-950 text-zinc-100">
-      <header className="border-b border-zinc-800 px-4 sm:px-8 py-4">
-        <div className="max-w-7xl mx-auto">
-          <Breadcrumbs items={[{ label: 'Overview' }]} />
-          <h1 className="text-xl font-semibold">Gen Studio</h1>
-          <p className="text-zinc-500 text-xs">AI video production · LoRA pipeline · scene rendering</p>
-        </div>
-      </header>
+      <PageHeader
+        crumbs={[{ label: 'Overview' }]}
+        title="Gen Studio"
+        subtitle="AI video production · LoRA pipeline · scene rendering"
+      />
 
-      <main className="p-4 sm:p-8 max-w-7xl mx-auto space-y-6">
+      <main className="p-4 sm:p-8 space-y-6">
         {error && (
           <div className="bg-red-900/40 border border-red-700 rounded p-4">
             <p className="text-red-200 font-mono text-sm">{error}</p>

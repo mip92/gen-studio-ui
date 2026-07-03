@@ -35,7 +35,7 @@ export function ShotParticipantsTab() {
   };
 
   return (
-    <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
+    <main className="px-4 sm:px-8 py-6">
       <div className="mb-4 flex gap-2 justify-end">
         {!editing ? (
           <button onClick={startEdit}

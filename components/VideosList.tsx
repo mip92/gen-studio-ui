@@ -26,14 +26,14 @@ export function VideosList({ projectId, shotId }: { projectId: string; shotId: s
 
   if (error) {
     return (
-      <main className="px-4 sm:px-8 py-6 max-w-6xl mx-auto">
+      <main className="px-4 sm:px-8 py-6">
         <div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div>
       </main>
     );
   }
 
   return (
-    <main className="px-4 sm:px-8 py-6 max-w-6xl mx-auto">
+    <main className="px-4 sm:px-8 py-6">
       <div className="mb-4 flex items-baseline gap-3">
         <Link href={`/projects/${projectId}/shots/${shotId}`} className="text-xs text-zinc-500 hover:text-zinc-300">
           ← к кадру

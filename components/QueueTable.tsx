@@ -23,7 +23,7 @@ import { HeaderCell, MultiSelect, MultiSelectLabeled } from './table/TableContro
 
 const POLL_MS = 3000;
 
-const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_upscale', 'video_interp', 'tts', 'bgm', 'anchor'];
+const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_upscale', 'video_interp', 'tts', 'bgm', 'anchor', 'validation'];
 const ALL_STATUSES = [
   'pending', 'blocked',
   'preparing', 'captioning', 'training', 'running',
@@ -464,10 +464,11 @@ function renderRowTargets(row: QueueRow, pl?: ProjectLinks, projectId?: string):
     if (type === 'video_upscale') return `/projects/${projSeg}/shots/${shotId}/videos`;
     if (type === 'video_interp')  return `/projects/${projSeg}/shots/${shotId}/videos`;
     if (type === 'tts')           return `/projects/${projSeg}/shots/${shotId}/narration`;
+    if (type === 'validation')    return `/projects/${projSeg}/shots/${shotId}/render`;
     return null;
   }
 
-  if (row.type === 'scene' || row.type === 'video' || row.type === 'video_upscale' || row.type === 'video_interp') {
+  if (row.type === 'scene' || row.type === 'video' || row.type === 'video_upscale' || row.type === 'video_interp' || row.type === 'validation') {
     const sceneHref = sceneInfo ? `/projects/${projSeg}/scenes#${sceneInfo.sceneKey}` : null;
     const shotHref  = shotTabHrefFor(row.type);
     const sceneNode = sceneHref
@@ -555,6 +556,7 @@ function typeBadge(t: QueueJobType): string {
   if (t === 'video_interp')  return 'bg-orange-950/40 text-orange-300 border-orange-900';
   if (t === 'tts')           return 'bg-cyan-950/40   text-cyan-300   border-cyan-900';
   if (t === 'anchor')        return 'bg-fuchsia-950/40 text-fuchsia-300 border-fuchsia-900';
+  if (t === 'validation')    return 'bg-indigo-950/40 text-indigo-300 border-indigo-900';
   return                            'bg-emerald-950/40 text-emerald-300 border-emerald-900';  // bgm
 }
 

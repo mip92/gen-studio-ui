@@ -36,13 +36,25 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
   const [emotionRefs, setEmotionRefs] = useState<ProjectTTSEmotionRef[]>([]);
   const [voice,         setVoice]         = useState<TTSVoice>('baya');  // ж дефолт для silero — narrator is female
   const [emotionRefName, setEmotionRefName] = useState<string>('');      // '' = neutral (just the voice ref)
-  const [speed,          setSpeed]          = useState<number>(1.0);     // f5 only → TTSJob.rate
-  const [pause,          setPause]          = useState<number>(0);       // f5 only → sentencePauseSec
+  const [speed,          setSpeed]          = useState<number>(0.85);    // f5 only → TTSJob.rate (GLOBAL). 0.85 = project standard (matches narration page).
+  const [pause,          setPause]          = useState<number>(1);       // f5 only → sentencePauseSec (GLOBAL). 1s = f5 default (matches narration page).
+  // Per-shot f5 overrides — undefined means "use the global value above".
+  // Individual ▶ озвучить for a shot honours its override; bulk stays uniform.
+  const [rowRate,        setRowRate]        = useState<Record<string, number>>({});
+  const [rowPause,       setRowPause]       = useState<Record<string, number>>({});
+  const [notice,         setNotice]         = useState<string | null>(null);
   // Per-shot in-memory state: edit buffers + last-queued job summary.
   const [drafts, setDrafts] = useState<Record<string, string>>(
     () => Object.fromEntries(shots.map((s) => [s.id, s.narrationText ?? ''])),
   );
   const [jobsByShot, setJobsByShot] = useState<Record<string, TTSJob[]>>({});
+  // Approved TTSJob id per shot — kept in modal state (the `shots` prop is a
+  // snapshot from page load, so reading s.approvedTTSJobId would go stale after
+  // an in-modal approve/delete). Seeded from the prop, then updated from the
+  // approve response / cleared on delete so the «✓ утверждён» badge is live.
+  const [approvedByShot, setApprovedByShot] = useState<Record<string, string | null>>(
+    () => Object.fromEntries(shots.map((s) => [s.id, s.approvedTTSJobId ?? null])),
+  );
   const [saving,  setSaving]  = useState<Record<string, boolean>>({});
   const [busyAll, setBusyAll] = useState<false | 'all' | 'missing'>(false);
   const [err,     setErr]     = useState<string | null>(null);
@@ -75,6 +87,14 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
 
   useEffect(() => { refreshJobs(); }, [refreshJobs]);
 
+  // Reseed approval map when the modal opens for a different scene. Keyed on
+  // sceneId (NOT the shots array) so a parent re-render passing a fresh array
+  // reference doesn't wipe approvals the user just made in-modal.
+  useEffect(() => {
+    setApprovedByShot(Object.fromEntries(shots.map((s) => [s.id, s.approvedTTSJobId ?? null])));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sceneId]);
+
   // Poll while anything is pending/running.
   useEffect(() => {
     const anyInflight = Object.values(jobsByShot).some(
@@ -90,13 +110,16 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
   /** Build the TTS request body matching the project's engine — voice for
    *  silero; emotion-reference (+ speed/pause for f5) for the voice-clone
    *  engines. Categorical presets are inert on xtts2/f5 so we never send them. */
-  const synthBody = (): Parameters<typeof api.startShotTTS>[1] => {
+  // Build the TTS body. Pass a shotId to honour that shot's per-row f5
+  // override (speed/pause); omit it for the bulk path so every shot gets the
+  // uniform global speed/pause.
+  const synthBody = (shotId?: string): Parameters<typeof api.startShotTTS>[1] => {
     if (engine === 'silero') return { voice };
     const body: Parameters<typeof api.startShotTTS>[1] = {};
     if (emotionRefName) body.emotionRefName = emotionRefName;
     if (engine === 'f5') {
-      body.rate             = speed;
-      body.sentencePauseSec = pause;
+      body.rate             = (shotId && rowRate[shotId]  !== undefined) ? rowRate[shotId]  : speed;
+      body.sentencePauseSec = (shotId && rowPause[shotId] !== undefined) ? rowPause[shotId] : pause;
     }
     return body;
   };
@@ -119,7 +142,7 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
     try {
       // Save first so what gets synthesised matches what's in the textarea.
       await api.setShotNarrationText(shotId, drafts[shotId] ?? '');
-      await api.startShotTTS(shotId, synthBody());
+      await api.startShotTTS(shotId, synthBody(shotId));
       refreshJobs();
     } catch (e) {
       setErr(asMessage(e));
@@ -132,7 +155,8 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
     setSaving((s) => ({ ...s, [shotId]: true }));
     setErr(null);
     try {
-      await api.approveTTSJob(jobId);
+      const r = await api.approveTTSJob(jobId);
+      setApprovedByShot((a) => ({ ...a, [shotId]: r.approvedTTSJobId ?? jobId }));
       refreshJobs();
     } catch (e) {
       setErr(asMessage(e));
@@ -150,12 +174,34 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
     setErr(null);
     try {
       await api.deleteTTSJob(jobId);
+      // Deleting the approved take clears its approval server-side — mirror that
+      // locally so the badge drops immediately.
+      setApprovedByShot((a) => (a[shotId] === jobId ? { ...a, [shotId]: null } : a));
       refreshJobs();
     } catch (e) {
       setErr(asMessage(e));
     } finally {
       setSaving((s) => ({ ...s, [shotId]: false }));
     }
+  };
+
+  // Trim / revert the leading «понь» reference-bleed artifact on a take
+  // (reversible). Same behaviour as the per-shot narration page.
+  const trimArtifact = async (shotId: string, jobId: string) => {
+    setSaving((s) => ({ ...s, [shotId]: true })); setErr(null); setNotice(null);
+    try {
+      const r = await api.trimTTSArtifact(jobId);
+      setNotice(r.trimmed ? `«Понь» обрезан (−${r.cutMs ?? '?'} мс).` : `«Понь» не найден — файл не тронут${r.reason ? ` (${r.reason})` : ''}.`);
+      refreshJobs();
+    } catch (e) { setErr(asMessage(e)); }
+    finally     { setSaving((s) => ({ ...s, [shotId]: false })); }
+  };
+
+  const revertArtifact = async (shotId: string, jobId: string) => {
+    setSaving((s) => ({ ...s, [shotId]: true })); setErr(null); setNotice(null);
+    try { await api.revertTTSArtifact(jobId); setNotice('Оригинал восстановлен.'); refreshJobs(); }
+    catch (e) { setErr(asMessage(e)); }
+    finally   { setSaving((s) => ({ ...s, [shotId]: false })); }
   };
 
   const renderAll = async (mode: 'all' | 'missing') => {
@@ -169,7 +215,7 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
       // "missing" mode: skip shots that already have an approved completed job.
       if (mode === 'missing') {
         const hasApproved = (jobsByShot[s.id] ?? []).some(
-          (j) => j.id === s.approvedTTSJobId && j.status === 'completed',
+          (j) => j.id === approvedByShot[s.id] && j.status === 'completed',
         );
         if (hasApproved) continue;
       }
@@ -189,7 +235,7 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
 
   const totalWithText     = shots.filter((s) => (drafts[s.id] ?? '').trim().length > 0).length;
   const totalApproved     = shots.filter(
-    (s) => s.approvedTTSJobId && (jobsByShot[s.id] ?? []).some((j) => j.id === s.approvedTTSJobId && j.status === 'completed'),
+    (s) => approvedByShot[s.id] && (jobsByShot[s.id] ?? []).some((j) => j.id === approvedByShot[s.id] && j.status === 'completed'),
   ).length;
 
   const voiceRefMissing = engine !== 'silero' && !project?.ttsVoiceRefPath;
@@ -310,6 +356,12 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
           <span>{shots.length} шотов</span>
           <span>📝 с текстом: {totalWithText}</span>
           <span>✓ утверждено: {totalApproved}</span>
+          {notice && (
+            <span className="text-emerald-300 flex items-center gap-1">
+              {notice}
+              <button onClick={() => setNotice(null)} className="text-zinc-500 hover:text-zinc-200">✕</button>
+            </span>
+          )}
           {err && <span className="ml-auto text-red-400 font-mono break-all">{err}</span>}
         </div>
 
@@ -321,7 +373,7 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
             // Most recent completed take — always show this audio player so
             // the user can listen before approving (and not only after).
             const latestCompleted = jobs.find((j) => j.status === 'completed') ?? null;
-            const approvedJob    = jobs.find((j) => j.id === s.approvedTTSJobId);
+            const approvedJob    = jobs.find((j) => j.id === approvedByShot[s.id]);
             const playableJob    = approvedJob ?? latestCompleted;
             const draft          = drafts[s.id] ?? '';
             const dirty          = draft !== (s.narrationText ?? '');
@@ -367,6 +419,27 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
                         {isBusy ? '⏳' : '✓ утвердить'}
                       </button>
                     )}
+                    {/* «понь»-обрезка — на утверждённой озвучке (как на странице narration) */}
+                    {approvedJob && approvedJob.status === 'completed' && !approvedJob.trimmedArtifact && (
+                      <button
+                        onClick={() => trimArtifact(s.id, approvedJob.id)}
+                        disabled={isBusy}
+                        title="Обрезать ведущий артефакт «понь» (обратимо)"
+                        className="bg-zinc-700 hover:bg-zinc-600 disabled:opacity-30 text-white text-[10px] px-2 py-0.5 rounded"
+                      >
+                        {isBusy ? '⏳' : '✂ понь'}
+                      </button>
+                    )}
+                    {approvedJob && approvedJob.status === 'completed' && approvedJob.trimmedArtifact && (
+                      <button
+                        onClick={() => revertArtifact(s.id, approvedJob.id)}
+                        disabled={isBusy}
+                        title="Вернуть оригинал (отменить обрезку «понь»)"
+                        className="bg-amber-800 hover:bg-amber-700 disabled:opacity-30 text-white text-[10px] px-2 py-0.5 rounded"
+                      >
+                        {isBusy ? '⏳' : '↩ вернуть'}
+                      </button>
+                    )}
                     {playableJob && (
                       <button
                         onClick={() => deletePlayable(s.id, playableJob.id)}
@@ -386,7 +459,40 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
                   rows={2}
                   className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm text-zinc-200 font-sans resize-y"
                 />
-                <div className="flex justify-end gap-2 mt-1.5">
+                <div className="flex items-center gap-2 mt-1.5">
+                  {/* Per-shot f5 override — defaults to the global value above; ▶ озвучить
+                      for THIS shot uses it. Bulk synth stays uniform (global). */}
+                  {engine === 'f5' && (
+                    <div className="flex items-center gap-2 mr-auto">
+                      <label className="text-[10px] text-zinc-500 flex items-center gap-1" title="Скорость для этого шота (по умолчанию — общая)">
+                        скорость
+                        <input
+                          type="number" min={0.5} max={2.0} step={0.05}
+                          value={rowRate[s.id] ?? speed}
+                          onChange={(e) => setRowRate((r) => ({ ...r, [s.id]: Math.max(0.5, Math.min(2.0, parseFloat(e.target.value) || speed)) }))}
+                          className="bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-[11px] text-zinc-200 font-mono w-14"
+                        />
+                      </label>
+                      <label className="text-[10px] text-zinc-500 flex items-center gap-1" title="Пауза между предложениями для этого шота">
+                        пауза
+                        <input
+                          type="number" min={0} max={30} step={0.5}
+                          value={rowPause[s.id] ?? pause}
+                          onChange={(e) => setRowPause((p) => ({ ...p, [s.id]: Math.max(0, Math.min(30, parseFloat(e.target.value) || 0)) }))}
+                          className="bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-[11px] text-zinc-200 font-mono w-14"
+                        />
+                      </label>
+                      {(rowRate[s.id] !== undefined || rowPause[s.id] !== undefined) && (
+                        <button
+                          onClick={() => { setRowRate((r) => { const n = { ...r }; delete n[s.id]; return n; }); setRowPause((p) => { const n = { ...p }; delete n[s.id]; return n; }); }}
+                          title="Сбросить к общим значениям"
+                          className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                        >
+                          ↺ общие
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {dirty && (
                     <button
                       onClick={() => saveText(s.id)}

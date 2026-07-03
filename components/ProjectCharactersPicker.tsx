@@ -53,7 +53,7 @@ export function ProjectCharactersPicker({ projectSlug }: { projectSlug: string }
       </main>
     );
   }
-  if (!chars) return <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto text-zinc-500">Loading…</main>;
+  if (!chars) return <main className="px-4 sm:px-8 py-6 text-zinc-500">Loading…</main>;
 
   // Flatten character → profile cards (matches the global list). One card per
   // profile, with the character's attach checkbox at top-left.

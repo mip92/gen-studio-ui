@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
-import { Breadcrumbs } from '../../components/Breadcrumbs';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { PageHeader } from '../../components/PageHeader';
 import { api, ActionItem, ActionGateKey, ProjectListItem } from '../../lib/api';
 
 const GATE_LABELS: Record<ActionGateKey, { num: number; ru: string }> = {
@@ -41,43 +42,129 @@ const GATE_ORDER: ActionGateKey[] = [
   'approve_bgm',
 ];
 
-const POLL_MS = 10_000;
+const PAGE_SIZE = 100;
 
+// useSearchParams() requires a Suspense boundary in a statically-rendered
+// client page (Next 16) — wrap the inner component so the production build
+// doesn't bail out.
 export default function ActionsPage() {
-  const [items, setItems] = useState<ActionItem[] | null>(null);
-  const [projects, setProjects] = useState<ProjectListItem[]>([]);
-  const [projectSlug, setProjectSlug] = useState<string>('');
-  const [error, setError] = useState<string | null>(null);
+  return (
+    <Suspense fallback={<div className="bg-zinc-950 text-zinc-100 min-h-full" />}>
+      <ActionsInner />
+    </Suspense>
+  );
+}
+
+function ActionsInner() {
+  const router       = useRouter();
+  const pathname     = usePathname();
+  const searchParams = useSearchParams();
+
+  // ── State lives in the URL (filters + page are shareable / bookmarkable) ──
+  const projectSlug = searchParams.get('project') ?? '';
+  const gateFilter  = (searchParams.get('gate') as ActionGateKey | '') || '';
+  const page        = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
+
+  const [items, setItems]         = useState<ActionItem[] | null>(null);
+  const [projects, setProjects]   = useState<ProjectListItem[]>([]);
+  const [error, setError]         = useState<string | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Merge a partial set of params into the URL, dropping empty ones. Uses
+  // replace() so filter/page churn doesn't bloat the browser history (matters
+  // on a tablet where the back button would otherwise step through every page).
+  const setParams = useCallback(
+    (updates: Record<string, string | null>) => {
+      const params = new URLSearchParams(searchParams.toString());
+      for (const [k, v] of Object.entries(updates)) {
+        if (v === null || v === '') params.delete(k);
+        else params.set(k, v);
+      }
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname);
+    },
+    [router, pathname, searchParams],
+  );
 
   useEffect(() => {
     api.listProjects().then(setProjects).catch(() => setProjects([]));
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    const fetchOnce = async () => {
-      try {
-        const res = await api.listActions(projectSlug || undefined);
-        if (!cancelled) {
-          setItems(res.items);
-          setError(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(String(e instanceof Error ? e.message : e));
-        }
-      }
-    };
-    fetchOnce();
-    const t = setInterval(fetchOnce, POLL_MS);
-    return () => { cancelled = true; clearInterval(t); };
+  // Single fetch (project filter is applied server-side to keep the payload
+  // small). NO setInterval — the old 10s long-poll kept the tablet awake and
+  // drained the battery. Freshness now comes from (a) this running on
+  // project-change, (b) the manual "Обновить" button, (c) a visibilitychange
+  // refetch when the user returns to the tab — all event-driven, zero idle cost.
+  const fetchActions = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const res = await api.listActions(projectSlug || undefined);
+      setItems(res.items);
+      setError(null);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setRefreshing(false);
+    }
   }, [projectSlug]);
 
-  // Group items by project, then by gate, preserving the canonical gate order.
+  useEffect(() => {
+    let cancelled = false;
+    setItems(null);
+    (async () => {
+      try {
+        const res = await api.listActions(projectSlug || undefined);
+        if (!cancelled) { setItems(res.items); setError(null); }
+      } catch (e) {
+        if (!cancelled) setError(String(e instanceof Error ? e.message : e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [projectSlug]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchActions();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [fetchActions]);
+
+  // Gate options for the filter dropdown — only gates actually present (with
+  // counts), in canonical order. Built from the full (project-filtered) set so
+  // the menu reflects everything, not just the current page.
+  const gateOptions = useMemo(() => {
+    const counts = new Map<ActionGateKey, number>();
+    for (const i of items ?? []) counts.set(i.gateKey, (counts.get(i.gateKey) ?? 0) + 1);
+    return GATE_ORDER
+      .filter((k) => counts.has(k))
+      .map((k) => ({ key: k, count: counts.get(k)!, label: GATE_LABELS[k].ru }));
+  }, [items]);
+
+  // Filter by gate (client-side), then flatten to a stable order so page
+  // boundaries are deterministic: by project name, then canonical gate order.
+  const ordered = useMemo(() => {
+    const base = gateFilter ? (items ?? []).filter((i) => i.gateKey === gateFilter) : (items ?? []);
+    return [...base].sort((a, b) => {
+      const pn = a.project.name.localeCompare(b.project.name);
+      if (pn !== 0) return pn;
+      return GATE_ORDER.indexOf(a.gateKey) - GATE_ORDER.indexOf(b.gateKey);
+    });
+  }, [items, gateFilter]);
+
+  const total     = ordered.length;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const safePage  = Math.min(page, pageCount);
+  const pageItems = useMemo(
+    () => ordered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [ordered, safePage],
+  );
+
+  // Group the current page's items by project, then by gate (canonical order).
   const grouped = useMemo(() => {
     const byProject = new Map<string, { project: ActionItem['project']; gates: Map<ActionGateKey, ActionItem[]> }>();
-    for (const item of items ?? []) {
+    for (const item of pageItems) {
       let entry = byProject.get(item.project.id);
       if (!entry) {
         entry = { project: item.project, gates: new Map() };
@@ -88,7 +175,7 @@ export default function ActionsPage() {
       entry.gates.set(item.gateKey, list);
     }
     return Array.from(byProject.values()).sort((a, b) => a.project.name.localeCompare(b.project.name));
-  }, [items]);
+  }, [pageItems]);
 
   const handleRun = async (item: ActionItem, key: string) => {
     if (!item.action) return;
@@ -106,34 +193,54 @@ export default function ActionsPage() {
     }
   };
 
+  const goToPage = (n: number) => setParams({ page: n <= 1 ? null : String(n) });
+
   return (
     <div className="bg-zinc-950 text-zinc-100 min-h-full">
-      <div className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-3 pb-3">
-          <Breadcrumbs items={[{ label: 'Overview', href: '/' }, { label: 'Действия' }]} />
-          <div className="flex items-baseline gap-4 mt-1">
-            <h1 className="text-xl font-semibold text-zinc-100">Действия</h1>
-            <span className="text-sm text-zinc-500">
-              {items === null ? '…' : `${items.length} ожидают`}
-            </span>
-            <div className="ml-auto flex items-center gap-2">
-              <label className="text-xs uppercase tracking-wider text-zinc-500">Проект:</label>
-              <select
-                value={projectSlug}
-                onChange={(e) => setProjectSlug(e.target.value)}
-                className="bg-zinc-900 border border-zinc-800 text-zinc-200 text-sm rounded px-2 py-1"
-              >
-                <option value="">Все</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.slug}>{p.name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </div>
-      </div>
+      <PageHeader
+        crumbs={[{ label: 'Overview', href: '/' }, { label: 'Действия' }]}
+        title="Действия"
+        subtitle={items === null ? '…' : `${total} ожидают${gateFilter || projectSlug ? ' (фильтр)' : ''}`}
+        actions={
+          <>
+            <button
+              onClick={fetchActions}
+              disabled={refreshing}
+              className="px-3 py-1 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 text-xs disabled:opacity-50 disabled:cursor-wait"
+              title="Обновить список"
+            >
+              {refreshing ? '…' : '⟳ Обновить'}
+            </button>
 
-      <main className="p-4 sm:p-8 max-w-7xl mx-auto space-y-8">
+            <label className="text-xs uppercase tracking-wider text-zinc-500">Гейт:</label>
+            <select
+              value={gateFilter}
+              onChange={(e) => setParams({ gate: e.target.value || null, page: null })}
+              className="bg-zinc-900 border border-zinc-800 text-zinc-200 text-sm rounded px-2 py-1 max-w-[14rem]"
+            >
+              <option value="">Все</option>
+              {gateOptions.map((g) => (
+                <option key={g.key} value={g.key}>{g.label} ({g.count})</option>
+              ))}
+            </select>
+
+            <label className="text-xs uppercase tracking-wider text-zinc-500">Проект:</label>
+            <select
+              value={projectSlug}
+              onChange={(e) => setParams({ project: e.target.value || null, page: null })}
+              className="bg-zinc-900 border border-zinc-800 text-zinc-200 text-sm rounded px-2 py-1"
+            >
+              <option value="">Все</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.slug}>{p.name}</option>
+              ))}
+            </select>
+          </>
+        }
+        below={pageCount > 1 ? <Pager safePage={safePage} pageCount={pageCount} total={total} onGo={goToPage} /> : undefined}
+      />
+
+      <main className="p-4 sm:p-8 space-y-8">
         {error && (
           <div className="rounded border border-red-900 bg-red-950 text-red-200 text-sm px-4 py-3">
             <div className="font-semibold mb-1">Не удалось загрузить /actions</div>
@@ -144,9 +251,11 @@ export default function ActionsPage() {
           </div>
         )}
 
-        {items !== null && items.length === 0 && !error && (
+        {items !== null && total === 0 && !error && (
           <div className="text-sm text-zinc-500 text-center py-16">
-            Нет задач, ожидающих действий. Всё в работе или в очереди.
+            {gateFilter || projectSlug
+              ? 'Под фильтр ничего не подходит.'
+              : 'Нет задач, ожидающих действий. Всё в работе или в очереди.'}
           </div>
         )}
 
@@ -204,7 +313,41 @@ export default function ActionsPage() {
             })}
           </section>
         ))}
+
+        {pageCount > 1 && (
+          <div className="pt-2 flex justify-center">
+            <Pager safePage={safePage} pageCount={pageCount} total={total} onGo={goToPage} />
+          </div>
+        )}
       </main>
+    </div>
+  );
+}
+
+/** Compact prev/next pager with page + total readout. Used in the sticky header
+ *  (always visible) and at the bottom of the list. */
+function Pager({ safePage, pageCount, total, onGo }: {
+  safePage: number; pageCount: number; total: number; onGo: (n: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={() => onGo(safePage - 1)}
+        disabled={safePage <= 1}
+        className="px-3 py-1 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        ← Назад
+      </button>
+      <span className="text-xs text-zinc-400 tabular-nums">
+        Стр. {safePage} / {pageCount} · {total} шт.
+      </span>
+      <button
+        onClick={() => onGo(safePage + 1)}
+        disabled={safePage >= pageCount}
+        className="px-3 py-1 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        Вперёд →
+      </button>
     </div>
   );
 }

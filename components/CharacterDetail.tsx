@@ -128,7 +128,7 @@ export function CharacterDetail({
   };
 
   return (
-    <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
+    <main className="px-4 sm:px-8 py-6">
       <Link href={`/projects/${projectId}/characters`} className="text-zinc-500 hover:text-zinc-200 text-sm mb-4 inline-block">
         ← все персонажи
       </Link>
@@ -606,7 +606,7 @@ export function ReferenceUploader({ profileId }: { profileId: string }) {
 // ── Small UI primitives ─────────────────────────────────────────────────────
 
 function Pad({ children }: { children: React.ReactNode }) {
-  return <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">{children}</main>;
+  return <main className="px-4 sm:px-8 py-6">{children}</main>;
 }
 function Err({ msg }: { msg: string }) {
   return (

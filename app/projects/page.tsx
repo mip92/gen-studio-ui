@@ -1,81 +1,32 @@
-'use client';
-
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, ProjectListItem } from '../../lib/api';
-import { Breadcrumbs } from '../../components/Breadcrumbs';
+import { getActiveProjects } from '../../lib/projects';
+import { PageHeader } from '../../components/PageHeader';
+import { ProjectGrid } from '../../components/ProjectGrid';
 
-export default function ProjectsListPage() {
-  const [projects, setProjects] = useState<ProjectListItem[] | null>(null);
-  const [error, setError]       = useState<string | null>(null);
-
-  useEffect(() => {
-    api.listProjects()
-      .then(setProjects)
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, []);
+// Server Component: the project list is fetched server-side (deduped with the
+// sidebar via React.cache) and filtered to in-production projects. Finished
+// ones live under /projects/archived.
+export default async function ProjectsListPage() {
+  const projects = await getActiveProjects();
 
   return (
     <div className="bg-zinc-950 text-zinc-100">
-      <header className="border-b border-zinc-800 px-4 sm:px-8 py-4">
-        <div className="max-w-7xl mx-auto">
-          <Breadcrumbs items={[{ label: 'Overview', href: '/' }, { label: 'Projects' }]} />
-          <h1 className="text-xl font-semibold">Проекты</h1>
-        </div>
-      </header>
+      <PageHeader
+        crumbs={[{ label: 'Overview', href: '/' }, { label: 'Projects' }]}
+        title="Проекты"
+        actions={
+          <Link href="/projects/archived" className="text-sm text-zinc-400 hover:text-zinc-100 shrink-0">
+            Архив →
+          </Link>
+        }
+      />
 
-      <main className="p-4 sm:p-8 max-w-7xl mx-auto">
-        {error && (
-          <div className="bg-red-900/40 border border-red-700 rounded p-4 mb-4">
-            <p className="text-red-200 font-mono text-sm">{error}</p>
-            <p className="text-zinc-400 text-sm mt-2">
-              Backend на <code>{process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:3000'}</code> не отвечает.
-            </p>
-          </div>
+      <main className="p-4 sm:p-8">
+        {projects.length === 0 ? (
+          <p className="text-zinc-500">Нет активных проектов. Загляните в <Link href="/projects/archived" className="text-blue-400 hover:underline">архив</Link>.</p>
+        ) : (
+          <ProjectGrid projects={projects} />
         )}
-
-        {!projects && !error && (
-          <p className="text-zinc-500">Loading…</p>
-        )}
-
-        {projects && projects.length === 0 && (
-          <p className="text-zinc-500">Нет проектов в БД.</p>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {projects?.map((p) => (
-            <Link
-              key={p.id}
-              href={`/projects/${p.id}`}
-              className="block bg-zinc-900 border border-zinc-800 hover:border-blue-700 hover:bg-zinc-800/50 rounded-lg p-5 transition"
-            >
-              <div className="flex items-start justify-between mb-2">
-                <div>
-                  <h3 className="font-medium text-lg">{p.name}</h3>
-                  <p className="text-xs text-zinc-500 font-mono">{p.slug}</p>
-                </div>
-                <span className="text-zinc-600 text-xl">→</span>
-              </div>
-              {/* Visual style badge — drives which identity pipeline (LoRA vs anchor)
-                  and which workflows are available. See docs/VISUAL_STYLE_ARCHITECTURE.md. */}
-              {p.visualStyle && (
-                <span
-                  className={`inline-block px-2 py-0.5 text-[10px] font-mono rounded mb-2 ${
-                    p.visualStyle === 'photoreal_cinematic'
-                      ? 'bg-amber-900/40 text-amber-300 border border-amber-800'
-                      : 'bg-purple-900/40 text-purple-300 border border-purple-800'
-                  }`}
-                  title="Visual style — drives workflow + identity pipeline"
-                >
-                  {p.visualStyle}
-                </span>
-              )}
-              <p className="text-xs text-zinc-500 mt-3">
-                Открыть dashboard персонажей и LoRA
-              </p>
-            </Link>
-          ))}
-        </div>
       </main>
     </div>
   );

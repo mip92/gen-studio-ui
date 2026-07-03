@@ -1,10 +1,11 @@
 import { ProjectHeader } from '../../../components/ProjectHeader';
-import { API_BASE } from '../../../lib/api';
+import { getProjects } from '../../../lib/projects';
 
 // Note on URL canonicalisation: the slug→uuid redirect happens in `middleware.ts`
 // at the app root, so by the time we hit this layout `params.id` is always a
-// UUID. We still call /projects here just to resolve the human-readable name
-// for the header.
+// UUID. We resolve the human-readable name for the header from the shared
+// project list — getProjects() is React.cache'd, so this reuses the same fetch
+// the sidebar already made this render (no extra round-trip).
 
 export default async function ProjectLayout({
   children,
@@ -15,17 +16,9 @@ export default async function ProjectLayout({
 }) {
   const { id } = await params;
 
-  let projectName = id;
-  try {
-    const res = await fetch(`${API_BASE}/projects`, { cache: 'no-store' });
-    if (res.ok) {
-      const list: Array<{ id: string; slug: string; name: string }> = await res.json();
-      const found = list.find((p) => p.id === id || p.slug === id);
-      if (found) projectName = found.name;
-    }
-  } catch {
-    // backend down — fall back to id
-  }
+  const projects = await getProjects();
+  const found = projects.find((p) => p.id === id || p.slug === id);
+  const projectName = found?.name ?? id;
 
   return (
     <div className="bg-zinc-950 text-zinc-100">

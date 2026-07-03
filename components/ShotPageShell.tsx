@@ -3,8 +3,8 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { api, ShotFull } from '../lib/api';
-import { Breadcrumbs, BreadcrumbItem } from './Breadcrumbs';
-import { ScrollableTabs } from './ScrollableTabs';
+import { BreadcrumbItem } from './Breadcrumbs';
+import { PageHeader } from './PageHeader';
 
 type CharactersList = Awaited<ReturnType<typeof api.listCharacters>>;
 
@@ -73,36 +73,45 @@ export function ShotPageShell({
 }
 
 function StickyHeader({ projectId, shotId, shot }: { projectId: string; shotId: string; shot: ShotFull }) {
-  return (
-    <div className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
-      <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-3 pb-0">
-        <ShotBreadcrumbs projectId={projectId} shotId={shotId} shot={shot} />
-        <div className="flex items-center justify-between gap-4">
-          <h1 className="text-xl font-semibold font-mono text-zinc-100">{shot.shotCode}</h1>
-          <RenderModeToggle />
-        </div>
-        <TabsNav projectId={projectId} shotId={shotId} shot={shot} />
-      </div>
-    </div>
-  );
-}
-
-function ShotBreadcrumbs({ projectId, shotId, shot }: { projectId: string; shotId: string; shot: ShotFull }) {
   const pathname = usePathname();
-  const tab = TABS.find((t) => pathname?.includes(`/shots/${shotId}/${t.slug}`));
+  const base = `/projects/${projectId}/shots/${shotId}`;
+  const activeSlug = TABS.find((t) => pathname?.includes(`${base}/${t.slug}`))?.slug ?? '';
+  const tab = TABS.find((t) => t.slug === activeSlug);
 
   // shot is always loaded by the time we reach the StickyHeader — error/loading
   // states bail out earlier — so we never have to fall back to a truncated id.
-  const items: BreadcrumbItem[] = [
+  const crumbs: BreadcrumbItem[] = [
     { label: 'Overview',                  href: '/' },
     { label: 'Projects',                  href: '/projects' },
     { label: shot.project?.name ?? '…',   href: `/projects/${projectId}` },
     { label: shot.scene?.title ?? shot.scene?.sceneKey ?? 'scene',
       href: `/projects/${projectId}/scenes#${shot.scene?.sceneKey ?? ''}` },
-    { label: shot.shotCode,       href: `/projects/${projectId}/shots/${shotId}/prompts` },
+    { label: shot.shotCode,       href: `${base}/prompts` },
     ...(tab ? [{ label: tab.label }] : []),
   ];
-  return <Breadcrumbs items={items} />;
+
+  // Static shots never get a video clip — the backend rejects video generation
+  // for them with a 400, so disable the tab outright instead of letting the
+  // user click through to a dead end.
+  const isStatic = shot.renderMode === 'static';
+
+  return (
+    <PageHeader
+      crumbs={crumbs}
+      title={<span className="font-mono">{shot.shotCode}</span>}
+      actions={<RenderModeToggle />}
+      tabs={TABS.map((t) => {
+        const disabled = t.slug === 'videos' && isStatic;
+        return {
+          href:     `${base}/${t.slug}`,
+          label:    t.label,
+          active:   activeSlug === t.slug,
+          disabled,
+          title:    disabled ? 'Видео недоступно для статичного кадра (renderMode=static)' : undefined,
+        };
+      })}
+    />
+  );
 }
 
 /**
@@ -143,30 +152,5 @@ function RenderModeToggle() {
         </button>
       </div>
     </div>
-  );
-}
-
-function TabsNav({ projectId, shotId, shot }: { projectId: string; shotId: string; shot: ShotFull }) {
-  const pathname = usePathname();
-  const base = `/projects/${projectId}/shots/${shotId}`;
-  const activeSlug = TABS.find((t) => pathname?.includes(`${base}/${t.slug}`))?.slug ?? '';
-  // Static shots never get a video clip — the backend rejects video generation
-  // for them with a 400, so disable the tab outright instead of letting the
-  // user click through to a dead end.
-  const isStatic = shot.renderMode === 'static';
-  return (
-    <ScrollableTabs
-      className="mt-3"
-      tabs={TABS.map((t) => {
-        const disabled = t.slug === 'videos' && isStatic;
-        return {
-          href:     `${base}/${t.slug}`,
-          label:    t.label,
-          active:   activeSlug === t.slug,
-          disabled,
-          title:    disabled ? 'Видео недоступно для статичного кадра (renderMode=static)' : undefined,
-        };
-      })}
-    />
   );
 }

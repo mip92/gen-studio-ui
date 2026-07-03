@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { SidebarNavContent } from './Sidebar';
+import { ProjectListItem } from '../lib/api';
 
 /**
  * Mobile-only (`md:hidden`) navigation: a slim top bar with a burger that opens
@@ -13,7 +14,7 @@ import { SidebarNavContent } from './Sidebar';
  * the bar stays put while the page scrolls. The drawer itself is a fixed
  * overlay. It auto-closes on route change and on backdrop tap.
  */
-export function MobileNav() {
+export function MobileNav({ projects }: { projects: ProjectListItem[] }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
@@ -44,7 +45,7 @@ export function MobileNav() {
             className="absolute inset-0 bg-black/60"
           />
           <div className="absolute left-0 top-0 h-full w-72 max-w-[82%] bg-zinc-950 border-r border-zinc-800 overflow-y-auto shadow-xl">
-            <SidebarNavContent onNavigate={() => setOpen(false)} />
+            <SidebarNavContent projects={projects} onNavigate={() => setOpen(false)} />
           </div>
         </div>
       )}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, use } from 'react';
-import { api, ProjectFull, UpdateProjectBody, StyleLoraItem } from '@/lib/api';
+import { api, ProjectFull, UpdateProjectBody, StyleLoraItem, VisualStyle } from '@/lib/api';
 import { ProjectTTSSettings } from '@/components/ProjectTTSSettings';
 
 type Status = 'idle' | 'loading' | 'saving' | 'saved' | 'error';
@@ -25,6 +25,12 @@ function transitionPresetOf(settings: unknown): TransitionPreset {
   return s === 'comic' ? 'comic' : 'default';
 }
 
+/** Per-project Flux base UNET (graphic_novel_flux). '' = use the workflow default. */
+function fluxBaseOf(settings: unknown): string {
+  const s = (settings as { fluxBaseModel?: unknown } | null | undefined)?.fluxBaseModel;
+  return typeof s === 'string' ? s : '';
+}
+
 export default function ProjectSettingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
 
@@ -33,6 +39,9 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
   const [draft, setDraft]   = useState<UpdateProjectBody>({});
   const [status, setStatus] = useState<Status>('loading');
   const [error,  setError]  = useState<string | null>(null);
+
+  // Registry of selectable visual styles (project.visualStyle picker).
+  const [visualStyles, setVisualStyles]       = useState<VisualStyle[]>([]);
 
   // Per-project comic style-LoRA. '' = use the workflow's baked default.
   const [styleLoras, setStyleLoras]           = useState<StyleLoraItem[]>([]);
@@ -44,24 +53,33 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
   const [transitionPreset, setTransitionPreset]             = useState<TransitionPreset>('default');
   const [initialTransitionPreset, setInitialTransitionPreset] = useState<TransitionPreset>('default');
 
+  // Per-project Flux base UNET (graphic_novel_flux only). '' = workflow default.
+  const [fluxBase, setFluxBase]               = useState<string>('');
+  const [initialFluxBase, setInitialFluxBase] = useState<string>('');
+
   useEffect(() => {
     (async () => {
       try {
         setStatus('loading');
-        const [proj, script, loras] = await Promise.all([
+        const [proj, script, loras, styles] = await Promise.all([
           api.getProject(id),
           api.getProjectScript(id),
           api.listStyleLoras().catch(() => [] as StyleLoraItem[]),
+          api.listVisualStyles().catch(() => [] as VisualStyle[]),
         ]);
         setProject(proj);
         setScriptText(script.text ?? '');
         setStyleLoras(loras);
+        setVisualStyles(styles);
         const cur = styleLoraNameOf(proj.settings);
         setStyleLora(cur);
         setInitialStyleLora(cur);
         const curPreset = transitionPresetOf(proj.settings);
         setTransitionPreset(curPreset);
         setInitialTransitionPreset(curPreset);
+        const curBase = fluxBaseOf(proj.settings);
+        setFluxBase(curBase);
+        setInitialFluxBase(curBase);
         setStatus('idle');
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -71,17 +89,30 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
   }, [id]);
 
   if (status === 'loading' || !project) {
-    return <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto"><p className="text-zinc-500">Загрузка…</p></main>;
+    return <main className="px-4 sm:px-8 py-6"><p className="text-zinc-500">Загрузка…</p></main>;
   }
 
   // Pick the effective value for an input — draft overrides the saved project.
   const v = <K extends keyof UpdateProjectBody>(k: K): string =>
     (draft[k] as string | undefined) ?? (project[k as keyof ProjectFull] as string | null ?? '') as string;
 
+  // Effective visual style (draft override → saved) — drives which style-specific
+  // rows (LoRA, Flux base) are shown, live, before the change is even saved.
+  const effStyle = (draft.visualStyle as string | undefined) ?? (project.visualStyle ?? 'photoreal_cinematic');
+  const STYLE_FALLBACK = [
+    { id: 'photoreal_cinematic',       displayName: 'Photoreal cinematic' },
+    { id: 'graphic_novel_cell_shaded', displayName: 'Graphic novel (SDXL)' },
+    { id: 'graphic_novel_flux',        displayName: 'Graphic novel (Flux)' },
+  ];
+  const styleOpts = visualStyles.length > 0
+    ? visualStyles.map((s) => ({ id: s.id, displayName: s.displayName ?? s.id }))
+    : STYLE_FALLBACK;
+
   const dirty =
     Object.keys(draft).length > 0
     || styleLora !== initialStyleLora
     || transitionPreset !== initialTransitionPreset
+    || fluxBase !== initialFluxBase
     || scriptText !== (project ? '' : '') /* always allow script save */;
 
   const onChange = <K extends keyof UpdateProjectBody>(k: K, val: string) => {
@@ -95,7 +126,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
       // strings on the four required prompt fields.
       const promptPatch: UpdateProjectBody = {};
       const promptKeys: (keyof UpdateProjectBody)[] = [
-        'name', 'defaultNegative', 'defaultVideoNegative',
+        'name', 'visualStyle', 'defaultNegative', 'defaultVideoNegative',
         'defaultMotionPrompt', 'defaultStaticMotionPrompt',
       ];
       for (const k of promptKeys) {
@@ -106,13 +137,15 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
       // settings JSON override: PATCH replaces settings wholesale, so send the
       // full merged object whenever styleLora OR transitionPreset changed.
       // Empty/default values clear the key (falls back to JSON/export default).
-      if (styleLora !== initialStyleLora || transitionPreset !== initialTransitionPreset) {
+      if (styleLora !== initialStyleLora || transitionPreset !== initialTransitionPreset || fluxBase !== initialFluxBase) {
         const base = (project.settings as Record<string, unknown> | null) ?? {};
         const nextSettings = { ...base };
         if (styleLora) nextSettings.styleLora = { name: styleLora };
         else delete nextSettings.styleLora;
         if (transitionPreset === 'comic') nextSettings.transitionPreset = 'comic';
         else delete nextSettings.transitionPreset;
+        if (fluxBase.trim()) nextSettings.fluxBaseModel = fluxBase.trim();
+        else delete nextSettings.fluxBaseModel;
         promptPatch.settings = nextSettings;
       }
       let nextProject = project;
@@ -121,6 +154,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
       }
       setInitialStyleLora(styleLora);
       setInitialTransitionPreset(transitionPreset);
+      setInitialFluxBase(fluxBase);
       // scriptText goes through the separate endpoint (handles null/empty correctly).
       const currentScript = (await api.getProjectScript(project.id)).text ?? '';
       if (scriptText !== currentScript) {
@@ -170,7 +204,23 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
             className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm" />
         </Row>
 
-        {project.visualStyle && project.visualStyle !== 'photoreal_cinematic' && (
+        <Row
+          label="Визуальный стиль / воркфлоу"
+          hint="project.visualStyle — определяет пайплайн рендера (SceneStrategy + воркфлоу + identity). Меняется в любой момент и влияет на БУДУЩИЕ рендеры (уже отрендеренные кадры не трогает). graphic_novel_flux = Flux-комикс; graphic_novel_cell_shaded = SDXL-комикс; photoreal_cinematic = фотореализм.">
+          <select
+            value={effStyle}
+            onChange={(e) => onChange('visualStyle', e.target.value)}
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
+            {styleOpts.map((s) => (
+              <option key={s.id} value={s.id}>{s.displayName} — {s.id}</option>
+            ))}
+            {effStyle && !styleOpts.some((s) => s.id === effStyle) && (
+              <option value={effStyle}>{effStyle} (нет в реестре)</option>
+            )}
+          </select>
+        </Row>
+
+        {effStyle !== 'photoreal_cinematic' && (
           <Row
             label="Стиль (LoRA)"
             hint="project.settings.styleLora — стилевая LoRA, подставляется в ноду 2 (LoraLoader) графnovel-воркфлоу при рендере. «По умолчанию» = LoRA, зашитая в воркфлоу. Файлы берутся из models/loras/style/.">
@@ -186,6 +236,19 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
                 <option key={l.name} value={l.name}>{l.label}</option>
               ))}
             </select>
+          </Row>
+        )}
+
+        {effStyle === 'graphic_novel_flux' && (
+          <Row
+            label="Flux база (UNET)"
+            hint="project.settings.fluxBaseModel — имя файла Flux-базы (node 1, models/unet|diffusion_models/). Один раз на проект. Пусто = дефолт из воркфлоу (flux1-dev-kontext). Под комикс-LoRA обычно нужен нейтральный flux1-dev, совпадающий с базой обучения LoRA. Комикс-вид даёт LoRA из поля «Стиль (LoRA)» выше — её файл положи в models/loras/style/.">
+            <input
+              type="text"
+              value={fluxBase}
+              onChange={(e) => setFluxBase(e.target.value)}
+              placeholder="flux1-dev-kontext_fp8_scaled.safetensors"
+              className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm font-mono" />
           </Row>
         )}
 

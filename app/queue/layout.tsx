@@ -1,8 +1,8 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import { Breadcrumbs, BreadcrumbItem } from '../../components/Breadcrumbs';
-import { ScrollableTabs } from '../../components/ScrollableTabs';
+import { BreadcrumbItem } from '../../components/Breadcrumbs';
+import { PageHeader } from '../../components/PageHeader';
 
 const TABS = [
   { slug: 'active', label: 'Активные' },
@@ -22,29 +22,16 @@ export default function QueueLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className="bg-zinc-950 text-zinc-100">
-      <div className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-3 pb-0">
-          <Breadcrumbs items={crumbs} />
-          <h1 className="text-xl font-semibold text-zinc-100">Очередь</h1>
-          <TabsNav />
-        </div>
-      </div>
-      <main className="p-4 sm:p-8 max-w-7xl mx-auto">{children}</main>
+      <PageHeader
+        crumbs={crumbs}
+        title="Очередь"
+        tabs={TABS.map((t) => ({
+          href:   `/queue/${t.slug}`,
+          label:  t.label,
+          active: tab?.slug === t.slug,
+        }))}
+      />
+      <main className="p-4 sm:p-8">{children}</main>
     </div>
-  );
-}
-
-function TabsNav() {
-  const pathname = usePathname();
-  const activeSlug = TABS.find((t) => pathname?.endsWith(`/queue/${t.slug}`))?.slug ?? '';
-  return (
-    <ScrollableTabs
-      className="mt-3"
-      tabs={TABS.map((t) => ({
-        href:   `/queue/${t.slug}`,
-        label:  t.label,
-        active: activeSlug === t.slug,
-      }))}
-    />
   );
 }

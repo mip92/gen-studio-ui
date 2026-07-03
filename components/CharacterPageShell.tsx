@@ -3,8 +3,8 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { api, ProfileSummary, ProfileFull, ProfileStyleReadiness } from '../lib/api';
-import { Breadcrumbs, BreadcrumbItem } from './Breadcrumbs';
-import { ScrollableTabs } from './ScrollableTabs';
+import { BreadcrumbItem } from './Breadcrumbs';
+import { PageHeader } from './PageHeader';
 
 const POLL_MS = 5000;
 
@@ -162,75 +162,47 @@ function StickyHeader({
     ? (anchorReady ? 'anchor готов' : 'нет anchor')
     : PHASE_LABEL[profile.phase];
 
-  return (
-    <div className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
-      <div className="px-4 sm:px-8 pt-3 pb-0">
-        <CharacterBreadcrumbs profileId={profileId} profile={profile} identityPipeline={identityPipeline} />
-        <div className="flex items-baseline justify-between mb-0">
-          <div>
-            <h1 className="text-xl font-semibold text-zinc-100">{profile.displayName ?? profile.profileCode}</h1>
-            <p className="text-zinc-500 text-xs font-mono mt-0.5">
-              {profile.profileCode}
-              {' · '}
-              <span className={
-                identityPipeline === 'anchor' ? 'text-purple-400' :
-                identityPipeline === 'lora'   ? 'text-amber-400'  :
-                identityPipeline === 'mixed'  ? 'text-cyan-400'   :
-                'text-zinc-600'
-              }>
-                {identityPipeline === 'anchor' ? 'cartoon (anchor)' :
-                 identityPipeline === 'lora'   ? 'photoreal (LoRA)' :
-                 identityPipeline === 'mixed'  ? 'photoreal+cartoon' :
-                 'library (нет проекта)'}
-              </span>
-            </p>
-          </div>
-          <span className={`text-xs px-3 py-1 rounded font-medium ${badgeClass}`}>
-            {badgeText}
-          </span>
-        </div>
-        <TabsNav profileId={profileId} identityPipeline={identityPipeline} />
-      </div>
-    </div>
-  );
-}
-
-function CharacterBreadcrumbs({
-  profileId, profile, identityPipeline,
-}: {
-  profileId:        string;
-  profile:          ProfileSummary;
-  identityPipeline: 'lora' | 'anchor' | 'mixed' | 'none';
-}) {
-  const pathname = usePathname();
-  const base = `/characters/${profileId}`;
-  const visible = ALL_TABS.filter((t) => (t.pipelines as readonly string[]).includes(identityPipeline));
-  const tab = visible.find((t) => pathname?.includes(`${base}/${t.slug}`));
-
-  const items: BreadcrumbItem[] = [
-    { label: 'Overview',          href: '/' },
-    { label: 'Персонажи',         href: '/characters' },
-    { label: profile.profileCode, href: `${base}/description` },
-    ...(tab ? [{ label: tab.label }] : []),
-  ];
-  return <Breadcrumbs items={items} />;
-}
-
-function TabsNav({
-  profileId, identityPipeline,
-}: {
-  profileId:        string;
-  identityPipeline: 'lora' | 'anchor' | 'mixed' | 'none';
-}) {
   const pathname = usePathname();
   const base = `/characters/${profileId}`;
   // Filter tabs by the character's identity pipeline. Cartoon characters
   // (anchor-only) skip Dataset / Training / LoRA — those concepts don't apply.
   const visible = ALL_TABS.filter((t) => (t.pipelines as readonly string[]).includes(identityPipeline));
   const activeSlug = visible.find((t) => pathname?.includes(`${base}/${t.slug}`))?.slug ?? '';
+  const activeTab = visible.find((t) => t.slug === activeSlug);
+
+  const crumbs: BreadcrumbItem[] = [
+    { label: 'Overview',          href: '/' },
+    { label: 'Персонажи',         href: '/characters' },
+    { label: profile.profileCode, href: `${base}/description` },
+    ...(activeTab ? [{ label: activeTab.label }] : []),
+  ];
+
   return (
-    <ScrollableTabs
-      className="mt-3"
+    <PageHeader
+      crumbs={crumbs}
+      title={profile.displayName ?? profile.profileCode}
+      subtitle={
+        <span className="font-mono">
+          {profile.profileCode}
+          {' · '}
+          <span className={
+            identityPipeline === 'anchor' ? 'text-purple-400' :
+            identityPipeline === 'lora'   ? 'text-amber-400'  :
+            identityPipeline === 'mixed'  ? 'text-cyan-400'   :
+            'text-zinc-600'
+          }>
+            {identityPipeline === 'anchor' ? 'cartoon (anchor)' :
+             identityPipeline === 'lora'   ? 'photoreal (LoRA)' :
+             identityPipeline === 'mixed'  ? 'photoreal+cartoon' :
+             'library (нет проекта)'}
+          </span>
+        </span>
+      }
+      actions={
+        <span className={`text-xs px-3 py-1 rounded font-medium ${badgeClass}`}>
+          {badgeText}
+        </span>
+      }
       tabs={visible.map((t) => ({
         href:   `${base}/${t.slug}`,
         label:  t.label,

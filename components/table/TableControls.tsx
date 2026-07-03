@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 /**
  * Shared TanStack-table UI controls — one source of truth for the column
@@ -32,6 +33,71 @@ export function HeaderCell({ label, column, filter }: {
   );
 }
 
+// ── Anchored, portalled dropdown panel ───────────────────────────────────────
+// The filter menus live inside the table, which sits in an `overflow-x-auto`
+// scroll container. An absolutely-positioned menu is clipped by that container
+// whenever the table is shorter than the menu — most visibly on an empty
+// "0 rows" table, where the menu vanished below the fold. Rendering the panel
+// into a document.body portal with position:fixed escapes every overflow/clip
+// context; we anchor it to the trigger button's rect and keep it in sync on
+// scroll/resize.
+
+function useAnchoredPanel(open: boolean, setOpen: (v: boolean) => void) {
+  const btnRef   = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const compute = () => {
+      const b = btnRef.current?.getBoundingClientRect();
+      if (!b) return;
+      const top = b.bottom + 4;
+      setPos({ top, left: b.left, maxHeight: Math.max(120, window.innerHeight - top - 8) });
+    };
+    compute();
+    window.addEventListener('resize', compute);
+    // capture=true so we also catch scrolling of any ancestor scroll container.
+    window.addEventListener('scroll', compute, true);
+    return () => {
+      window.removeEventListener('resize', compute);
+      window.removeEventListener('scroll', compute, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (btnRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open, setOpen]);
+
+  return { btnRef, panelRef, pos };
+}
+
+function DropdownPanel({ panelRef, pos, minWidth, children }: {
+  panelRef: React.RefObject<HTMLDivElement | null>;
+  pos:      { top: number; left: number; maxHeight: number } | null;
+  minWidth: number;
+  children: React.ReactNode;
+}) {
+  if (!pos || typeof document === 'undefined') return null;
+  return createPortal(
+    <div
+      ref={panelRef}
+      style={{ position: 'fixed', top: pos.top, left: pos.left, minWidth, maxHeight: pos.maxHeight }}
+      className="z-50 bg-zinc-900 border border-zinc-700 rounded shadow-lg py-1 overflow-y-auto"
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
 // ── Multi-select dropdown for column filters ─────────────────────────────────
 
 export function MultiSelect({ options, value, onChange }: {
@@ -40,16 +106,7 @@ export function MultiSelect({ options, value, onChange }: {
   onChange: (next: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
+  const { btnRef, panelRef, pos } = useAnchoredPanel(open, setOpen);
 
   const toggle = (opt: string) => {
     const set = new Set(value);
@@ -60,10 +117,11 @@ export function MultiSelect({ options, value, onChange }: {
   const label = value.length === 0 ? 'all' : `${value.length} selected`;
 
   return (
-    <div ref={wrapRef} className="relative inline-block">
+    <div className="relative inline-block">
       <button
+        ref={btnRef}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setOpen(!open)}
         className={`text-[10px] normal-case font-normal px-2 py-0.5 rounded border transition-colors ${
           value.length > 0
             ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200'
@@ -73,7 +131,7 @@ export function MultiSelect({ options, value, onChange }: {
         {label} <span className="opacity-60">▾</span>
       </button>
       {open && (
-        <div className="absolute z-10 mt-1 left-0 min-w-[140px] bg-zinc-900 border border-zinc-700 rounded shadow-lg py-1">
+        <DropdownPanel panelRef={panelRef} pos={pos} minWidth={140}>
           {value.length > 0 && (
             <button
               type="button"
@@ -90,7 +148,7 @@ export function MultiSelect({ options, value, onChange }: {
               {opt}
             </label>
           ))}
-        </div>
+        </DropdownPanel>
       )}
     </div>
   );
@@ -104,16 +162,7 @@ export function MultiSelectLabeled({ options, value, onChange }: {
   onChange: (next: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
+  const { btnRef, panelRef, pos } = useAnchoredPanel(open, setOpen);
 
   const toggle = (val: string) => {
     const set = new Set(value);
@@ -128,10 +177,11 @@ export function MultiSelectLabeled({ options, value, onChange }: {
       : `${value.length} selected`;
 
   return (
-    <div ref={wrapRef} className="relative inline-block">
+    <div className="relative inline-block">
       <button
+        ref={btnRef}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setOpen(!open)}
         className={`text-[10px] normal-case font-normal px-2 py-0.5 rounded border transition-colors max-w-[140px] truncate ${
           value.length > 0
             ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200'
@@ -142,7 +192,7 @@ export function MultiSelectLabeled({ options, value, onChange }: {
         {buttonLabel} <span className="opacity-60">▾</span>
       </button>
       {open && (
-        <div className="absolute z-10 mt-1 left-0 min-w-[180px] bg-zinc-900 border border-zinc-700 rounded shadow-lg py-1 max-h-[300px] overflow-y-auto">
+        <DropdownPanel panelRef={panelRef} pos={pos} minWidth={180}>
           {options.length === 0 && (
             <div className="px-3 py-1 text-[11px] text-zinc-600 italic">no options</div>
           )}
@@ -162,7 +212,7 @@ export function MultiSelectLabeled({ options, value, onChange }: {
               <span className="truncate">{opt.label}</span>
             </label>
           ))}
-        </div>
+        </DropdownPanel>
       )}
     </div>
   );

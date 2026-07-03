@@ -206,6 +206,9 @@ export interface ShotFull {
   /** 'animated' (default) → renders a Wan clip; 'static' → still only, video disabled. */
   renderMode:          string | null;
   participants:        ShotParticipant[];
+  /** Image-validation verdicts (newest first). validationJobs[0] is the latest
+   *  vision-model pass that scored the candidates and auto-picked chosenRender. */
+  validationJobs?:     ImageValidationJob[];
   scene?: {
     id:              string;
     sceneKey:        string;
@@ -218,6 +221,27 @@ export interface ShotFull {
     scriptEndLine:   number | null;
   };
   project?: { id: string; slug: string; name: string; visualStyle?: string };
+}
+
+/** One candidate's verdict from the Ollama vision model. */
+export interface CandidateVerdict {
+  filename:      string;
+  score:         number;    // 0-100 (prompt match + technical quality); -1 = scoring error
+  matchesPrompt: boolean;
+  severe?:       boolean;   // unusable: anatomy horror / wrong-or-missing subject / intruder
+  issues:        string[];  // concrete defects the model saw
+  error?:        string;
+}
+
+export interface ImageValidationJob {
+  id:              string;
+  status:          string;   // pending | running | completed | failed
+  result:          CandidateVerdict[] | null;
+  chosenFilename:  string | null;
+  /** When no candidate passed: the vision model's proposed improved prompt. */
+  suggestedPrompt: string | null;
+  errorMessage:    string | null;
+  completedAt:     string | null;
 }
 
 export interface UpdateShotBody {
@@ -251,7 +275,22 @@ export interface ProjectListItem {
    * legacy projects. See docs/VISUAL_STYLE_ARCHITECTURE.md.
    */
   visualStyle?: string;
+  /**
+   * Published YouTube URL of the finished video. Set ⇒ the project is DONE and
+   * treated as archived (hidden from the sidebar, shown under /projects/archived).
+   * GET /projects already returns this column; see isProjectArchived().
+   */
+  youtubeUrl?: string | null;
 }
+
+/**
+ * A project is "done" / archived once it has a published YouTube link. This is
+ * the single, shared definition of archived-ness — mirrors the backend rule in
+ * ActionsService (youtubeUrl truthy ⇒ skip pipeline gates). Pure and isomorphic
+ * so both the server data layer and the client sidebar can use it.
+ */
+export const isProjectArchived = (p: Pick<ProjectListItem, 'youtubeUrl'>): boolean =>
+  Boolean(p.youtubeUrl && p.youtubeUrl.trim());
 
 /** A row from the visual_styles registry. */
 export interface VisualStyle {
@@ -349,6 +388,11 @@ export interface Voiceover {
   checksum:      string;
   /** Optional provenance link (e.g. the YouTube clip the ref was taken from). */
   sourceUrl:     string | null;
+  /** True when the full untrimmed source was retained → this voice can be re-trimmed. */
+  hasSource:     boolean;
+  /** Trim window (ms into the source) that produced the current clip; null if unknown. */
+  trimStartMs:   number | null;
+  trimEndMs:     number | null;
   /** How many projects currently reference this voice. */
   assignedCount: number;
   /** The projects that reference this voice. */
@@ -356,9 +400,20 @@ export interface Voiceover {
   createdAt:     string;
 }
 
+/** A source clip fetched/uploaded into staging, awaiting trim + save. */
+export interface VoiceSource {
+  token:       string;
+  streamUrl:   string;
+  durationSec: number | null;
+  title:       string;
+}
+
 export interface UpdateProjectBody {
   name?:                       string;
   slug?:                       string;
+  /** Visual style / render pipeline id (e.g. 'graphic_novel_flux'). Changeable
+   *  post-creation; affects future renders only. Backend PATCH accepts it. */
+  visualStyle?:                string;
   defaultNegative?:            string;
   defaultVideoNegative?:       string;
   defaultMotionPrompt?:        string;
@@ -466,7 +521,7 @@ export interface SceneSummary {
   shots:           SceneShot[];
 }
 
-export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale' | 'video_interp' | 'tts' | 'bgm' | 'anchor';
+export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale' | 'video_interp' | 'tts' | 'bgm' | 'anchor' | 'validation';
 
 /** Wire format from /pipeline/queue rows. Backend pairs slug + UUID so
  *  Link-builders can always go straight to the canonical /projects/<uuid>/
@@ -520,6 +575,29 @@ export interface QueueListResponse {
 export interface ScenesResponse {
   project: { id: string; slug: string; name: string; visualStyle?: string };
   scenes:  SceneSummary[];
+}
+
+/** One row of the global character library (listLibraryCharacters / …Page). */
+export interface LibraryCharacter {
+  id: string;
+  code: string;
+  displayName: string | null;
+  projectId: string | null;
+  profiles: Array<{
+    id: string;
+    profileCode: string;
+    ageLabel: string | null;
+    targetImages: number | null;
+    triggerToken: string | null;
+    loraPath: string | null;
+  }>;
+  projectLinks: Array<{
+    projectId: string;
+    attachedAt: string;
+    /** visualStyle exposed so character cards can render the right
+     *  identity-pipeline badge (LoRA for photoreal, anchor for cartoon). */
+    project: { id: string; slug: string; name: string; visualStyle?: string };
+  }>;
 }
 
 export const api = {
@@ -652,27 +730,13 @@ export const api = {
   // every character with its profiles + which projects each is attached to.
 
   listLibraryCharacters: () =>
-    http<Array<{
-      id: string;
-      code: string;
-      displayName: string | null;
-      projectId: string | null;
-      profiles: Array<{
-        id: string;
-        profileCode: string;
-        ageLabel: string | null;
-        targetImages: number | null;
-        triggerToken: string | null;
-        loraPath: string | null;
-      }>;
-      projectLinks: Array<{
-        projectId: string;
-        attachedAt: string;
-        /** visualStyle exposed so character cards can render the right
-         *  identity-pipeline badge (LoRA for photoreal, anchor for cartoon). */
-        project: { id: string; slug: string; name: string; visualStyle?: string };
-      }>;
-    }>>(`/library/characters`),
+    http<LibraryCharacter[]>(`/library/characters`),
+
+  /** Paginated library page for the infinite-scroll grid. */
+  listLibraryCharactersPage: (skip = 0, take = 24) =>
+    http<{ rows: LibraryCharacter[]; total: number }>(
+      `/library/characters/page?skip=${skip}&take=${take}`,
+    ),
 
   attachCharacter: (projectIdOrSlug: string, characterId: string) =>
     http<{ projectId: string; characterId: string; code: string }>(
@@ -789,7 +853,21 @@ export const api = {
     }),
 
   // Enqueue scene render via the pipeline (preferred — coordinates with training/dataset queues)
-  enqueueShotRender: (shotId: string, body: { scenePrompt?: string; seed?: number; loraStrength?: number; batchSize?: number } = {}) =>
+  enqueueShotRender: (
+    shotId: string,
+    body: {
+      scenePrompt?:  string;
+      seed?:         number;
+      loraStrength?: number;
+      batchSize?:    number;
+      steps?:        number;
+      /** Flux only — FluxGuidance value (cfg stays 1.0 on Flux). */
+      guidance?:     number;
+      /** Per-generation pipeline/visual-style override. Locked once the shot
+       *  has any render (backend rejects a mismatching style). */
+      visualStyle?:  string;
+    } = {},
+  ) =>
     http<{ id: string; shotId: string; status: string; queuedAt: string }>(
       `/generation/shots/${shotId}/enqueue`,
       { method: 'POST', body: JSON.stringify(body) },
@@ -949,6 +1027,19 @@ export const api = {
       body:   JSON.stringify({ videoId }),
     }),
 
+  /** Queue a vision-model re-validation of this shot's candidates (auto-picks best). */
+  validateShot: (shotId: string) =>
+    http<{ queued: boolean; jobId: string | null }>(`/shots/${shotId}/validate`, {
+      method: 'POST',
+    }),
+
+  /** Approve the vision model's suggested positive prompt (optionally re-render). */
+  applySuggestedPrompt: (shotId: string, prompt: string, rerender = false) =>
+    http<ShotFull>(`/shots/${shotId}/apply-suggested-prompt`, {
+      method: 'POST',
+      body:   JSON.stringify({ prompt, rerender }),
+    }),
+
   createShot: (projectIdOrSlug: string, body: CreateShotBody) =>
     http<ShotFull>(`/projects/${projectIdOrSlug}/shots`, {
       method: 'POST',
@@ -1051,7 +1142,7 @@ export const api = {
   // ── Video renders (Wan2.2 i2v from the shot's chosen render) ──────────────
   startVideoRender: (
     shotId: string,
-    body: { motionPrompt?: string; seed?: number; width?: number; height?: number; length?: number; fps?: number; count?: number; mode?: 'auto' | 'fast' | 'cfg' } = {},
+    body: { motionPrompt?: string; seed?: number; width?: number; height?: number; length?: number; fps?: number; count?: number; mode?: 'fast' | 'cfg' } = {},
   ) =>
     http<VideoRender[]>(`/generation/shots/${shotId}/videos`, {
       method: 'POST',
@@ -1357,8 +1448,43 @@ export const api = {
   deleteVoiceover: (id: string, force = false) =>
     http<{ ok: true }>(`/voiceovers/${id}${force ? '?force=true' : ''}`, { method: 'DELETE' }),
 
-  /** Absolute URL to stream a voiceover clip for an <audio> preview. */
-  voiceoverRawUrl: (id: string) => `${API_BASE}/voiceovers/${id}/raw`,
+  /** URL to stream a voiceover clip for an <audio> preview. Uses MEDIA_BASE so
+   *  the browser loads it over the LAN (works from a tablet/phone), like every
+   *  other <audio>/<img>/<video> src. */
+  voiceoverRawUrl: (id: string) => `${MEDIA_BASE}/voiceovers/${id}/raw`,
+
+  // ── Import from YouTube / upload + waveform trim ───────────────────────────
+
+  /** Fetch a YouTube URL's audio into server staging; returns a source to trim. */
+  extractYoutubeSource: (url: string) =>
+    http<VoiceSource>(`/voiceovers/source/youtube`, { method: 'POST', body: JSON.stringify({ url }) }),
+
+  /** Upload a local audio file into server staging; returns a source to trim. */
+  uploadVoiceSource: async (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(`${API_BASE}/voiceovers/source/upload`, { method: 'POST', body: fd });
+    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 300)}`);
+    return res.json() as Promise<VoiceSource>;
+  },
+
+  /** Media URL for the waveform to load a staged source (LAN-safe, browser-loaded). */
+  voiceSourceStreamUrl: (token: string) => `${MEDIA_BASE}/voiceovers/source/${token}/raw`,
+
+  /** Commit a staged source at [startMs,endMs] into a new library voice. */
+  saveVoiceFromSource: (token: string, body: { name?: string; startMs: number; endMs: number }) =>
+    http<Voiceover>(`/voiceovers/source/${token}/save`, { method: 'POST', body: JSON.stringify(body) }),
+
+  /** Discard a staged source (cancel the import). */
+  discardVoiceSource: (token: string) =>
+    http<{ ok: true }>(`/voiceovers/source/${token}`, { method: 'DELETE' }),
+
+  /** Media URL for the retained untrimmed source of a saved voice (for re-trim). */
+  voiceSavedSourceUrl: (id: string) => `${MEDIA_BASE}/voiceovers/${id}/source/raw`,
+
+  /** Re-cut an existing voice from its retained source at a new window. */
+  retrimVoiceover: (id: string, body: { startMs: number; endMs: number }) =>
+    http<Voiceover>(`/voiceovers/${id}/trim`, { method: 'PATCH', body: JSON.stringify(body) }),
 
   listProjectEmotionRefs: (projectId: string) =>
     http<ProjectTTSEmotionRef[]>(`/projects/${projectId}/tts/emotion-refs`),

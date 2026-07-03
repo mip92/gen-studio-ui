@@ -1,59 +1,24 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { api } from '../lib/api';
+import { api, LibraryCharacter } from '../lib/api';
 import { Breadcrumbs } from './Breadcrumbs';
+import { AsyncGenericList } from './AsyncGenericList';
 
-type LibChar    = Awaited<ReturnType<typeof api.listLibraryCharacters>>[number];
+type LibChar    = LibraryCharacter;
 type LibProfile = LibChar['profiles'][number];
 
-const POLL_MS = 10_000;
-
 /**
- * Global character library. Same visual language as the old project-scoped
- * CharactersList (aspect-square dataset preview + LoRA / dataset badges) but
- * sourced from /library/characters and freed from any single-project context.
- *
- * One card per profile (a character with multiple profiles renders one card
- * per profile — matches the old project list behaviour, where each profile
- * was its own row).
+ * Global character library, server-paginated with infinite scroll
+ * (AsyncGenericList). One card per profile — a character with N profiles
+ * renders N cards (renderItem returns several grid children via a Fragment).
  */
 export function LibraryCharactersList() {
-  const [chars, setChars] = useState<LibChar[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      const list = await api.listLibraryCharacters();
-      setChars(list);
-      setError(null);
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, POLL_MS);
-    return () => clearInterval(t);
-  }, [refresh]);
-
-  if (error && !chars) {
-    return (
-      <main className="px-4 sm:px-8 py-6">
-        <div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div>
-      </main>
-    );
-  }
-  if (!chars) return <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto text-zinc-500">Loading…</main>;
-
-  // Flatten character → profile cards. A character with N profiles gets N cards.
-  // Library characters with zero profiles are still shown (rare; will render
-  // the no-dataset state).
-  const cards: Array<{ char: LibChar; profile: LibProfile | null }> = [];
-  for (const c of chars) {
-    if (c.profiles.length === 0) cards.push({ char: c, profile: null });
-    else for (const p of c.profiles) cards.push({ char: c, profile: p });
-  }
+  const fetchPage = useCallback(
+    (skip: number, take: number) => api.listLibraryCharactersPage(skip, take),
+    [],
+  );
 
   return (
     <main className="px-4 sm:px-8 py-6">
@@ -61,27 +26,24 @@ export function LibraryCharactersList() {
         { label: 'Overview',   href: '/' },
         { label: 'Персонажи' },
       ]} />
-      <div className="flex justify-between items-baseline mb-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Персонажи ({cards.length})</h1>
-          <p className="text-zinc-500 text-sm">
-            Глобальная библиотека. Промпты, датасеты, тренировка — здесь. Проекты подключают персонажей через «Состав».
-          </p>
-        </div>
-        <button onClick={refresh} className="text-xs text-zinc-400 hover:text-zinc-200 border border-zinc-700 rounded px-3 py-1">
-          ↻ refresh
-        </button>
+      <div className="mb-4">
+        <h1 className="text-2xl font-semibold">Персонажи</h1>
+        <p className="text-zinc-500 text-sm">
+          Глобальная библиотека. Промпты, датасеты, тренировка — здесь. Проекты подключают персонажей через «Состав».
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {cards.map(({ char, profile }) => (
-          <CharacterCard
-            key={profile ? profile.id : char.id}
-            char={char}
-            profile={profile}
-          />
-        ))}
-      </div>
+      <AsyncGenericList<LibChar>
+        fetchPage={fetchPage}
+        keyOf={(c) => c.id}
+        loadingText="Загрузка персонажей…"
+        emptyText="Персонажей пока нет"
+        renderItem={(char) =>
+          char.profiles.length === 0
+            ? <CharacterCard key={char.id} char={char} profile={null} />
+            : char.profiles.map((p) => <CharacterCard key={p.id} char={char} profile={p} />)
+        }
+      />
     </main>
   );
 }

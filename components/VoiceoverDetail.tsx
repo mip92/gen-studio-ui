@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api, type Voiceover, type ProjectListItem } from '../lib/api';
+import { AudioTrimmer } from './AudioTrimmer';
 import { Breadcrumbs } from './Breadcrumbs';
 
 /**
@@ -30,6 +31,9 @@ export function VoiceoverDetail({ id }: { id: string }) {
 
   // Project assignment selection (set of projectIds assigned to THIS voice).
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // Latest re-trim window (ms) reported by the waveform; committed on button click.
+  const retrimWindow = useRef<{ startMs: number; endMs: number }>({ startMs: 0, endMs: 0 });
 
   const load = async () => {
     setError(null);
@@ -106,6 +110,18 @@ export function VoiceoverDetail({ id }: { id: string }) {
     }
   };
 
+  const doRetrim = async () => {
+    setBusy('retrim'); setError(null);
+    try {
+      await api.retrimVoiceover(id, retrimWindow.current);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const onDelete = async () => {
     const n = voice?.projects.length ?? 0;
     const msg = n > 0
@@ -149,7 +165,8 @@ export function VoiceoverDetail({ id }: { id: string }) {
           <>
             {/* Preview + metadata */}
             <section className="space-y-4">
-              <audio key={voice.id} controls preload="none" src={api.voiceoverRawUrl(voice.id)} className="h-9 w-full max-w-md" />
+              <audio key={voice.checksum} controls preload="none"
+                src={`${api.voiceoverRawUrl(voice.id)}?v=${voice.checksum}`} className="h-9 w-full max-w-md" />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
                 <Field label="Имя">
@@ -186,6 +203,32 @@ export function VoiceoverDetail({ id }: { id: string }) {
                 <code className="text-[11px] text-zinc-600 font-mono truncate">{voice.filePath}</code>
               </div>
             </section>
+
+            {/* Re-trim from the retained source (only if a source was kept) */}
+            {voice.hasSource && (
+              <section className="space-y-3">
+                <div>
+                  <h2 className="text-sm uppercase tracking-wider text-zinc-400">Перерезать из исходника</h2>
+                  <p className="text-[11px] text-zinc-600 mt-1">
+                    Полный исходный клип сохранён. Выбери новый фрагмент — файл голоса будет перезаписан
+                    (перезагрузится и во всех проектах, где назначен этот голос).
+                  </p>
+                </div>
+                <AudioTrimmer
+                  src={api.voiceSavedSourceUrl(voice.id)}
+                  initialStartMs={voice.trimStartMs}
+                  initialEndMs={voice.trimEndMs}
+                  onChange={(startMs, endMs) => { retrimWindow.current = { startMs, endMs }; }}
+                  disabled={busy === 'retrim'}
+                />
+                <button onClick={doRetrim} disabled={busy === 'retrim'}
+                  className={`text-sm px-4 py-2 rounded ${
+                    busy === 'retrim' ? 'bg-zinc-800 text-zinc-500 cursor-wait' : 'bg-emerald-700 hover:bg-emerald-600 text-white'
+                  }`}>
+                  {busy === 'retrim' ? 'Перерезаю…' : 'Перерезать'}
+                </button>
+              </section>
+            )}
 
             {/* Project assignments */}
             <section className="space-y-3">

@@ -163,7 +163,7 @@ export function ShotNarrationTab() {
   };
 
   return (
-    <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto space-y-4">
+    <main className="px-4 sm:px-8 py-6 space-y-4">
       {err && (
         <div className="bg-red-900/40 border border-red-700 rounded p-3 text-red-200 text-xs font-mono whitespace-pre-wrap break-all">
           {err}

@@ -45,11 +45,11 @@ export function ScenesList({ id }: { id: string }) {
     return () => clearInterval(t);
   }, [refresh]);
 
-  if (error)  return <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto"><div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div></main>;
-  if (!data)  return <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto text-zinc-500">Loading…</main>;
+  if (error)  return <main className="px-4 sm:px-8 py-6"><div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div></main>;
+  if (!data)  return <main className="px-4 sm:px-8 py-6 text-zinc-500">Loading…</main>;
 
   return (
-    <main className="px-4 sm:px-8 py-6 max-w-7xl mx-auto">
+    <main className="px-4 sm:px-8 py-6">
       <div className="flex justify-between items-center mb-4">
         <div className="flex items-center gap-3">
           <h2 className="text-sm uppercase tracking-wider text-zinc-500">Сцены и кадры</h2>
