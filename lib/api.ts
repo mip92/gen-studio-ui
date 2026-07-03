@@ -1346,6 +1346,29 @@ export const api = {
       { method: 'POST' },
     ),
 
+  // ── YouTube-Shorts export ───────────────────────────────────────────────────
+  /** The project's curated shorts plan (which shots go into each teaser reel). */
+  shortsPlan: (idOrSlug: string) =>
+    http<ShortsPlan>(`/projects/${idOrSlug}/export/shorts/plan`),
+
+  /** Build the vertical (9:16) shorts CapCut drafts. Optional body carries a
+   *  plan directly (future LLM curator); omitted → server uses the versioned
+   *  scripts/<slug>_shorts_plan.json. */
+  exportShorts: (
+    idOrSlug: string,
+    body?: {
+      shorts?: Array<{ slug: string; title?: string; shots: string[] }>;
+      background_fill?: string;
+      width?: number;
+      height?: number;
+      fps?: number;
+    },
+  ) =>
+    http<{ shorts: ShortResult[] }>(
+      `/projects/${idOrSlug}/export/shorts`,
+      { method: 'POST', body: JSON.stringify(body ?? {}) },
+    ),
+
   /**
    * Read the project's full narration script (stored in Project.scriptText).
    * Used by the TTS modal to show the user the full story they're voicing —
@@ -1621,6 +1644,22 @@ export interface CapcutReadiness {
     title:    string | null;
     reason:   'no_shots';
   }>;
+}
+
+/** GET /projects/:id/export/shorts/plan — the curated shorts plan for the UI. */
+export interface ShortsPlan {
+  hasPlan: boolean;
+  shorts:  Array<{ slug: string; title: string; shots: number }>;
+}
+
+/** One built short returned by POST /projects/:id/export/shorts. */
+export interface ShortResult {
+  slug?:       string;
+  title?:      string;
+  draft_name:  string;
+  draft_path?: string;
+  shots:       number;
+  seconds:     number;
 }
 
 export interface TTSJob {

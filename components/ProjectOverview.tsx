@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, CapcutReadiness, ScenesResponse, DashboardResponse, ProjectFull } from '../lib/api';
+import { api, CapcutReadiness, ScenesResponse, DashboardResponse, ProjectFull, ShortsPlan, ShortResult } from '../lib/api';
 
 type Stats = Awaited<ReturnType<typeof api.getProjectStats>>;
 
@@ -10,6 +10,7 @@ export function ProjectOverview({ id }: { id: string }) {
   const [scenes,    setScenes]    = useState<ScenesResponse    | null>(null);
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [readiness, setReadiness] = useState<CapcutReadiness   | null>(null);
+  const [shortsPlan, setShortsPlan] = useState<ShortsPlan       | null>(null);
   const [stats,     setStats]     = useState<Stats             | null>(null);
   const [project,   setProject]   = useState<ProjectFull       | null>(null);
   const [error,     setError]     = useState<string | null>(null);
@@ -21,16 +22,18 @@ export function ProjectOverview({ id }: { id: string }) {
   useEffect(() => {
     (async () => {
       try {
-        const [s, d, r, st, pr] = await Promise.all([
+        const [s, d, r, sp, st, pr] = await Promise.all([
           api.listScenes(id),
           api.dashboard(id),
           api.capcutReadiness(id).catch(() => null),
+          api.shortsPlan(id).catch(() => null),
           api.getProjectStats(id).catch(() => null),
           api.getProject(id).catch(() => null),
         ]);
         setScenes(s);
         setDashboard(d);
         setReadiness(r);
+        setShortsPlan(sp);
         setStats(st);
         setProject(pr);
       } catch (e) {
@@ -55,11 +58,14 @@ export function ProjectOverview({ id }: { id: string }) {
           <Stat label="Персонажи"  value={String(total)} />
           <Stat label="LoRA готовы" value={`${ready} / ${total}`} highlight={ready > 0} />
         </section>
-        <ExportCapcutButton
-          projectId={id}
-          readiness={readiness}
-          onAfterExport={refreshReadiness}
-        />
+        <div className="flex flex-col gap-3 w-72 flex-shrink-0">
+          <ExportCapcutButton
+            projectId={id}
+            readiness={readiness}
+            onAfterExport={refreshReadiness}
+          />
+          <ExportShortsButton projectId={id} plan={shortsPlan} />
+        </div>
       </div>
 
       <PublishCard
@@ -366,6 +372,83 @@ function ExportCapcutButton({
             Скопируй эту папку в <code>%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft\</code>.
             Откроется в списке проектов CapCut.
           </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Build the project's vertical (9:16) YouTube-Shorts CapCut drafts — one per
+// short — from the curated plan (scripts/<slug>_shorts_plan.json). Sibling of
+// ExportCapcutButton; enabled only when a plan exists. For now the plan is
+// hand-authored; a local LLM will pick the intriguing shots later.
+function ExportShortsButton({
+  projectId,
+  plan,
+}: {
+  projectId: string;
+  plan:      ShortsPlan | null;
+}) {
+  const [busy,   setBusy]   = useState(false);
+  const [result, setResult] = useState<{ shorts: ShortResult[] } | null>(null);
+  const [err,    setErr]    = useState<string | null>(null);
+
+  const has   = plan?.hasPlan === true;
+  const count = plan?.shorts.length ?? 0;
+
+  const tooltip = has
+    ? `Соберу ${count} вертикальных шортса (9:16) из готовых кадров — по одному CapCut-драфту на шорт.`
+    : !plan
+      ? 'Загружаю план шортсов…'
+      : 'Нет плана шортсов. Создай scripts/<slug>_shorts_plan.json (какие кадры в каждый шорт).';
+
+  const onClick = async () => {
+    if (!has || busy) return;
+    setBusy(true); setErr(null); setResult(null);
+    try {
+      setResult(await api.exportShorts(projectId));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <button
+        onClick={onClick}
+        disabled={!has || busy}
+        title={tooltip}
+        className={`w-full px-4 py-2 rounded text-sm font-medium border transition-colors ${has
+          ? 'bg-fuchsia-800 hover:bg-fuchsia-700 border-fuchsia-600 text-white'
+          : 'bg-zinc-900 border-zinc-700 text-zinc-500 cursor-not-allowed'}`}
+      >
+        {busy ? '⏳ собираю шортсы…' : has ? `📱 Экспорт шортсов (${count})` : '📱 Нет плана шортсов'}
+      </button>
+      {has && !result && !busy && (
+        <div className="mt-2 text-[11px] text-zinc-400 space-y-0.5">
+          {plan!.shorts.map((s) => (
+            <div key={s.slug} className="flex justify-between gap-2">
+              <span className="text-zinc-300 truncate">{s.title}</span>
+              <span className="text-zinc-500 flex-shrink-0">{s.shots} кадров</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {err && <p className="mt-2 text-red-400 text-xs font-mono whitespace-pre-wrap break-all">{err}</p>}
+      {result && (
+        <div className="mt-2 bg-fuchsia-950/40 border border-fuchsia-700 rounded p-3 text-xs space-y-1.5">
+          <p className="text-fuchsia-300">✓ собрано шортсов: {result.shorts.length}</p>
+          {result.shorts.map((s) => (
+            <div key={s.draft_name} className="space-y-0.5">
+              <p className="text-fuchsia-200">{s.title ?? s.slug} — {s.shots} кадров, ~{s.seconds}с</p>
+              <code className="block text-fuchsia-100/80 font-mono break-all bg-black/30 p-1 rounded text-[10px]">
+                {s.draft_path ?? s.draft_name}
+              </code>
+            </div>
+          ))}
+          <p className="text-zinc-400">Уже в списке проектов CapCut (папки в com.lveditor.draft).</p>
         </div>
       )}
     </div>
