@@ -244,6 +244,27 @@ export interface ImageValidationJob {
   completedAt:     string | null;
 }
 
+/** One anchor-portrait candidate's verdict (character-portrait analogue of CandidateVerdict). */
+export interface AnchorVerdict {
+  filename:      string;
+  score:         number;    // 0-100; -1 = scoring error
+  matchesPrompt: boolean;
+  severe?:       boolean;   // unusable: anime / multiple faces / wrong person / deformed
+  issues:        string[];
+  error?:        string;
+}
+
+export interface AnchorValidationJob {
+  id:              string;
+  status:          string;   // pending | running | completed | failed
+  result:          AnchorVerdict[] | null;
+  chosenFilename:  string | null;
+  /** When no candidate passed: the vision model's proposed improved promptBase. */
+  suggestedPrompt: string | null;
+  errorMessage:    string | null;
+  completedAt:     string | null;
+}
+
 export interface UpdateShotBody {
   shotCode?:           string;
   sceneId?:            string;
@@ -661,6 +682,23 @@ export const api = {
     }
     return (await res.json()) as { profileId: string; anchorPath: string; sizeBytes: number };
   },
+
+  // ── Anchor neural validation (Ollama vision QC of anchor candidates) ─────────
+
+  /** Recent anchor-validation jobs (newest first). Poll for status + verdicts. */
+  listAnchorValidationJobs: (profileId: string) =>
+    http<AnchorValidationJob[]>(`/profiles/${profileId}/anchor-validation-jobs`),
+
+  /** Re-run vision validation over the candidate portraits on disk. */
+  validateAnchor: (profileId: string) =>
+    http<{ queued: boolean; jobId: string | null; reason?: string }>(
+      `/profiles/${profileId}/validate-anchor`, { method: 'POST' }),
+
+  /** Apply an improved promptBase (from validation) to the profile; optionally re-render. */
+  applySuggestedAnchorPrompt: (profileId: string, prompt: string, rerender = false) =>
+    http<{ profile: unknown; rerenderJob: AnchorRenderJob | null }>(
+      `/profiles/${profileId}/apply-suggested-anchor-prompt`,
+      { method: 'POST', body: JSON.stringify({ prompt, rerender }) }),
 
   dashboard: (slug: string) =>
     http<DashboardResponse>(`/projects/${slug}/dashboard`),
@@ -1358,6 +1396,7 @@ export const api = {
     idOrSlug: string,
     body?: {
       shorts?: Array<{ slug: string; title?: string; shots: string[] }>;
+      only?: string;          // build just this short (per-short export)
       background_fill?: string;
       width?: number;
       height?: number;
@@ -1368,6 +1407,21 @@ export const api = {
       `/projects/${idOrSlug}/export/shorts`,
       { method: 'POST', body: JSON.stringify(body ?? {}) },
     ),
+
+  // ── YouTube packaging ───────────────────────────────────────────────────────
+  /** Read the project's YouTube title/description(s)/tags (main + per short). */
+  getYoutube: (idOrSlug: string) =>
+    http<YoutubePackage>(`/projects/${idOrSlug}/youtube`),
+
+  /** Merge-update the packaging (only the keys sent change). */
+  patchYoutube: (
+    idOrSlug: string,
+    body: { main?: Partial<YoutubeMain>; shorts?: Record<string, Partial<YoutubeShort>> },
+  ) =>
+    http<YoutubePackage>(`/projects/${idOrSlug}/youtube`, {
+      method: 'PATCH',
+      body:   JSON.stringify(body),
+    }),
 
   /**
    * Read the project's full narration script (stored in Project.scriptText).
@@ -1660,6 +1714,24 @@ export interface ShortResult {
   draft_path?: string;
   shots:       number;
   seconds:     number;
+}
+
+// ── YouTube packaging (title / description(s) / tags) ────────────────────────
+export interface YoutubeMain {
+  title:       string;
+  description: string;
+  tags:        string[];
+}
+export interface YoutubeShort {
+  title:      string;
+  descBefore: string;   // while the main video isn't published yet
+  descAfter:  string;   // after — references the main video ({{main_url}})
+  tags:       string[];
+}
+export interface YoutubePackage {
+  youtubeUrl: string | null;
+  main:       YoutubeMain;
+  shorts:     Record<string, YoutubeShort>;
 }
 
 export interface TTSJob {

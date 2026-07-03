@@ -11,6 +11,8 @@ const TABS = [
   { key: 'locations',  label: 'Локации' },
   { key: 'props',      label: 'Предметы' },
   { key: 'bgm',        label: 'Музыка' },
+  { key: 'youtube',    label: 'YouTube' },
+  { key: 'shorts',     label: 'Шорты' },
   { key: 'settings',   label: 'Настройки' },
 ];
 
