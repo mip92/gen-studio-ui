@@ -64,7 +64,7 @@ export default function YoutubePage({ params }: { params: Promise<{ id: string }
 
       <ExportFullButton projectId={id} />
 
-      <Field label="Название видео" value={title} onCopy={() => copy(title)}>
+      <Field label={`Название видео ${lim(title.length, 100)}`} value={title} onCopy={() => copy(title)}>
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -73,18 +73,18 @@ export default function YoutubePage({ params }: { params: Promise<{ id: string }
         />
       </Field>
 
-      <Field label={`Описание (${desc.length})`} value={desc} onCopy={() => copy(desc)}>
+      <Field label={`Описание ${lim(desc.length, 5000)}`} value={desc} onCopy={() => copy(desc)}>
         <textarea
           value={desc}
           onChange={(e) => setDesc(e.target.value)}
-          rows={12}
+          rows={14}
           placeholder="RU, 2-е лицо, эмодзи по битам, хук → ставка → CTA → дисклеймер…"
           className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm leading-relaxed whitespace-pre-wrap"
         />
       </Field>
 
       <Field
-        label={`Теги (${parseTags(tags).length})`}
+        label={`Теги (${parseTags(tags).length} шт · ${lim(parseTags(tags).join(', ').length, 500)} симв)`}
         value={parseTags(tags).join(', ')}
         onCopy={() => copy(parseTags(tags).join(', '))}
       >
@@ -179,6 +179,11 @@ function Field({
       {children}
     </div>
   );
+}
+
+// YouTube hard limits: title 100, description 5000, tags 500 chars total.
+function lim(n: number, max: number) {
+  return `${n}/${max}${n > max ? ' ⚠ превышен' : ''}`;
 }
 
 function copy(text: string) {

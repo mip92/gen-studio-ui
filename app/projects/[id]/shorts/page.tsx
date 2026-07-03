@@ -158,19 +158,19 @@ function ShortCard({
         </div>
       )}
 
-      <Row label="Название шорта" value={title}>
+      <Row label={`Название шорта ${lim(title.length, 100)}`} value={title}>
         <input value={title} onChange={(e) => setTitle(e.target.value)}
           className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm" />
       </Row>
 
-      <Row label={`Описание ДО публикации (${before.length})`} value={before}>
-        <textarea value={before} onChange={(e) => setBefore(e.target.value)} rows={4}
+      <Row label={`Описание ДО публикации ${lim(before.length, 5000)}`} value={before}>
+        <textarea value={before} onChange={(e) => setBefore(e.target.value)} rows={5}
           placeholder="Тизер: короткий хук + «полная история скоро, подпишись 🔔»"
           className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm leading-relaxed" />
       </Row>
 
       <Row
-        label={`Описание ПОСЛЕ публикации (${afterResolved.length})`}
+        label={`Описание ПОСЛЕ публикации ${lim(afterResolved.length, 5000)}`}
         value={afterResolved}
         hint="используй {{main_url}} — подставится ссылка на основное видео"
       >
@@ -184,7 +184,7 @@ function ShortCard({
         )}
       </Row>
 
-      <Row label={`Теги (${parseTags(tags).length})`} value={parseTags(tags).join(', ')}>
+      <Row label={`Теги (${parseTags(tags).length} шт · ${lim(parseTags(tags).join(', ').length, 500)} симв)`} value={parseTags(tags).join(', ')}>
         <textarea value={tags} onChange={(e) => setTags(e.target.value)} rows={2}
           className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono" />
       </Row>
@@ -222,6 +222,11 @@ function Row({
       {hint && <p className="text-[10px] text-zinc-600 mt-0.5">{hint}</p>}
     </div>
   );
+}
+
+// YouTube hard limits: title 100, description 5000, tags 500 chars total.
+function lim(n: number, max: number) {
+  return `${n}/${max}${n > max ? ' ⚠ превышен' : ''}`;
 }
 
 function Err({ msg }: { msg: string }) {
