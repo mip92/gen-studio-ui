@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useState, use } from 'react';
-import { api, ShortsPlan, YoutubePackage, YoutubeShort, ShortResult } from '@/lib/api';
+import { api, ShortsPlan, ShortsPlanItem, YoutubePackage, YoutubeShort, ShortResult } from '@/lib/api';
 
-// Shorts tab: the list of curated teaser reels. Each row exports just that short
-// to a vertical CapCut draft, and carries its YouTube packaging — a BEFORE-publish
-// description (teaser) and an AFTER-publish one that links to the main video.
+// Shorts tab: a gallery of the curated teaser reels. Each card previews the
+// short with real frame thumbnails (9:16 crop — the same center-crop the cover
+// fill produces); clicking a card opens the editor modal with the YouTube
+// packaging (title / BEFORE and AFTER descriptions / tags), the link to the
+// published short, and the per-short CapCut export.
 export default function ShortsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
 
@@ -14,6 +16,8 @@ export default function ShortsPage({ params }: { params: Promise<{ id: string }>
   const [error, setError] = useState<string | null>(null);
   const [busyAll, setBusyAll] = useState(false);
   const [allResult, setAllResult] = useState<ShortResult[] | null>(null);
+  const [openSlug, setOpenSlug] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const load = () => {
     Promise.all([api.shortsPlan(id), api.getYoutube(id)])
@@ -32,26 +36,35 @@ export default function ShortsPage({ params }: { params: Promise<{ id: string }>
   if (error && !plan) return <main className="px-4 sm:px-8 py-6"><Err msg={error} /></main>;
   if (!plan || !pkg)  return <main className="px-4 sm:px-8 py-6"><p className="text-zinc-500">Загрузка…</p></main>;
 
+  const openShort = openSlug ? plan.shorts.find((s) => s.slug === openSlug) : null;
+
   return (
-    <main className="px-4 sm:px-8 py-6 max-w-3xl">
+    <main className="px-4 sm:px-8 py-6 max-w-5xl">
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold">Шорты</h1>
           <p className="text-xs text-zinc-500 mt-1 max-w-2xl">
-            Вертикальные тизеры (9:16) из готовых кадров. Клик по шорту — экспорт этого шорта
-            в CapCut. У каждого шорта два описания: <b>до</b> публикации основного видео (тизер)
-            и <b>после</b> (со ссылкой на основное). План кадров — в <code>scripts/&lt;slug&gt;_shorts_plan.json</code>.
+            Вертикальные тизеры (9:16) из готовых кадров. Клик по карточке — название, описание,
+            теги, ссылка на опубликованный шорт и экспорт в CapCut.
           </p>
         </div>
-        {plan.hasPlan && (
+        <div className="flex items-center gap-2 shrink-0">
           <button
-            onClick={buildAll}
-            disabled={busyAll}
-            className="text-sm bg-fuchsia-800 hover:bg-fuchsia-700 disabled:opacity-50 text-white px-3 py-2 rounded shrink-0"
+            onClick={() => setCreating(true)}
+            className="text-sm bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 px-3 py-2 rounded"
           >
-            {busyAll ? '⏳ собираю…' : `📱 Собрать все (${plan.shorts.length})`}
+            ＋ Новый шорт
           </button>
-        )}
+          {plan.hasPlan && (
+            <button
+              onClick={buildAll}
+              disabled={busyAll}
+              className="text-sm bg-fuchsia-800 hover:bg-fuchsia-700 disabled:opacity-50 text-white px-3 py-2 rounded"
+            >
+              {busyAll ? '⏳ собираю…' : `📱 Собрать все (${plan.shorts.length})`}
+            </button>
+          )}
+        </div>
       </div>
 
       {error && <div className="mb-4"><Err msg={error} /></div>}
@@ -63,60 +76,136 @@ export default function ShortsPage({ params }: { params: Promise<{ id: string }>
 
       {!plan.hasPlan ? (
         <div className="text-zinc-500 text-sm bg-zinc-900 border border-zinc-800 rounded p-4">
-          Плана шортов ещё нет. Создай <code className="text-zinc-400">scripts/&lt;slug&gt;_shorts_plan.json</code> —
-          какие кадры входят в каждый шорт (slug, title, shots[]).
+          Плана шортов ещё нет. Нажми <b className="text-zinc-300">＋ Новый шорт</b> — файл{' '}
+          <code className="text-zinc-400">scripts/&lt;slug&gt;_shorts_plan.json</code> создастся сам.
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
           {plan.shorts.map((s) => (
-            <ShortCard
+            <ShortTile
               key={s.slug}
-              projectId={id}
-              slug={s.slug}
-              planTitle={s.title}
-              shots={s.shots}
-              youtubeUrl={pkg.youtubeUrl}
+              short={s}
               pack={pkg.shorts[s.slug]}
-              onSaved={load}
+              onOpen={() => setOpenSlug(s.slug)}
             />
           ))}
         </div>
+      )}
+
+      {openShort && (
+        <ShortModal
+          key={openShort.slug}
+          projectId={id}
+          short={openShort}
+          pack={pkg.shorts[openShort.slug]}
+          onSaved={load}
+          onClose={() => setOpenSlug(null)}
+        />
+      )}
+
+      {creating && (
+        <NewShortModal
+          projectId={id}
+          onDone={() => { setCreating(false); load(); }}
+          onClose={() => setCreating(false)}
+        />
       )}
     </main>
   );
 }
 
-function ShortCard({
-  projectId, slug, planTitle, shots, youtubeUrl, pack, onSaved,
+// ── Gallery card ──────────────────────────────────────────────────────────────
+
+function ShortTile({
+  short, pack, onOpen,
+}: {
+  short:  ShortsPlanItem;
+  pack:   YoutubeShort | undefined;
+  onOpen: () => void;
+}) {
+  const cover  = short.preview.find((p) => p.shotId && p.image);
+  const filled = !!pack && !!(pack.title || pack.descBefore || pack.descAfter);
+  const url    = pack?.url?.trim();
+
+  return (
+    <div
+      onClick={onOpen}
+      className="relative aspect-[9/16] bg-zinc-900 border border-zinc-800 hover:border-fuchsia-700
+                 rounded-lg overflow-hidden cursor-pointer group"
+    >
+      {cover ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={api.shotImageUrl(cover.shotId!, cover.image!)}
+          alt={short.title}
+          className="absolute inset-0 w-full h-full object-cover group-hover:scale-[1.03] transition-transform"
+          loading="lazy"
+        />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center text-zinc-700 text-3xl">🎬</div>
+      )}
+
+      {/* status badges */}
+      <div className="absolute top-2 left-2 right-2 flex items-center justify-between gap-1">
+        <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded backdrop-blur-sm ${
+          filled ? 'bg-emerald-950/70 text-emerald-300' : 'bg-amber-950/70 text-amber-300'
+        }`}>
+          {filled ? '✓ тексты' : 'нет текстов'}
+        </span>
+        {url && (
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            title="Открыть опубликованный шорт"
+            className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-red-950/70 text-red-300 hover:text-red-100 backdrop-blur-sm"
+          >
+            ▶ youtube
+          </a>
+        )}
+      </div>
+
+      {/* title footer */}
+      <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 pt-8 pb-2.5">
+        <div className="text-sm font-semibold leading-tight">{short.title}</div>
+        <div className="text-[10px] text-zinc-400 font-mono mt-0.5">{short.slug} · {short.shots} кадров</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Editor modal ──────────────────────────────────────────────────────────────
+
+function ShortModal({
+  projectId, short, pack, onSaved, onClose,
 }: {
   projectId:  string;
-  slug:       string;
-  planTitle:  string;
-  shots:      number;
-  youtubeUrl: string | null;
+  short:      ShortsPlanItem;
   pack:       YoutubeShort | undefined;
   onSaved:    () => void;
+  onClose:    () => void;
 }) {
-  const [title, setTitle] = useState(pack?.title ?? planTitle);
-  const [before, setBefore] = useState(pack?.descBefore ?? '');
-  const [after, setAfter]   = useState(pack?.descAfter ?? '');
-  const [tags, setTags]     = useState((pack?.tags ?? []).join(', '));
-  const [busy, setBusy]     = useState(false);
-  const [saved, setSaved]   = useState(false);
+  const [title, setTitle] = useState(pack?.title ?? short.title);
+  const [desc, setDesc]   = useState(pack?.descBefore ?? '');
+  const [tags, setTags]   = useState((pack?.tags ?? []).join(', '));
+  const [url, setUrl]     = useState(pack?.url ?? '');
+  const [busy, setBusy]   = useState(false);
+  const [saved, setSaved] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [draft, setDraft]   = useState<ShortResult | null>(null);
-  const [err, setErr]       = useState<string | null>(null);
+  const [draft, setDraft] = useState<ShortResult | null>(null);
+  const [err, setErr]     = useState<string | null>(null);
 
   const parseTags = (s: string) => s.split(/[,\n]/).map((t) => t.trim()).filter(Boolean);
-  // The published main-video link substituted into the "after" description.
-  const mainUrl = youtubeUrl || '<ссылка на основное видео>';
-  const afterResolved = after.replaceAll('{{main_url}}', mainUrl);
 
   const save = async () => {
     setBusy(true); setErr(null); setSaved(false);
     try {
       await api.patchYoutube(projectId, {
-        shorts: { [slug]: { title: title.trim(), descBefore: before, descAfter: after, tags: parseTags(tags) } },
+        shorts: { [short.slug]: {
+          title: title.trim(), descBefore: desc,
+          tags: parseTags(tags), url: url.trim(),
+        } },
       });
       setSaved(true); setTimeout(() => setSaved(false), 2000);
       onSaved();
@@ -128,75 +217,215 @@ function ShortCard({
   const exportOne = async () => {
     setExporting(true); setErr(null); setDraft(null);
     try {
-      const r = await api.exportShorts(projectId, { only: slug });
+      const r = await api.exportShorts(projectId, { only: short.slug });
       setDraft(r.shorts[0] ?? null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally { setExporting(false); }
   };
 
+  const del = async () => {
+    if (!window.confirm(`Удалить шорт «${short.title}» из плана? Его описания/теги тоже будут удалены.`)) return;
+    setBusy(true); setErr(null);
+    try {
+      await api.deleteShortPlan(projectId, short.slug);
+      onSaved();
+      onClose();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div>
-          <div className="text-sm font-semibold">{planTitle}</div>
-          <div className="text-xs text-zinc-500 font-mono">{slug} · {shots} кадров</div>
-        </div>
-        <button
-          onClick={exportOne}
-          disabled={exporting}
-          className="text-xs bg-fuchsia-800 hover:bg-fuchsia-700 disabled:opacity-50 text-white px-3 py-1.5 rounded shrink-0"
-        >
-          {exporting ? '⏳…' : '📱 в CapCut'}
-        </button>
-      </div>
-
-      {draft && (
-        <div className="mb-3 bg-fuchsia-950/40 border border-fuchsia-700 rounded p-2 text-[11px] text-fuchsia-200">
-          ✓ {draft.title ?? slug} — {draft.shots} кадров, ~{draft.seconds}с
-          <code className="block text-fuchsia-100/80 font-mono break-all mt-1">{draft.draft_path ?? draft.draft_name}</code>
-        </div>
-      )}
-
-      <Row label={`Название шорта ${lim(title.length, 100)}`} value={title}>
-        <input value={title} onChange={(e) => setTitle(e.target.value)}
-          className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm" />
-      </Row>
-
-      <Row label={`Описание ДО публикации ${lim(before.length, 5000)}`} value={before}>
-        <textarea value={before} onChange={(e) => setBefore(e.target.value)} rows={5}
-          placeholder="Тизер: короткий хук + «полная история скоро, подпишись 🔔»"
-          className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm leading-relaxed" />
-      </Row>
-
-      <Row
-        label={`Описание ПОСЛЕ публикации ${lim(afterResolved.length, 5000)}`}
-        value={afterResolved}
-        hint="используй {{main_url}} — подставится ссылка на основное видео"
+    <div className="fixed inset-0 bg-black/80 z-40 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-zinc-900 border border-zinc-700 rounded-lg max-w-xl w-full max-h-[90vh] overflow-y-auto p-5"
       >
-        <textarea value={after} onChange={(e) => setAfter(e.target.value)} rows={4}
-          placeholder="Хук + «▶ Полная история: {{main_url}}» + подпишись 🔔"
-          className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm leading-relaxed" />
-        {after.includes('{{main_url}}') && (
-          <p className={`text-[10px] mt-1 ${youtubeUrl ? 'text-zinc-500' : 'text-amber-400'}`}>
-            {youtubeUrl ? `→ ${mainUrl}` : 'основное видео ещё не опубликовано — ссылка появится после'}
-          </p>
+        <header className="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <h2 className="text-lg font-semibold leading-tight">{short.title}</h2>
+            <div className="text-xs text-zinc-500 font-mono">{short.slug} · {short.shots} кадров</div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={exportOne}
+              disabled={exporting}
+              className="text-xs bg-fuchsia-800 hover:bg-fuchsia-700 disabled:opacity-50 text-white px-3 py-1.5 rounded"
+            >
+              {exporting ? '⏳…' : '📱 в CapCut'}
+            </button>
+            <button onClick={onClose} className="text-zinc-500 hover:text-zinc-200 text-lg leading-none px-1">✕</button>
+          </div>
+        </header>
+
+        {/* frame strip: the planned shots, in order */}
+        <div className="flex gap-1.5 overflow-x-auto pb-1 mb-1">
+          {short.preview.map((p) => (
+            <div key={p.shotCode} className="shrink-0 w-12">
+              <div className="aspect-[9/16] bg-zinc-950 border border-zinc-800 rounded overflow-hidden">
+                {p.shotId && p.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={api.shotImageUrl(p.shotId, p.image)}
+                    alt={p.shotCode}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-zinc-700 text-xs">—</div>
+                )}
+              </div>
+              <div className="text-[9px] text-zinc-600 font-mono text-center truncate mt-0.5">{p.shotCode}</div>
+            </div>
+          ))}
+        </div>
+
+        {draft && (
+          <div className="mt-2 bg-fuchsia-950/40 border border-fuchsia-700 rounded p-2 text-[11px] text-fuchsia-200">
+            ✓ {draft.title ?? short.slug} — {draft.shots} кадров, ~{draft.seconds}с
+            <code className="block text-fuchsia-100/80 font-mono break-all mt-1">{draft.draft_path ?? draft.draft_name}</code>
+          </div>
         )}
-      </Row>
 
-      <Row label={`Теги (${parseTags(tags).length} шт · ${lim(parseTags(tags).join(', ').length, 500)} симв)`} value={parseTags(tags).join(', ')}>
-        <textarea value={tags} onChange={(e) => setTags(e.target.value)} rows={2}
-          className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono" />
-      </Row>
+        <Row label={`Название шорта ${lim(title.length, 100)}`} value={title}>
+          <input value={title} onChange={(e) => setTitle(e.target.value)}
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm" />
+        </Row>
 
-      <div className="flex items-center gap-3 mt-3">
-        <button onClick={save} disabled={busy}
-          className="text-sm bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3 py-1.5 rounded">
-          {busy ? '…' : 'Сохранить'}
-        </button>
-        {saved && <span className="text-emerald-400 text-xs">✓ сохранено</span>}
-        {err && <span className="text-red-400 text-xs font-mono break-all">{err}</span>}
+        <Row label={`Описание ${lim(desc.length, 5000)}`} value={desc}>
+          <textarea value={desc} onChange={(e) => setDesc(e.target.value)} rows={6}
+            placeholder="Хук + «полная история на канале, подпишись 🔔»"
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm leading-relaxed" />
+        </Row>
+
+        <Row label={`Теги (${parseTags(tags).length} шт · ${lim(parseTags(tags).join(', ').length, 500)} симв)`} value={parseTags(tags).join(', ')}>
+          <textarea value={tags} onChange={(e) => setTags(e.target.value)} rows={2}
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono" />
+        </Row>
+
+        <Row label="Ссылка на опубликованный шорт" value={url}>
+          <input value={url} onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://youtube.com/shorts/…"
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm font-mono" />
+          {url.trim() && (
+            <a href={url.trim()} target="_blank" rel="noreferrer"
+              className="inline-block text-[11px] text-red-300 hover:text-red-100 mt-1">
+              ▶ открыть на YouTube
+            </a>
+          )}
+        </Row>
+
+        <div className="flex items-center gap-3 mt-4">
+          <button onClick={save} disabled={busy}
+            className="text-sm bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3 py-1.5 rounded">
+            {busy ? '…' : 'Сохранить'}
+          </button>
+          {saved && <span className="text-emerald-400 text-xs">✓ сохранено</span>}
+          {err && <span className="text-red-400 text-xs font-mono break-all">{err}</span>}
+          <button onClick={del} disabled={busy}
+            className="ml-auto text-xs text-red-400 hover:text-red-200 border border-red-900 hover:border-red-700 disabled:opacity-50 px-2.5 py-1.5 rounded">
+            🗑 Удалить шорт
+          </button>
+        </div>
       </div>
+    </div>
+  );
+}
+
+// ── Create modal ──────────────────────────────────────────────────────────────
+
+function NewShortModal({
+  projectId, onDone, onClose,
+}: {
+  projectId: string;
+  onDone:    () => void;
+  onClose:   () => void;
+}) {
+  const [slug, setSlug]   = useState('');
+  const [title, setTitle] = useState('');
+  const [shots, setShots] = useState('');
+  const [busy, setBusy]   = useState(false);
+  const [err, setErr]     = useState<string | null>(null);
+
+  const parseShots = (s: string) => s.split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true); setErr(null);
+    try {
+      await api.upsertShortPlan(projectId, {
+        slug:  slug.trim(),
+        title: title.trim(),
+        shots: parseShots(shots),
+      });
+      onDone();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/80 z-40 flex items-center justify-center p-4" onClick={onClose}>
+      <form
+        onSubmit={submit}
+        onClick={(e) => e.stopPropagation()}
+        className="bg-zinc-900 border border-zinc-700 rounded-lg max-w-lg w-full p-5 space-y-3"
+      >
+        <header className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Новый шорт</h2>
+          <button type="button" onClick={onClose} className="text-zinc-500 hover:text-zinc-200">✕</button>
+        </header>
+
+        <div>
+          <label className="text-xs text-zinc-400 uppercase tracking-wider">Slug</label>
+          <input
+            value={slug}
+            onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '_'))}
+            required
+            placeholder="hook"
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm font-mono mt-1"
+          />
+          <p className="text-[10px] text-zinc-600 mt-0.5">slug существующего шорта — заменит его название и кадры</p>
+        </div>
+
+        <div>
+          <label className="text-xs text-zinc-400 uppercase tracking-wider">Название</label>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Серый приговор"
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm mt-1"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs text-zinc-400 uppercase tracking-wider">
+            Кадры ({parseShots(shots).length} шт)
+          </label>
+          <textarea
+            value={shots}
+            onChange={(e) => setShots(e.target.value)}
+            required
+            rows={3}
+            placeholder="CO_SH01, CO_SH02, A6_SH03…"
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono mt-1"
+          />
+          <p className="text-[10px] text-zinc-600 mt-0.5">
+            коды кадров через запятую/пробел, в порядке монтажа; старайся брать анимированные кадры
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3 pt-1">
+          <button type="submit" disabled={busy}
+            className="text-sm bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3 py-1.5 rounded">
+            {busy ? '…' : 'Создать'}
+          </button>
+          {err && <span className="text-red-400 text-xs font-mono break-all">{err}</span>}
+        </div>
+      </form>
     </div>
   );
 }

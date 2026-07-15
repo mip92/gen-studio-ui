@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api, type Voiceover, type ProjectListItem } from '../lib/api';
 import { AudioTrimmer } from './AudioTrimmer';
-import { Breadcrumbs } from './Breadcrumbs';
+import { PageHeader } from './PageHeader';
 
 /**
  * Detail / editor for one library voice. Shows the clip preview, lets you edit
@@ -140,17 +140,15 @@ export function VoiceoverDetail({ id }: { id: string }) {
 
   return (
     <div className="bg-zinc-950 text-zinc-100">
-      <header className="border-b border-zinc-800 px-4 sm:px-8 py-4">
-        <div className="max-w-5xl mx-auto">
-          <Breadcrumbs items={[
-            { label: 'Overview', href: '/' },
-            { label: 'Озвучка', href: '/voices' },
-            { label: voice?.name ?? '…' },
-          ]} />
-          <h1 className="text-xl font-semibold">{voice?.name ?? 'Загрузка…'}</h1>
-          {voice && <p className="text-xs text-zinc-500 font-mono mt-1">{voice.slug} · {voice.ext.replace('.', '')}</p>}
-        </div>
-      </header>
+      <PageHeader
+        crumbs={[
+          { label: 'Overview', href: '/' },
+          { label: 'Озвучка', href: '/voices' },
+          { label: voice?.name ?? '…' },
+        ]}
+        title={voice?.name ?? 'Загрузка…'}
+        subtitle={voice ? <span className="font-mono">{voice.slug} · {voice.ext.replace('.', '')}</span> : undefined}
+      />
 
       <main className="p-4 sm:p-8 max-w-5xl mx-auto space-y-8">
         {error && (

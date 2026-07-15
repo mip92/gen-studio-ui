@@ -213,19 +213,7 @@ export function ShotPromptsTab() {
           </Field>
         </div>
 
-        <Field label="Lighting / Mood">
-          {!editing ? <Value v={pf.lightingMood} multi />
-                    : <Textarea value={dpf.lightingMood ?? ''} rows={2}
-                        onChange={(v) => updatePf({ lightingMood: v })} />}
-        </Field>
-
-        <Field label="Frame description" hint="Что должно быть в кадре, без логотипов и т.п.">
-          {!editing ? <Value v={pf.frameDescription} multi />
-                    : <Textarea value={dpf.frameDescription ?? ''} rows={2}
-                        onChange={(v) => updatePf({ frameDescription: v })} />}
-        </Field>
-
-        <Field label="Positive prompt" hint="Полный позитивный промпт для ComfyUI">
+        <Field label="Positive prompt" hint="Полный позитивный промпт для ComfyUI (обязателен — это единственный текст кадра, который уходит в рендер)">
           {!editing ? <Value v={pf.positive} multi />
                     : <Textarea value={dpf.positive ?? ''} rows={4}
                         onChange={(v) => updatePf({ positive: v })} />}
@@ -249,31 +237,11 @@ export function ShotPromptsTab() {
                         onChange={(v) => updatePf({ motionNegative: v })} />}
         </Field>
 
-        <Field label="Character locks (positiveCharacterLocks)" hint="Кто/как зафиксирован в кадре">
-          {!editing ? <Value v={pf.positiveCharacterLocks} multi />
-                    : <Textarea value={dpf.positiveCharacterLocks ?? ''} rows={2}
-                        onChange={(v) => updatePf({ positiveCharacterLocks: v })} />}
+        <Field label="Camera movement" hint="Движение камеры для видео i2v">
+          {!editing ? <Value v={pf.camera?.movement} mono />
+                    : <Input value={dpf.camera?.movement ?? ''}
+                        onChange={(v) => updatePf({ camera: { ...dpf.camera, movement: v } })} />}
         </Field>
-
-        <Field label="Environment hints (positiveEnvironment)">
-          {!editing ? <Value v={pf.positiveEnvironment} multi />
-                    : <Textarea value={dpf.positiveEnvironment ?? ''} rows={2}
-                        onChange={(v) => updatePf({ positiveEnvironment: v })} />}
-        </Field>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field label="Camera framing">
-            {!editing ? <Value v={pf.camera?.framing} mono />
-                      : <Input value={dpf.camera?.framing ?? ''}
-                          onChange={(v) => updatePf({ camera: { ...dpf.camera, framing: v } })} />}
-          </Field>
-
-          <Field label="Camera movement">
-            {!editing ? <Value v={pf.camera?.movement} mono />
-                      : <Input value={dpf.camera?.movement ?? ''}
-                          onChange={(v) => updatePf({ camera: { ...dpf.camera, movement: v } })} />}
-          </Field>
-        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Field label="Workflow route">

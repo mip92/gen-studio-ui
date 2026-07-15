@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { PageHeader } from '../../components/PageHeader';
-import { api, ActionItem, ActionGateKey, ProjectListItem } from '../../lib/api';
+import { api, ActionItem, ActionGateKey, ProjectListItem, isProjectArchived } from '../../lib/api';
 
 const GATE_LABELS: Record<ActionGateKey, { num: number; ru: string }> = {
   upload_dataset_images: { num: 1,  ru: 'Загрузить изображения' },
@@ -231,9 +231,13 @@ function ActionsInner() {
               className="bg-zinc-900 border border-zinc-800 text-zinc-200 text-sm rounded px-2 py-1"
             >
               <option value="">Все</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.slug}>{p.name}</option>
-              ))}
+              {projects
+                // Archived (published) projects have no pending gates — hide
+                // them from the filter, but keep the current URL selection valid.
+                .filter((p) => !isProjectArchived(p) || p.slug === projectSlug)
+                .map((p) => (
+                  <option key={p.id} value={p.slug}>{p.name}</option>
+                ))}
             </select>
           </>
         }

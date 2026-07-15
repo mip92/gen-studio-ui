@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { api, LibraryCharacter } from '../lib/api';
-import { Breadcrumbs } from './Breadcrumbs';
+import { PageHeader } from './PageHeader';
 import { AsyncGenericList } from './AsyncGenericList';
 
 type LibChar    = LibraryCharacter;
@@ -11,8 +11,11 @@ type LibProfile = LibChar['profiles'][number];
 
 /**
  * Global character library, server-paginated with infinite scroll
- * (AsyncGenericList). One card per profile — a character with N profiles
- * renders N cards (renderItem returns several grid children via a Fragment).
+ * (AsyncGenericList). ONE card per CHARACTER — multi-profile characters
+ * (age bands like HERO_KID/HERO_MID/HERO_OLD) used to render one card per
+ * profile, which read as duplicates once every profile got an anchor. The
+ * card previews the first profile that actually has an anchor (falls back
+ * to dataset image / first profile) and badges the profile count.
  */
 export function LibraryCharactersList() {
   const fetchPage = useCallback(
@@ -21,37 +24,37 @@ export function LibraryCharactersList() {
   );
 
   return (
-    <main className="px-4 sm:px-8 py-6">
-      <Breadcrumbs items={[
-        { label: 'Overview',   href: '/' },
-        { label: 'Персонажи' },
-      ]} />
-      <div className="mb-4">
-        <h1 className="text-2xl font-semibold">Персонажи</h1>
-        <p className="text-zinc-500 text-sm">
-          Глобальная библиотека. Промпты, датасеты, тренировка — здесь. Проекты подключают персонажей через «Состав».
-        </p>
-      </div>
-
+    <>
+      <PageHeader
+        crumbs={[
+          { label: 'Overview',   href: '/' },
+          { label: 'Персонажи' },
+        ]}
+        title="Персонажи"
+        subtitle="Глобальная библиотека. Промпты, датасеты, тренировка — здесь. Проекты подключают персонажей через «Состав»."
+      />
+      <main className="px-4 sm:px-8 py-6">
       <AsyncGenericList<LibChar>
         fetchPage={fetchPage}
         keyOf={(c) => c.id}
         loadingText="Загрузка персонажей…"
         emptyText="Персонажей пока нет"
-        renderItem={(char) =>
-          char.profiles.length === 0
-            ? <CharacterCard key={char.id} char={char} profile={null} />
-            : char.profiles.map((p) => <CharacterCard key={p.id} char={char} profile={p} />)
-        }
+        renderItem={(char) => <CharacterCard key={char.id} char={char} />}
       />
-    </main>
+      </main>
+    </>
   );
 }
 
-function CharacterCard({ char, profile }: { char: LibChar; profile: LibProfile | null }) {
+function CharacterCard({ char }: { char: LibChar }) {
+  const profiles = char.profiles;
+  const firstProfile: LibProfile | null = profiles[0] ?? null;
+
+  /** Profile whose anchor we preview (first profile that has one). */
+  const [anchorProfileId, setAnchorProfileId] = useState<string | null>(null);
   const [previewFilename, setPreviewFilename] = useState<string | null>(null);
   const [datasetCount,    setDatasetCount]    = useState<number | null>(null);
-  const [anchorExists,    setAnchorExists]    = useState<boolean>(false);
+  const [probed,          setProbed]          = useState(false);
 
   // Attached project styles drive WHICH identity badge to surface. A character
   // pinned only to cartoon projects shouldn't be tagged "нет датасета" — that
@@ -64,31 +67,47 @@ function CharacterCard({ char, profile }: { char: LibChar; profile: LibProfile |
   const isLibraryOnly = styles.length === 0;
 
   useEffect(() => {
-    if (!profile) return;
-    // Cartoon-only characters preview their anchor PNG; photoreal characters
-    // preview a dataset image. Library-mode characters try anchor first, then
-    // dataset, so whichever exists shows up.
-    if (isCartoonOnly || isLibraryOnly) {
-      api.getAnchor(profile.id)
-        .then((r) => { setAnchorExists(r.exists); })
-        .catch(() => { setAnchorExists(false); });
-    }
-    if (!isCartoonOnly) {
-      api.listImages(profile.id)
-        .then((r) => {
-          setDatasetCount(r.count);
-          const usable = r.images.find((i) => i.size > 50_000) ?? r.images[0];
-          setPreviewFilename(usable?.filename ?? null);
-        })
-        .catch(() => { setDatasetCount(0); });
-    } else {
-      setDatasetCount(0);
-    }
-  }, [profile, isCartoonOnly, isLibraryOnly]);
+    let cancelled = false;
+    if (!firstProfile) { setProbed(true); return; }
 
-  const loraReady = !!profile?.loraPath;
-  const target    = profile?.targetImages ?? 0;
-  const dcount    = datasetCount ?? 0;
+    (async () => {
+      // Cartoon/library characters preview an anchor — probe every profile and
+      // take the first that has one, so the card shows a face as soon as ANY
+      // age band is anchored.
+      if (isCartoonOnly || isLibraryOnly) {
+        const probes = await Promise.all(
+          profiles.map((p) =>
+            api.getAnchor(p.id).then((r) => (r.exists ? p.id : null)).catch(() => null),
+          ),
+        );
+        if (!cancelled) setAnchorProfileId(probes.find((id) => id !== null) ?? null);
+      }
+      // Photoreal (or mixed / library) characters can fall back to a dataset image.
+      if (!isCartoonOnly) {
+        try {
+          const r = await api.listImages(firstProfile.id);
+          if (!cancelled) {
+            setDatasetCount(r.count);
+            const usable = r.images.find((i) => i.size > 50_000) ?? r.images[0];
+            setPreviewFilename(usable?.filename ?? null);
+          }
+        } catch {
+          if (!cancelled) setDatasetCount(0);
+        }
+      } else {
+        if (!cancelled) setDatasetCount(0);
+      }
+      if (!cancelled) setProbed(true);
+    })();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [char.id]);
+
+  const anchorExists = anchorProfileId !== null;
+  const loraReady    = profiles.some((p) => !!p.loraPath);
+  const target       = firstProfile?.targetImages ?? 0;
+  const dcount       = datasetCount ?? 0;
 
   // Asset badge: photoreal characters show dataset/LoRA progress; cartoon-only
   // characters show anchor readiness instead.
@@ -106,46 +125,45 @@ function CharacterCard({ char, profile }: { char: LibChar; profile: LibProfile |
             ? { label: `датасет ${dcount}/${target}`, cls: 'bg-yellow-700 text-yellow-100' }
             : { label: `датасет ${dcount}`, cls: 'bg-purple-700 text-purple-100' };
 
-  const href = profile ? `/characters/${profile.id}/description` : '#';
+  // Card links to the profile we preview (or the first one).
+  const linkProfileId = anchorProfileId ?? firstProfile?.id ?? null;
+  const href = linkProfileId ? `/characters/${linkProfileId}/description` : '#';
   const attachedProjects = char.projectLinks.map((l) => l.project.slug);
+
+  // Age summary across profiles: «8 · 19 · 24 · 31» reads better than one band.
+  const ages = profiles.map((p) => p.ageLabel).filter((a): a is string => !!a);
+  const ageSummary = ages.length === 0
+    ? '—'
+    : ages.length === 1
+      ? ages[0]
+      : ages.map((a) => a.replace(/^\D*/, '') || a).join(' · ');
 
   return (
     <div className="group bg-zinc-900 border border-zinc-800 hover:border-blue-700 rounded-lg overflow-hidden transition flex flex-col">
       <Link href={href} className="block flex-1">
         <div className="aspect-square bg-zinc-950 relative">
-          {/* Preview source depends on identity pipeline:
-             - cartoon-only character → anchor PNG (data/<slug>/reference/<code>_anchor.png)
-             - photoreal character → first usable dataset image
-             - library-mode character → anchor if exists, else first dataset image */}
-          {profile && isCartoonOnly && anchorExists ? (
+          {/* Preview: anchor of the first anchored profile → dataset image → placeholder */}
+          {anchorProfileId ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={api.anchorRawUrl(profile.id)}
-              alt={profile.profileCode}
+              src={api.anchorRawUrl(anchorProfileId)}
+              alt={char.code}
               className="w-full h-full object-cover"
               loading="lazy"
             />
-          ) : profile && isLibraryOnly && anchorExists && !previewFilename ? (
+          ) : previewFilename && firstProfile ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={api.anchorRawUrl(profile.id)}
-              alt={profile.profileCode}
-              className="w-full h-full object-cover"
-              loading="lazy"
-            />
-          ) : previewFilename && profile ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={api.imageUrl(profile.id, previewFilename)}
-              alt={profile.profileCode}
+              src={api.imageUrl(firstProfile.id, previewFilename)}
+              alt={char.code}
               className="w-full h-full object-cover"
               loading="lazy"
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-zinc-600 text-sm">
-              {dcount > 0
+              {!probed
                 ? '…'
-                : (profile
+                : (firstProfile
                     ? (isCartoonOnly ? 'нет anchor' : 'нет датасета')
                     : 'нет профиля')}
             </div>
@@ -154,6 +172,11 @@ function CharacterCard({ char, profile }: { char: LibChar; profile: LibProfile |
             <span className={`text-xs px-2 py-1 rounded font-medium ${assetBadge.cls}`}>
               {assetBadge.label}
             </span>
+            {profiles.length > 1 && (
+              <span className="text-[10px] px-2 py-0.5 rounded bg-zinc-800/90 text-zinc-300 font-mono">
+                {profiles.length} профиля
+              </span>
+            )}
             {attachedProjects.length > 0 ? (
               <span className="text-[10px] px-2 py-0.5 rounded bg-blue-900/60 text-blue-200 font-mono">
                 {attachedProjects.length === 1 ? attachedProjects[0] : `${attachedProjects.length} проекта`}
@@ -168,11 +191,13 @@ function CharacterCard({ char, profile }: { char: LibChar; profile: LibProfile |
         <div className="p-4">
           <div className="font-medium">{char.displayName ?? char.code}</div>
           <div className="text-xs text-zinc-500 font-mono mb-3">
-            {profile?.profileCode ?? char.code}
+            {profiles.length > 1
+              ? profiles.map((p) => p.profileCode).join(', ')
+              : (firstProfile?.profileCode ?? char.code)}
           </div>
           <div className="grid grid-cols-3 gap-2 text-xs text-zinc-400">
-            <Stat label="датасет" value={`${dcount}`} />
-            <Stat label="возраст" value={profile?.ageLabel ?? '—'} />
+            <Stat label="профили" value={`${profiles.length}`} />
+            <Stat label="возраст" value={ageSummary} />
             <Stat label="LoRA"    value={loraReady ? 'yes' : '—'} />
           </div>
         </div>

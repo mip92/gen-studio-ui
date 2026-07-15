@@ -18,12 +18,13 @@ import {
   QueueJobType,
   QueueSortField,
   ProjectListItem,
+  isProjectArchived,
 } from '../lib/api';
 import { HeaderCell, MultiSelect, MultiSelectLabeled } from './table/TableControls';
 
 const POLL_MS = 3000;
 
-const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_upscale', 'video_interp', 'tts', 'bgm', 'anchor', 'validation'];
+const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_upscale', 'video_interp', 'tts', 'bgm', 'anchor', 'validation', 'anchor_validation'];
 const ALL_STATUSES = [
   'pending', 'blocked',
   'preparing', 'captioning', 'training', 'running',
@@ -200,7 +201,11 @@ export default function QueueTable({
           column={column}
           filter={
             <MultiSelectLabeled
-              options={projectList.map((p) => ({ value: p.slug, label: p.name }))}
+              // Archived (published) projects no longer need queue filtering;
+              // the full projectList stays intact for row name/link lookups.
+              options={projectList
+                .filter((p) => !isProjectArchived(p))
+                .map((p) => ({ value: p.slug, label: p.name }))}
               value={(column.getFilterValue() as string[] | undefined) ?? []}
               onChange={(v) => column.setFilterValue(v.length ? v : undefined)}
             />
@@ -557,6 +562,7 @@ function typeBadge(t: QueueJobType): string {
   if (t === 'tts')           return 'bg-cyan-950/40   text-cyan-300   border-cyan-900';
   if (t === 'anchor')        return 'bg-fuchsia-950/40 text-fuchsia-300 border-fuchsia-900';
   if (t === 'validation')    return 'bg-indigo-950/40 text-indigo-300 border-indigo-900';
+  if (t === 'anchor_validation') return 'bg-violet-950/40 text-violet-300 border-violet-900';
   return                            'bg-emerald-950/40 text-emerald-300 border-emerald-900';  // bgm
 }
 

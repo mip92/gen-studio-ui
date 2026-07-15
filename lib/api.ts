@@ -231,6 +231,14 @@ export interface CandidateVerdict {
   severe?:       boolean;   // unusable: anatomy horror / wrong-or-missing subject / intruder
   issues:        string[];  // concrete defects the model saw
   error?:        string;
+  /** Verdict carried over from an earlier validation run (file was not re-scored). */
+  cached?:       boolean;
+}
+
+/** Structured suggestion — each part targets its own promptFields key. */
+export interface SuggestedFields {
+  positive: string | null;  // full rewritten positive prompt
+  negative: string | null;  // defect tokens to APPEND to the negative
 }
 
 export interface ImageValidationJob {
@@ -238,8 +246,12 @@ export interface ImageValidationJob {
   status:          string;   // pending | running | completed | failed
   result:          CandidateVerdict[] | null;
   chosenFilename:  string | null;
-  /** When no candidate passed: the vision model's proposed improved prompt. */
+  /** LEGACY flat positive-only suggestion — new jobs fill suggestedFields. */
   suggestedPrompt: string | null;
+  /** When no candidate passed: structured {positive, negative} suggestion. */
+  suggestedFields: SuggestedFields | null;
+  /** Comparative judge's one-line reason for picking chosenFilename. */
+  judgeReason:     string | null;
   errorMessage:    string | null;
   completedAt:     string | null;
 }
@@ -263,6 +275,34 @@ export interface AnchorValidationJob {
   suggestedPrompt: string | null;
   errorMessage:    string | null;
   completedAt:     string | null;
+}
+
+/** One anchor candidate on disk, merged with its verdict and selection state. */
+export interface AnchorCandidate {
+  filename:   string;
+  size:       number;
+  mtime:      number;
+  verdict:    AnchorVerdict | null;
+  /** the validator's own automatic pick */
+  chosenByAI: boolean;
+  /** this candidate's bytes are the currently installed anchor.png */
+  selected:   boolean;
+}
+
+export interface AnchorCandidatesResponse {
+  profileId:        string;
+  profileCode:      string;
+  anchorExists:     boolean;
+  /** installed anchor matches none of the candidates (manual upload / older render) */
+  anchorIsExternal: boolean;
+  validationActive: boolean;
+  validation: {
+    jobId:           string;
+    completedAt:     string | null;
+    chosenFilename:  string | null;
+    suggestedPrompt: string | null;
+  } | null;
+  candidates: AnchorCandidate[];
 }
 
 export interface UpdateShotBody {
@@ -542,7 +582,7 @@ export interface SceneSummary {
   shots:           SceneShot[];
 }
 
-export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale' | 'video_interp' | 'tts' | 'bgm' | 'anchor' | 'validation';
+export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale' | 'video_interp' | 'tts' | 'bgm' | 'anchor' | 'validation' | 'anchor_validation';
 
 /** Wire format from /pipeline/queue rows. Backend pairs slug + UUID so
  *  Link-builders can always go straight to the canonical /projects/<uuid>/
@@ -699,6 +739,22 @@ export const api = {
     http<{ profile: unknown; rerenderJob: AnchorRenderJob | null }>(
       `/profiles/${profileId}/apply-suggested-anchor-prompt`,
       { method: 'POST', body: JSON.stringify({ prompt, rerender }) }),
+
+  // ── Anchor candidates (best-of-N gallery + manual selection) ─────────────────
+
+  /** All candidate portraits from the last render, with verdicts + selection. */
+  listAnchorCandidates: (profileId: string) =>
+    http<AnchorCandidatesResponse>(`/profiles/${profileId}/anchor-candidates`),
+
+  /** Raw image URL of one candidate (immutable per render batch). */
+  anchorCandidateRawUrl: (profileId: string, filename: string) =>
+    `${MEDIA_BASE}/profiles/${profileId}/anchor-candidates/${encodeURIComponent(filename)}/raw`,
+
+  /** Manually install a candidate as the profile's anchor (user's final say). */
+  selectAnchorCandidate: (profileId: string, filename: string) =>
+    http<{ anchorPath: string }>(
+      `/profiles/${profileId}/anchor/select`,
+      { method: 'POST', body: JSON.stringify({ filename }) }),
 
   dashboard: (slug: string) =>
     http<DashboardResponse>(`/projects/${slug}/dashboard`),
@@ -904,6 +960,8 @@ export const api = {
       /** Per-generation pipeline/visual-style override. Locked once the shot
        *  has any render (backend rejects a mismatching style). */
       visualStyle?:  string;
+      /** Queue a vision-QC pass after the batch lands (checkbox; default off). */
+      validate?:     boolean;
     } = {},
   ) =>
     http<{ id: string; shotId: string; status: string; queuedAt: string }>(
@@ -913,10 +971,10 @@ export const api = {
 
   // Bulk-enqueue every not-yet-rendered, not-queued shot in a project (one click).
   // Additive only — never wipes; skips rendered/approved/awaiting-approval/already-queued.
-  enqueueProjectPending: (projectId: string) =>
+  enqueueProjectPending: (projectId: string, validate = false) =>
     http<{ enqueued: number }>(
       `/generation/shots/project/${projectId}/enqueue-pending`,
-      { method: 'POST' },
+      { method: 'POST', body: JSON.stringify({ validate }) },
     ),
 
   // ComfyUI live queue — list of running + pending prompt_ids
@@ -1065,17 +1123,21 @@ export const api = {
       body:   JSON.stringify({ videoId }),
     }),
 
-  /** Queue a vision-model re-validation of this shot's candidates (auto-picks best). */
+  /** Queue a vision-model validation. INCREMENTAL: only never-scored candidates
+   *  are sent to the model; earlier verdicts are reused. No-op when everything
+   *  is already scored (queued:false + reason). */
   validateShot: (shotId: string) =>
-    http<{ queued: boolean; jobId: string | null }>(`/shots/${shotId}/validate`, {
+    http<{ queued: boolean; jobId: string | null; reason: string | null }>(`/shots/${shotId}/validate`, {
       method: 'POST',
     }),
 
-  /** Approve the vision model's suggested positive prompt (optionally re-render). */
-  applySuggestedPrompt: (shotId: string, prompt: string, rerender = false) =>
+  /** Approve the vision model's structured suggestion: positive replaces
+   *  promptFields.positive, negative tokens append to promptFields.negative.
+   *  rerender queues an ADDITIVE batch (old candidates + verdicts survive). */
+  applySuggestedPrompt: (shotId: string, fields: { positive?: string; negative?: string; rerender?: boolean; validate?: boolean }) =>
     http<ShotFull>(`/shots/${shotId}/apply-suggested-prompt`, {
       method: 'POST',
-      body:   JSON.stringify({ prompt, rerender }),
+      body:   JSON.stringify(fields),
     }),
 
   createShot: (projectIdOrSlug: string, body: CreateShotBody) =>
@@ -1180,7 +1242,7 @@ export const api = {
   // ── Video renders (Wan2.2 i2v from the shot's chosen render) ──────────────
   startVideoRender: (
     shotId: string,
-    body: { motionPrompt?: string; seed?: number; width?: number; height?: number; length?: number; fps?: number; count?: number; mode?: 'fast' | 'cfg' } = {},
+    body: { motionPrompt?: string; seed?: number; width?: number; height?: number; length?: number; fps?: number; count?: number; mode?: 'fast' | 'cfg' | 'distill' } = {},
   ) =>
     http<VideoRender[]>(`/generation/shots/${shotId}/videos`, {
       method: 'POST',
@@ -1388,6 +1450,21 @@ export const api = {
   /** The project's curated shorts plan (which shots go into each teaser reel). */
   shortsPlan: (idOrSlug: string) =>
     http<ShortsPlan>(`/projects/${idOrSlug}/export/shorts/plan`),
+
+  /** Add a short to the versioned plan (same slug → replaces title/shots).
+   *  Creates the plan file when the project doesn't have one yet. */
+  upsertShortPlan: (idOrSlug: string, body: { slug: string; title?: string; shots: string[] }) =>
+    http<ShortsPlan>(`/projects/${idOrSlug}/export/shorts/plan`, {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  /** Remove a short from the plan (its packaging texts are dropped too). */
+  deleteShortPlan: (idOrSlug: string, shortSlug: string) =>
+    http<ShortsPlan>(
+      `/projects/${idOrSlug}/export/shorts/plan/${encodeURIComponent(shortSlug)}`,
+      { method: 'DELETE' },
+    ),
 
   /** Build the vertical (9:16) shorts CapCut drafts. Optional body carries a
    *  plan directly (future LLM curator); omitted → server uses the versioned
@@ -1701,9 +1778,17 @@ export interface CapcutReadiness {
 }
 
 /** GET /projects/:id/export/shorts/plan — the curated shorts plan for the UI. */
+export interface ShortsPlanItem {
+  slug:    string;
+  title:   string;
+  shots:   number;
+  /** Planned shots in plan order; `image` is the shot's chosenRender filename
+   *  (feed it to api.shotImageUrl) or null while the shot isn't rendered yet. */
+  preview: Array<{ shotId: string | null; shotCode: string; image: string | null }>;
+}
 export interface ShortsPlan {
   hasPlan: boolean;
-  shorts:  Array<{ slug: string; title: string; shots: number }>;
+  shorts:  ShortsPlanItem[];
 }
 
 /** One built short returned by POST /projects/:id/export/shorts. */
@@ -1727,6 +1812,8 @@ export interface YoutubeShort {
   descBefore: string;   // while the main video isn't published yet
   descAfter:  string;   // after — references the main video ({{main_url}})
   tags:       string[];
+  /** The short's own published YouTube link ('' until posted). */
+  url?:       string;
 }
 export interface YoutubePackage {
   youtubeUrl: string | null;

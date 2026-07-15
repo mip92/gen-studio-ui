@@ -131,19 +131,7 @@ export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: s
           </Field>
         </div>
 
-        <Field label="Lighting / Mood">
-          {!editing ? <Value v={pf.lightingMood} multi />
-                    : <Textarea value={dpf.lightingMood ?? ''} rows={2}
-                        onChange={(v) => updatePf({ lightingMood: v })} />}
-        </Field>
-
-        <Field label="Frame description" hint="Что должно быть в кадре, без логотипов и т.п.">
-          {!editing ? <Value v={pf.frameDescription} multi />
-                    : <Textarea value={dpf.frameDescription ?? ''} rows={2}
-                        onChange={(v) => updatePf({ frameDescription: v })} />}
-        </Field>
-
-        <Field label="Positive prompt" hint="Полный позитивный промпт для ComfyUI">
+        <Field label="Positive prompt" hint="Полный позитивный промпт для ComfyUI (обязателен — единственный текст кадра, который уходит в рендер)">
           {!editing ? <Value v={pf.positive} multi />
                     : <Textarea value={dpf.positive ?? ''} rows={4}
                         onChange={(v) => updatePf({ positive: v })} />}
@@ -155,31 +143,11 @@ export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: s
                         onChange={(v) => updatePf({ negative: v })} />}
         </Field>
 
-        <Field label="Character locks (positiveCharacterLocks)" hint="Кто/как зафиксирован в кадре">
-          {!editing ? <Value v={pf.positiveCharacterLocks} multi />
-                    : <Textarea value={dpf.positiveCharacterLocks ?? ''} rows={2}
-                        onChange={(v) => updatePf({ positiveCharacterLocks: v })} />}
+        <Field label="Camera movement" hint="Движение камеры для видео i2v">
+          {!editing ? <Value v={pf.camera?.movement} mono />
+                    : <Input value={dpf.camera?.movement ?? ''}
+                        onChange={(v) => updatePf({ camera: { ...dpf.camera, movement: v } })} />}
         </Field>
-
-        <Field label="Environment hints (positiveEnvironment)">
-          {!editing ? <Value v={pf.positiveEnvironment} multi />
-                    : <Textarea value={dpf.positiveEnvironment ?? ''} rows={2}
-                        onChange={(v) => updatePf({ positiveEnvironment: v })} />}
-        </Field>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field label="Camera framing">
-            {!editing ? <Value v={pf.camera?.framing} mono />
-                      : <Input value={dpf.camera?.framing ?? ''}
-                          onChange={(v) => updatePf({ camera: { ...dpf.camera, framing: v } })} />}
-          </Field>
-
-          <Field label="Camera movement">
-            {!editing ? <Value v={pf.camera?.movement} mono />
-                      : <Input value={dpf.camera?.movement ?? ''}
-                          onChange={(v) => updatePf({ camera: { ...dpf.camera, movement: v } })} />}
-          </Field>
-        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Field label="Workflow route">
@@ -299,6 +267,16 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
   const [steps,        setSteps]        = useState<number | ''>('');
   const [guidance,     setGuidance]     = useState<number | ''>('');
   const [loraStrength, setLoraStrength] = useState<number | ''>('');
+  // Vision-QC after render is strictly OPT-IN (default off). The last choice is
+  // remembered in the browser so the checkbox stays how the user left it.
+  const [validateAfter, setValidateAfter] = useState(false);
+  useEffect(() => {
+    try { setValidateAfter(localStorage.getItem('genstudio.validateAfterRender') === '1'); } catch { /* SSR/no storage */ }
+  }, []);
+  const toggleValidateAfter = (v: boolean) => {
+    setValidateAfter(v);
+    try { localStorage.setItem('genstudio.validateAfterRender', v ? '1' : '0'); } catch { /* best effort */ }
+  };
 
   // Per-participant identity readiness. Cartoon needs promptBase+triggerToken;
   // photoreal needs a trained LoRA. Status carries one of:
@@ -382,6 +360,7 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
       if (steps        !== '') body.steps        = Number(steps);
       if (guidance     !== '') body.guidance     = Number(guidance);
       if (loraStrength !== '') body.loraStrength = Number(loraStrength);
+      if (validateAfter)       body.validate     = true;
       // No visualStyle here on purpose — the pipeline is a per-PROJECT setting
       // (Settings page), not a per-scene choice. The backend resolves the style
       // from the project.
@@ -408,12 +387,13 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
 
   // ── Image validation (Ollama vision picks the best candidate) ──────────────
   const [pendingValId, setPendingValId] = useState<string | null>(null);
-  const [promptDraft, setPromptDraft]   = useState('');
+  const [posDraft, setPosDraft]         = useState('');
+  const [negDraft, setNegDraft]         = useState('');
   const [applyingPrompt, setApplyingPrompt] = useState(false);
   const handleValidate = async () => {
     try {
       const res = await api.validateShot(shot.id);
-      if (!res.queued) { alert('Для проверки нужно ≥2 вариантов (или проверка уже в очереди).'); return; }
+      if (!res.queued) { alert(res.reason ?? 'Все кандидаты уже проверены (или проверка уже в очереди).'); return; }
       setPendingValId(res.jobId);
       // Backend cleared the old pick on re-check — refresh so it disappears now.
       try { onShotChange(await api.getShot(shot.id)); } catch { /* poll will catch up */ }
@@ -440,16 +420,32 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
   const validating = pendingValId !== null
     || latestValidation?.status === 'running' || latestValidation?.status === 'pending';
   // When the last completed validation picked NOTHING (all candidates failed),
-  // the vision model proposes an improved prompt for the user to review/approve.
-  const suggestion = latestValidation?.status === 'completed' && !latestValidation.chosenFilename
-    ? (latestValidation.suggestedPrompt ?? null)
+  // the vision model proposes a STRUCTURED rewrite: positive replaces the
+  // positive, negative tokens append to the negative — each into its own field.
+  const suggestedPositive = latestValidation?.status === 'completed' && !latestValidation.chosenFilename
+    ? (latestValidation.suggestedFields?.positive ?? latestValidation.suggestedPrompt ?? null)
     : null;
-  useEffect(() => { if (suggestion != null) setPromptDraft(suggestion); }, [suggestion]);
+  const suggestedNegative = latestValidation?.status === 'completed' && !latestValidation.chosenFilename
+    ? (latestValidation.suggestedFields?.negative ?? null)
+    : null;
+  const hasSuggestion = suggestedPositive != null || suggestedNegative != null;
+  useEffect(() => {
+    if (suggestedPositive != null) setPosDraft(suggestedPositive);
+    if (suggestedNegative != null) setNegDraft(suggestedNegative);
+  }, [suggestedPositive, suggestedNegative]);
   const applyPrompt = async (rerender: boolean) => {
-    if (!promptDraft.trim()) return;
+    const positive = posDraft.trim();
+    const negative = negDraft.trim();
+    if (!positive && !negative) return;
     setApplyingPrompt(true);
     try {
-      const updated = await api.applySuggestedPrompt(shot.id, promptDraft.trim(), rerender);
+      const updated = await api.applySuggestedPrompt(shot.id, {
+        positive: positive || undefined,
+        negative: negative || undefined,
+        rerender,
+        // The new batch inherits the "validate after render" checkbox.
+        validate: rerender ? validateAfter : undefined,
+      });
       onShotChange(updated);
     } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
     finally { setApplyingPrompt(false); }
@@ -587,6 +583,16 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
           : renders.length > 0          ? `+ ещё ${batchSize} вариантов в очередь (всего: ${renders.length})`
           : `🎬 в очередь — ${batchSize} вариантов`}
         </button>
+        <label className="text-xs text-zinc-400 flex items-center gap-1.5 cursor-pointer select-none"
+          title="После рендера поставить в очередь проверку vision-моделью (только непроверенные фото)">
+          <input
+            type="checkbox"
+            checked={validateAfter}
+            onChange={(e) => toggleValidateAfter(e.target.checked)}
+            className="accent-indigo-600"
+          />
+          🤖 проверить нейронкой после рендера
+        </label>
         {state.sceneJobId && (state.status === 'queued' || state.status === 'running') && (
           <Link href="/queue" className="text-xs text-zinc-500 hover:text-zinc-300 font-mono">
             job: {state.sceneJobId.slice(0, 8)}… →
@@ -604,47 +610,59 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
           <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mb-2">
             <span className="text-xs uppercase tracking-wider text-zinc-500">Варианты ({renders.length})</span>
             {shot.chosenRender && <span className="text-xs text-emerald-400">✓ выбран: <span className="font-mono">{shot.chosenRender}</span></span>}
-            {renders.length >= 2 && (
+            {renders.length > 0 && (
               <button
                 onClick={handleValidate}
                 disabled={validating}
                 className="text-xs bg-indigo-700/80 hover:bg-indigo-600 disabled:opacity-50 text-white px-2 py-0.5 rounded"
-                title="Vision-модель (qwen3-vl) оценит все варианты и выберет лучший под промпт"
+                title="Vision-модель (qwen3-vl) проверит ТОЛЬКО непроверенные варианты (старые вердикты сохраняются), судья сравнит всех прошедших и выберет лучший"
               >
-                {validating ? '🤖 проверяю…' : '🤖 перепроверить'}
+                {validating ? '🤖 проверяю…' : '🤖 проверить непроверенные'}
               </button>
             )}
             {latestValidation?.status === 'failed' && (
               <span className="text-xs text-red-400" title={latestValidation.errorMessage ?? ''}>✕ проверка не удалась</span>
             )}
+            {latestValidation?.judgeReason && latestValidation.chosenFilename && (
+              <span className="text-xs text-indigo-300">⚖ {latestValidation.judgeReason}</span>
+            )}
           </div>
 
-          {suggestion && (
+          {hasSuggestion && (
             <div className="mb-3 bg-amber-950/30 border border-amber-800/60 rounded p-3">
               <div className="text-xs text-amber-300 mb-2">
-                🤖 Ни один вариант не прошёл проверку — ИИ предлагает новый промпт (можно отредактировать):
+                🤖 Ни один вариант не прошёл проверку — ИИ предлагает правки по полям (можно отредактировать):
               </div>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Positive (заменит целиком)</div>
               <textarea
-                value={promptDraft}
-                onChange={(e) => setPromptDraft(e.target.value)}
+                value={posDraft}
+                onChange={(e) => setPosDraft(e.target.value)}
                 rows={4}
+                className="w-full bg-zinc-950 border border-zinc-700 rounded p-2 text-xs text-zinc-200 font-mono leading-relaxed"
+              />
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500 mt-2 mb-1">Negative (допишется к текущему, без дублей)</div>
+              <textarea
+                value={negDraft}
+                onChange={(e) => setNegDraft(e.target.value)}
+                rows={2}
+                placeholder="— нечего добавить —"
                 className="w-full bg-zinc-950 border border-zinc-700 rounded p-2 text-xs text-zinc-200 font-mono leading-relaxed"
               />
               <div className="flex gap-2 mt-2 items-center">
                 <button
                   onClick={() => applyPrompt(false)}
-                  disabled={applyingPrompt || !promptDraft.trim()}
+                  disabled={applyingPrompt || (!posDraft.trim() && !negDraft.trim())}
                   className="text-xs bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3 py-1 rounded"
                 >
-                  ✓ Применить промпт
+                  ✓ Применить в поля
                 </button>
                 <button
                   onClick={() => applyPrompt(true)}
-                  disabled={applyingPrompt || !promptDraft.trim()}
+                  disabled={applyingPrompt || (!posDraft.trim() && !negDraft.trim())}
                   className="text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white px-3 py-1 rounded"
-                  title="Записать промпт, удалить неудачные варианты и поставить новый рендер в очередь"
+                  title="Записать поля и поставить ДОБАВОЧНЫЙ рендер — старые фото и вердикты нейронки остаются"
                 >
-                  ✓ Применить и перерендерить
+                  ✓ Применить и дорендерить
                 </button>
                 {applyingPrompt && <span className="text-xs text-zinc-500">…</span>}
               </div>
@@ -688,6 +706,7 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
                         )}
                         {verdict.severe && <span className="text-[10px] bg-red-700 text-white px-1 py-0.5 rounded">⛔ брак</span>}
                         {aiPicked && <span className="text-[10px] bg-indigo-700 text-white px-1 py-0.5 rounded">🤖 лучший</span>}
+                        {verdict.cached && <span className="text-[10px] bg-zinc-700/80 text-zinc-400 px-1 py-0.5 rounded" title="Вердикт из прошлой проверки — файл не перепроверялся">ранее</span>}
                       </div>
                     )}
                   </div>

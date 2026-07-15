@@ -21,7 +21,7 @@ export function ShotVideosTab() {
   // Default = fast (4-step, no negative influence). cfg/auto are ~5× slower, so
   // they're an explicit opt-in — picking the slow path by default made routine
   // video renders crawl.
-  const [mode, setMode]                 = useState<'fast' | 'cfg'>('fast');
+  const [mode, setMode]                 = useState<'fast' | 'cfg' | 'distill'>('fast');
   const [videos, setVideos]             = useState<VideoRender[] | null>(null);
   const [busy, setBusy]                 = useState<false | 'start'>(false);
   const [error, setError]               = useState<string | null>(null);
@@ -188,10 +188,10 @@ export function ShotVideosTab() {
             режим
             <select
               value={mode}
-              onChange={(e) => setMode(e.target.value as 'fast' | 'cfg')}
+              onChange={(e) => setMode(e.target.value as 'fast' | 'cfg' | 'distill')}
               className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200"
             >
-              <option value="fast">быстро (4-step, ~2-3 мин, негатив НЕ работает)</option>
+              <option value="fast">быстро (distill 4-step, ~2 мин, негатив НЕ работает)</option>
               <option value="cfg">качество (cfg=4, негатив работает, ~5× медленнее)</option>
             </select>
           </label>
@@ -199,7 +199,7 @@ export function ShotVideosTab() {
         </div>
         <p className="text-zinc-600 text-[11px] mt-2 leading-relaxed">
           {mode === 'fast'
-            ? 'Быстрый режим (по умолчанию): lightx2v 4-step, cfg=1.0, ~2-3 мин. Движение задаётся ТОЛЬКО позитивным промптом — motionNegative при cfg=1 игнорируется.'
+            ? 'Быстрый режим (по умолчанию): lightx2v full-distill fp8, 4 шага, cfg=1.0, ~2 мин. Движение задаётся ТОЛЬКО позитивным промптом — motionNegative при cfg=1 игнорируется.'
             : 'Режим качества: полный Wan 2.2, 20 шагов, cfg=4.0. motionNegative реально подавляет нежелательное движение, но рендер примерно в 5 раз дольше.'}
         </p>
       </section>

@@ -19,12 +19,21 @@ export function ScenesList({ id }: { id: string }) {
   const [ttsForScene, setTtsForScene]             = useState<string | null>(null);
   const [queue, setQueue] = useState<{ running: string[]; pending: string[] } | null>(null);
   const [enqueuing, setEnqueuing] = useState(false);
+  // Vision-QC after render is OPT-IN (default off); last choice remembered in the browser.
+  const [validateAfter, setValidateAfter] = useState(false);
+  useEffect(() => {
+    try { setValidateAfter(localStorage.getItem('genstudio.validateAfterRender') === '1'); } catch { /* no storage */ }
+  }, []);
+  const toggleValidateAfter = (v: boolean) => {
+    setValidateAfter(v);
+    try { localStorage.setItem('genstudio.validateAfterRender', v ? '1' : '0'); } catch { /* best effort */ }
+  };
 
   const enqueueAll = async () => {
-    if (!confirm('Поставить на рендер ВСЕ кадры проекта, которые ещё не рендерились и не стоят в очереди?\n\nУже готовые (апрувнутые) и ждущие апрува — НЕ трогаются. Ничего не удаляется, только добавляется.')) return;
+    if (!confirm(`Поставить на рендер ВСЕ кадры проекта, которые ещё не рендерились и не стоят в очереди?\n\nУже готовые (апрувнутые) и ждущие апрува — НЕ трогаются. Ничего не удаляется, только добавляется.${validateAfter ? '\n\nПосле рендера каждый батч уйдёт на проверку нейронкой.' : ''}`)) return;
     setEnqueuing(true);
     try {
-      const r = await api.enqueueProjectPending(id);
+      const r = await api.enqueueProjectPending(id, validateAfter);
       alert(`Поставлено в очередь: ${r.enqueued}`);
       refresh();
     } catch (e) {
@@ -60,6 +69,16 @@ export function ScenesList({ id }: { id: string }) {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <label className="text-xs text-zinc-400 flex items-center gap-1.5 cursor-pointer select-none"
+            title="После каждого батча ставить проверку vision-моделью (только непроверенные фото)">
+            <input
+              type="checkbox"
+              checked={validateAfter}
+              onChange={(e) => toggleValidateAfter(e.target.checked)}
+              className="accent-indigo-600"
+            />
+            🤖 проверять
+          </label>
           <button
             onClick={enqueueAll}
             disabled={enqueuing}
