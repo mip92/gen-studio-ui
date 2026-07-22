@@ -66,18 +66,18 @@ export function BgmList({ projectId }: { projectId: string }) {
 // ─── Block card ─────────────────────────────────────────────────────────────
 
 function BlockCard({ block, onChanged }: { block: NarrativeBlock; onChanged: () => void }) {
-  const segments = block.segments ?? [];
-  const covered  = segments.reduce((s, x) => s + x.durationSec, 0);
-  const target   = block.targetSeconds ?? 0;
-  const pct      = target > 0 ? Math.min(100, Math.round((covered / target) * 100)) : 0;
+  const segments  = block.segments ?? [];
+  const mains     = segments.filter((s) => !s.spare);
+  const spares    = segments.filter((s) =>  s.spare);
+  const target    = block.targetSeconds ?? 0;
+  // Main tiles needed to cover the act: ceil(actLength / 150). The fill action
+  // tops up to this + 2 spare tiles.
+  const wantMain  = target > 0 ? Math.max(1, Math.ceil(target / 150)) : 0;
+  const tiled     = wantMain > 0 && mains.length >= wantMain && spares.length >= 2;
 
   const [prompt, setPrompt]     = useState(block.moodPrompt ?? '');
   const [dirty,  setDirty]      = useState(false);
   const [busy,   setBusy]       = useState(false);
-  // String state for the chunk input — controlled <input type="number"> with a
-  // clamping onChange fights mid-typing values ("1" → clamps to 10 → can't
-  // type "100"). Buffer as string, validate on submit instead.
-  const [chunkStr, setChunkStr] = useState('60');
 
   // Resync editor when the block prop changes (e.g. server refresh changed moodPrompt)
   useEffect(() => {
@@ -95,14 +95,9 @@ function BlockCard({ block, onChanged }: { block: NarrativeBlock; onChanged: () 
   };
 
   const fill = async () => {
-    // Validate + clamp at submit time, not on every keystroke.
-    const raw = Number(chunkStr);
-    const chunk = Number.isFinite(raw) && raw > 0
-      ? Math.max(10, Math.min(240, Math.round(raw)))
-      : 60;
     setBusy(true);
     try {
-      await api.fillBlock(block.id, chunk);
+      await api.fillBlock(block.id);
       onChanged();
     } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
@@ -126,10 +121,10 @@ function BlockCard({ block, onChanged }: { block: NarrativeBlock; onChanged: () 
         <div className="flex items-center gap-3 text-xs">
           {statusBadge}
           <span className="text-zinc-500 font-mono">
-            {covered}s / {target}s · {pct}%
+            акт ~{target}s
           </span>
           <span className="text-zinc-500">
-            {segments.length} сегментов
+            {mains.length}/{wantMain} осн + {spares.length} зап
           </span>
         </div>
       </header>
@@ -161,31 +156,19 @@ function BlockCard({ block, onChanged }: { block: NarrativeBlock; onChanged: () 
           </div>
         </div>
 
-        {/* Fill controls */}
+        {/* Fill controls — auto-tiles the act into 150s tiles + 2 spares. */}
         <div className="flex items-center gap-2 border-t border-zinc-800 pt-3">
-          <label className="text-[10px] uppercase tracking-wider text-zinc-500">Заполнить сегментами по</label>
-          <input
-            type="number"
-            min={10}
-            max={240}
-            value={chunkStr}
-            onChange={(e) => setChunkStr(e.target.value)}
-            onBlur={() => {
-              const n = Number(chunkStr);
-              if (!Number.isFinite(n) || n <= 0) setChunkStr('60');
-              else setChunkStr(String(Math.max(10, Math.min(240, Math.round(n)))));
-            }}
-            className="w-16 text-xs bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-center"
-          />
-          <span className="text-[10px] uppercase tracking-wider text-zinc-500">сек</span>
+          <span className="text-[10px] uppercase tracking-wider text-zinc-500">
+            Плитки 150с × {wantMain || '?'} + 2 запасных
+          </span>
           <button
             onClick={fill}
-            disabled={busy || block.status === 'manual' || pct >= 100}
+            disabled={busy || block.status === 'manual'}
             className="text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-3 py-1 rounded ml-2"
           >
-            заполнить
+            {tiled ? 'пересчитать' : 'заполнить'}
           </button>
-          {pct >= 100 && <span className="text-[10px] text-emerald-400">блок покрыт</span>}
+          {tiled && <span className="text-[10px] text-emerald-400">акт покрыт</span>}
         </div>
 
         {/* Segments */}
@@ -315,6 +298,11 @@ function SegmentRow({
         <div className="flex items-center gap-2">
           <span className="text-zinc-500 font-mono">#{segment.sortOrder}</span>
           <span className="text-zinc-300">{segment.durationSec}s</span>
+          {segment.spare && (
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border text-sky-300 border-sky-800 bg-sky-900/30">
+              запас
+            </span>
+          )}
           {approved && <span className="text-emerald-400">✓ approved</span>}
           {inFlight && (
             <span className="text-amber-300">

@@ -180,7 +180,7 @@ export function ProjectTTSSettings({ projectId, initialEngine, initialVoiceRefPa
 
       {/* Engine radio */}
       <div className="flex gap-3">
-        {(['silero', 'xtts2', 'f5'] as TTSEngine[]).map((eng) => (
+        {(['silero', 'xtts2', 'f5', 'qwen3'] as TTSEngine[]).map((eng) => (
           <button
             key={eng}
             disabled={busy === 'engine'}
@@ -192,7 +192,7 @@ export function ProjectTTSSettings({ projectId, initialEngine, initialVoiceRefPa
                 : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-zinc-500')
             }
           >
-            {eng === 'silero' ? 'Silero V5 ru' : eng === 'xtts2' ? 'XTTS-v2' : 'F5-TTS Russian'}
+            {eng === 'silero' ? 'Silero V5 ru' : eng === 'xtts2' ? 'XTTS-v2' : eng === 'f5' ? 'F5-TTS Russian' : 'Qwen3-TTS'}
           </button>
         ))}
         {busy === 'engine' && <span className="text-xs text-zinc-500 self-center">…</span>}

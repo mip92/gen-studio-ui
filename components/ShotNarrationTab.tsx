@@ -80,7 +80,7 @@ export function ShotNarrationTab() {
   // Reset textarea when route nav between shots.
   useEffect(() => { setText(initialText); }, [initialText, shotId]);
 
-  const engine    = (project?.ttsEngine ?? 'silero') as 'silero' | 'xtts2' | 'f5';
+  const engine    = (project?.ttsEngine ?? 'silero') as 'silero' | 'xtts2' | 'f5' | 'qwen3';
   const dirty     = text !== initialText;
   const canSynth  = text.trim().length > 0 && busy === false &&
                     (engine === 'silero' || !!project?.ttsVoiceRefPath);
@@ -106,8 +106,12 @@ export function ShotNarrationTab() {
         // clip — categorical presets are inert, so we never send them. Empty
         // selection = neutral (just the project voice reference).
         if (emotionRefName) body.emotionRefName = emotionRefName;
+        // Speed is f5-only (qwen3 has no speed knob); the sentence pause is
+        // honoured by both f5 and qwen3 workers.
         if (engine === 'f5') {
-          body.rate             = speed;
+          body.rate = speed;
+        }
+        if (engine === 'f5' || engine === 'qwen3') {
           body.sentencePauseSec = pause;
         }
       }
@@ -180,7 +184,7 @@ export function ShotNarrationTab() {
       <div className="flex items-center gap-2 text-[11px] text-zinc-500">
         <span>Engine:</span>
         <span className={engine !== 'silero' ? 'text-emerald-300' : 'text-zinc-300'}>
-          {engine === 'silero' ? 'Silero V5 ru' : engine === 'xtts2' ? 'XTTS-v2 (voice clone)' : 'F5-TTS Russian (voice clone)'}
+          {engine === 'silero' ? 'Silero V5 ru' : engine === 'xtts2' ? 'XTTS-v2 (voice clone)' : engine === 'qwen3' ? 'Qwen3-TTS (voice clone)' : 'F5-TTS Russian (voice clone)'}
         </span>
         {engine !== 'silero' && !project?.ttsVoiceRefPath && (
           <span className="text-amber-400">— загрузи voice-reference в настройках проекта</span>
@@ -239,30 +243,30 @@ export function ShotNarrationTab() {
           )}
 
           {engine === 'f5' && (
-            <>
-              <label className="text-xs flex items-center gap-2">
-                <span className="text-zinc-500 uppercase tracking-wider">Скорость</span>
-                <input
-                  type="range"
-                  min={0.5} max={2.0} step={0.05}
-                  value={speed}
-                  onChange={(e) => setSpeed(parseFloat(e.target.value))}
-                  className="w-32"
-                />
-                <span className="text-zinc-400 font-mono w-12 text-right">{speed.toFixed(2)}×</span>
-              </label>
-              <label className="text-xs flex items-center gap-2">
-                <span className="text-zinc-500 uppercase tracking-wider">Пауза</span>
-                <input
-                  type="number"
-                  min={0} max={30} step={0.5}
-                  value={pause}
-                  onChange={(e) => setPause(Math.max(0, Math.min(30, parseFloat(e.target.value) || 0)))}
-                  className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 font-mono w-16"
-                />
-                <span className="text-zinc-600 text-[10px]">сек/предложение</span>
-              </label>
-            </>
+            <label className="text-xs flex items-center gap-2">
+              <span className="text-zinc-500 uppercase tracking-wider">Скорость</span>
+              <input
+                type="range"
+                min={0.5} max={2.0} step={0.05}
+                value={speed}
+                onChange={(e) => setSpeed(parseFloat(e.target.value))}
+                className="w-32"
+              />
+              <span className="text-zinc-400 font-mono w-12 text-right">{speed.toFixed(2)}×</span>
+            </label>
+          )}
+          {(engine === 'f5' || engine === 'qwen3') && (
+            <label className="text-xs flex items-center gap-2">
+              <span className="text-zinc-500 uppercase tracking-wider">Пауза</span>
+              <input
+                type="number"
+                min={0} max={30} step={0.5}
+                value={pause}
+                onChange={(e) => setPause(Math.max(0, Math.min(30, parseFloat(e.target.value) || 0)))}
+                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 font-mono w-16"
+              />
+              <span className="text-zinc-600 text-[10px]">сек/предложение</span>
+            </label>
           )}
 
           <div className="ml-auto flex gap-2">
@@ -395,7 +399,9 @@ function jobMetaLabel(j: TTSJob): string {
   const engineLabel = (j as { engine?: string | null }).engine ?? 'silero';
   if (engineLabel !== 'silero') {
     const emo      = (j as { emotionRefName?: string | null }).emotionRefName ?? 'нейтрально';
-    const speedTag = j.rate && Math.abs(j.rate - 1) >= 0.01 ? ` · ${j.rate}×` : '';
+    // qwen3 has no speed knob — the stored rate never affected the render, so
+    // never show it (legacy rows carry the old 0.85 default).
+    const speedTag = engineLabel !== 'qwen3' && j.rate && Math.abs(j.rate - 1) >= 0.01 ? ` · ${j.rate}×` : '';
     return `${engineLabel} · ${emo} · ${j.sampleRate}Hz${speedTag}`;
   }
   return `${j.voice} · ${j.sampleRate}Hz`;

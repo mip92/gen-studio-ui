@@ -420,8 +420,8 @@ export interface ProjectFull extends ProjectListItem {
   updatedAt?:                string;
 }
 
-export type TTSEngine = 'silero' | 'xtts2' | 'f5';
-export const TTS_ENGINES: readonly TTSEngine[] = ['silero', 'xtts2', 'f5'];
+export type TTSEngine = 'silero' | 'xtts2' | 'f5' | 'qwen3';
+export const TTS_ENGINES: readonly TTSEngine[] = ['silero', 'xtts2', 'f5', 'qwen3'];
 
 export interface ProjectTTSEmotionRef {
   id:        string;
@@ -534,9 +534,9 @@ export interface SceneShot {
   chosenVideo:    {
     id:               string;
     outputFilename:   string | null;
-    upscaleStatus:    'pending' | 'running' | 'completed' | 'failed' | null;
+    upscaleStatus:    'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | null;
     upscaledFilename: string | null;
-    interpStatus?:    'pending' | 'running' | 'completed' | 'failed' | null;
+    interpStatus?:    'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | null;
     interpFilename?:  string | null;
   } | null;
   /** Oldest pending|running video render — used to badge "⚙ video" in the row. */
@@ -582,7 +582,7 @@ export interface SceneSummary {
   shots:           SceneShot[];
 }
 
-export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale' | 'video_interp' | 'tts' | 'bgm' | 'anchor' | 'validation' | 'anchor_validation';
+export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale' | 'video_interp' | 'tts' | 'bgm' | 'anchor' | 'validation' | 'anchor_validation' | 'caption';
 
 /** Wire format from /pipeline/queue rows. Backend pairs slug + UUID so
  *  Link-builders can always go straight to the canonical /projects/<uuid>/
@@ -1500,6 +1500,126 @@ export const api = {
       body:   JSON.stringify(body),
     }),
 
+  /** Is the YouTube channel connected? (Global — one channel for all projects.) */
+  getYoutubeAuthStatus: () =>
+    http<YoutubeAuthStatus>(`/youtube/auth/status`),
+
+  /** Path (via the /api proxy) the browser opens to start the OAuth consent flow. */
+  youtubeOAuthUrl: () => `${MEDIA_BASE}/youtube/oauth/url`,
+
+  /** The connected channel's playlists (upload-target dropdown). */
+  getYoutubePlaylists: () =>
+    http<YoutubePlaylist[]>(`/youtube/playlists`),
+
+  /** Next Tue/Thu publish slot after the last scheduled video (16:00 Kyiv for
+   *  main, 16:05 for short). Server-computed from the channel's schedule. */
+  getYoutubeNextSlot: (kind: 'main' | 'short' = 'main') =>
+    http<{ publishAt: string; basedOn: string | null; reason: string }>(
+      `/youtube/next-slot?kind=${kind}`),
+
+  /** Open a native file dialog on the server (=this) machine, return the chosen
+   *  absolute path. Blocks until the user picks/cancels. kind=video|image. */
+  pickYoutubeFile: (kind: 'video' | 'image') =>
+    http<{ path: string | null }>(`/youtube/pick-file?kind=${kind}`),
+
+  /** Upload the project's MAIN video. `videoPath`/`thumbnailPath` are exported by
+   *  the user from CapCut (thumbnail is mandatory). `publishAt` (RFC3339) schedules
+   *  it — forces private; only fires post-audit. Google forces `private` until the
+   *  API project is audited regardless. */
+  uploadYoutubeMain: (
+    idOrSlug: string,
+    body: {
+      videoPath:      string;
+      thumbnailPath:  string;
+      privacyStatus?: 'private' | 'unlisted' | 'public';
+      publishAt?:     string;
+      containsSyntheticMedia?: boolean;
+      playlistId?:    string;
+      categoryId?:    string;
+      madeForKids?:   boolean;
+      generateCaptions?: boolean;
+    },
+  ) =>
+    http<{ jobId: string }>(`/projects/${idOrSlug}/youtube/upload`, {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  /** Poll a background upload job (main or short). */
+  getYoutubeUploadJob: (jobId: string) =>
+    http<YoutubeUploadJob | null>(`/youtube/jobs/${jobId}`),
+
+  /** Upload one SHORT. Reads packaging from settings.youtube.shorts[shortSlug],
+   *  defaults the playlist to «шорты», stores the resulting link in the short. */
+  uploadYoutubeShort: (
+    idOrSlug: string,
+    shortSlug: string,
+    body: {
+      videoPath:      string;
+      thumbnailPath:  string;
+      privacyStatus?: 'private' | 'unlisted' | 'public';
+      publishAt?:     string;
+      containsSyntheticMedia?: boolean;
+      playlistId?:    string;
+      generateCaptions?: boolean;
+    },
+  ) =>
+    http<{ jobId: string }>(`/projects/${idOrSlug}/youtube/shorts/${shortSlug}/upload`, {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  /** Enqueue subtitle generation + upload for an already-uploaded video. */
+  enqueueYoutubeCaptions: (
+    idOrSlug: string,
+    body: { videoId: string; videoPath: string; language?: string },
+  ) =>
+    http<YoutubeCaptionJob>(`/projects/${idOrSlug}/youtube/captions`, {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  /** Latest caption job for the project (poll for status). */
+  getYoutubeCaptions: (idOrSlug: string) =>
+    http<YoutubeCaptionJob | null>(`/projects/${idOrSlug}/youtube/captions`),
+
+  // ── «Связка-запуск» (launch stepper) ────────────────────────────────────────
+  getLaunch: (idOrSlug: string) =>
+    http<LaunchView>(`/projects/${idOrSlug}/youtube/launch`),
+  /** Step 2: save prepared files + transcribe every mp4. */
+  prepareLaunch: (
+    idOrSlug: string,
+    items: Array<{ key: string; kind: 'main' | 'short'; slug?: string; videoPath: string; thumbPath: string }>,
+  ) =>
+    http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/prepare`, { method: 'POST', body: JSON.stringify({ items }) }),
+  /** Step 3: upload all as Unlisted (attaching subtitles). */
+  uploadLaunch: (idOrSlug: string) =>
+    http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/upload`, { method: 'POST' }),
+  /** Per-asset: add/replace ONE item (main or short) + transcribe it. */
+  prepareLaunchItem: (
+    idOrSlug: string,
+    item: { key: string; kind: 'main' | 'short'; slug?: string; videoPath: string; thumbPath: string },
+  ) =>
+    http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/prepare-item`, { method: 'POST', body: JSON.stringify(item) }),
+  /** Per-asset: upload ONE item as Unlisted. */
+  uploadLaunchItem: (idOrSlug: string, key: string) =>
+    http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/upload-item/${encodeURIComponent(key)}`, { method: 'POST' }),
+  /** Remove ONE item from the bundle. */
+  removeLaunchItem: (idOrSlug: string, key: string) =>
+    http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/remove-item/${encodeURIComponent(key)}`, { method: 'POST' }),
+  /** Step 4: confirm the manual Studio linking is done. */
+  confirmLaunchLinked: (idOrSlug: string) =>
+    http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/confirm-linked`, { method: 'POST' }),
+  /** Step 5: schedule all (main 16:00, shorts 16:05). */
+  scheduleLaunch: (idOrSlug: string) =>
+    http<{ mainPublishAt: string; shortsPublishAt: string; view: LaunchView }>(
+      `/projects/${idOrSlug}/youtube/launch/schedule`, { method: 'POST' }),
+  /** Step 5 alt: publish all PUBLIC now instead of scheduling. */
+  publishLaunchNow: (idOrSlug: string) =>
+    http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/publish-now`, { method: 'POST' }),
+  resetLaunch: (idOrSlug: string) =>
+    http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/reset`, { method: 'POST' }),
+
   /**
    * Read the project's full narration script (stored in Project.scriptText).
    * Used by the TTS modal to show the user the full story they're voicing —
@@ -1695,10 +1815,12 @@ export const api = {
   recomputeBlockTarget: (blockId: string) =>
     http<NarrativeBlock>(`/bgm/blocks/${blockId}/recompute-target`, { method: 'POST' }),
 
-  /** Auto-create empty MusicSegment rows until sum durationSec >= targetSeconds. */
-  fillBlock: (blockId: string, chunkSeconds?: number) =>
-    http<{ created: number; existing: number; targetSeconds: number; coveredSeconds: number }>(
-      `/bgm/blocks/${blockId}/fill${chunkSeconds ? `?chunkSeconds=${chunkSeconds}` : ''}`,
+  /** Auto-tile the act into 150s main tiles (ceil(actLength/150)) + 2 spare
+   *  tiles, all on the act mood prompt. Idempotent top-up; recomputes the act
+   *  length from voiceover first. */
+  fillBlock: (blockId: string) =>
+    http<{ created: number; existing: number; targetSeconds: number; mainTiles: number; spareTiles: number }>(
+      `/bgm/blocks/${blockId}/fill`,
       { method: 'POST' },
     ),
 
@@ -1775,6 +1897,13 @@ export interface CapcutReadiness {
     title:    string | null;
     reason:   'no_shots';
   }>;
+  /** Music is required for export: every act (block) needs its main tiles
+   *  approved. Absent on older backends — treat undefined as an empty list. */
+  missingMusic?: Array<{
+    blockSlug: string | null;
+    reason:    'no_blocks' | 'no_tiles' | 'unapproved';
+    count?:    number;
+  }>;
 }
 
 /** GET /projects/:id/export/shorts/plan — the curated shorts plan for the UI. */
@@ -1806,6 +1935,87 @@ export interface YoutubeMain {
   title:       string;
   description: string;
   tags:        string[];
+  /** Set after a successful upload — points at the video even while it's private. */
+  videoId?:    string;
+  url?:        string;
+}
+
+/** Whether the single YouTube channel is connected (GET /youtube/auth/status). */
+export interface YoutubeAuthStatus {
+  connected:    boolean;
+  channelTitle: string | null;
+  /** False when YT_CLIENT_ID/SECRET are missing from the backend .env. */
+  configured:   boolean;
+}
+
+/** Result of POST /projects/:id/youtube/upload. */
+export interface YoutubeUploadResult {
+  videoId:          string;
+  url:              string;
+  requestedPrivacy: string;
+  /** What Google ACTUALLY applied — 'private' while the project is unaudited. */
+  actualPrivacy:    string | null;
+  publishAt:        string | null;
+  containsSyntheticMedia: boolean;
+  thumbnailSet:     boolean;
+  /** null = no playlist requested; true/false = add outcome. */
+  playlistAdded:    boolean | null;
+  markedPublished:  boolean;
+}
+
+/** One of the connected channel's playlists (upload target). */
+export interface YoutubePlaylist {
+  id:        string;
+  title:     string;
+  itemCount: number;
+}
+
+/** A background upload job (POST returns { jobId }; poll for status). */
+export interface YoutubeUploadJob {
+  jobId:     string;
+  kind:      'main' | 'short';
+  status:    'uploading' | 'done' | 'error';
+  result?:   YoutubeUploadResult;
+  error?:    string;
+  startedAt: number;
+}
+
+/** One video in a «Связка-запуск» bundle. */
+export interface LaunchItemView {
+  key:              string;
+  kind:             'main' | 'short';
+  slug?:            string;
+  videoPath:        string;
+  thumbPath:        string;
+  videoId?:         string;
+  uploadJobId?:     string;
+  transcribeStatus: string | null;   // pending|running|completed|failed|null
+  uploaded:         boolean;
+  uploadError:      string | null;
+}
+export interface LaunchView {
+  items:           LaunchItemView[];
+  linkedConfirmed: boolean;
+  allTranscribed:  boolean;
+  allUploaded:     boolean;
+  hasShorts:       boolean;
+  step:            number;            // 1 files · 2 subs · 3 upload · 4 link · 5 schedule
+  published:       boolean;           // schedule/publishNow already ran — publish is locked
+  publishMode:     'scheduled' | 'public' | null;
+  mainPublishAt:   string | null;
+  shortsPublishAt: string | null;
+}
+
+/** A subtitle/caption job (transcribe final mp4 → captions.insert). */
+export interface YoutubeCaptionJob {
+  id:           string;
+  videoId:      string;
+  status:       string;   // pending | running | completed | failed
+  uploaded:     boolean;
+  srtPath:      string | null;
+  errorMessage: string | null;
+  queuedAt:     string;
+  completedAt:  string | null;
 }
 export interface YoutubeShort {
   title:      string;
@@ -1859,7 +2069,7 @@ export interface VideoRender {
   startedAt:           string | null;
   completedAt:         string | null;
   // Upscale-on-demand (4x-UltraSharp → 1920×1080). Populated after the user clicks "upscale".
-  upscaleStatus:        'pending' | 'running' | 'completed' | 'failed' | null;
+  upscaleStatus:        'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | null;
   upscaledFilename:     string | null;
   upscalePromptId:      string | null;
   upscaleStartedAt:     string | null;
@@ -1903,6 +2113,9 @@ export interface MusicSegment {
   /** Per-segment ACE-Step tags override; null = inherit block.moodPrompt. */
   prompt:        string | null;
   durationSec:   number;
+  /** Spare tile: manual-editing material laid raw on its own export lane.
+   *  Optional — absent on older backends (treat undefined as false). */
+  spare?:        boolean;
   /** AudioRenderJob.id approved as the canonical take, or null. */
   approvedJobId: string | null;
   createdAt:     string;

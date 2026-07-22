@@ -105,7 +105,7 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
     return () => clearInterval(t);
   }, [jobsByShot, refreshJobs]);
 
-  const engine = (project?.ttsEngine ?? 'silero') as 'silero' | 'xtts2' | 'f5';
+  const engine = (project?.ttsEngine ?? 'silero') as 'silero' | 'xtts2' | 'f5' | 'qwen3';
 
   /** Build the TTS request body matching the project's engine — voice for
    *  silero; emotion-reference (+ speed/pause for f5) for the voice-clone
@@ -117,8 +117,12 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
     if (engine === 'silero') return { voice };
     const body: Parameters<typeof api.startShotTTS>[1] = {};
     if (emotionRefName) body.emotionRefName = emotionRefName;
+    // Speed is f5-only (qwen3 has no speed knob); the sentence pause is
+    // honoured by both f5 and qwen3 workers.
     if (engine === 'f5') {
-      body.rate             = (shotId && rowRate[shotId]  !== undefined) ? rowRate[shotId]  : speed;
+      body.rate = (shotId && rowRate[shotId] !== undefined) ? rowRate[shotId] : speed;
+    }
+    if (engine === 'f5' || engine === 'qwen3') {
       body.sentencePauseSec = (shotId && rowPause[shotId] !== undefined) ? rowPause[shotId] : pause;
     }
     return body;
@@ -254,7 +258,7 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
             🔊 Озвучка сцены — <span className="font-mono">{sceneTitle}</span>
             <span className="ml-3 text-[10px] text-zinc-500 font-normal">
               [engine: <span className={engine !== 'silero' ? 'text-emerald-300' : 'text-zinc-300'}>
-                {engine === 'silero' ? 'Silero V5 ru' : engine === 'xtts2' ? 'XTTS-v2 (voice clone)' : 'F5-TTS Russian (voice clone)'}
+                {engine === 'silero' ? 'Silero V5 ru' : engine === 'xtts2' ? 'XTTS-v2 (voice clone)' : engine === 'qwen3' ? 'Qwen3-TTS (voice clone)' : 'F5-TTS Russian (voice clone)'}
               </span>]
             </span>
           </h2>
@@ -309,28 +313,28 @@ export function SceneShotsTTSModal({ projectId, sceneId, sceneTitle, shots, onCl
             </label>
           )}
           {engine === 'f5' && (
-            <>
-              <label className="text-xs flex flex-col gap-1">
-                <span className="text-zinc-500 uppercase tracking-wider">Скорость ({speed.toFixed(2)}×)</span>
-                <input
-                  type="range"
-                  min={0.5} max={2.0} step={0.05}
-                  value={speed}
-                  onChange={(e) => setSpeed(parseFloat(e.target.value))}
-                  className="w-40"
-                />
-              </label>
-              <label className="text-xs flex flex-col gap-1">
-                <span className="text-zinc-500 uppercase tracking-wider">Пауза, сек/предлож.</span>
-                <input
-                  type="number"
-                  min={0} max={30} step={0.5}
-                  value={pause}
-                  onChange={(e) => setPause(Math.max(0, Math.min(30, parseFloat(e.target.value) || 0)))}
-                  className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 font-mono w-24"
-                />
-              </label>
-            </>
+            <label className="text-xs flex flex-col gap-1">
+              <span className="text-zinc-500 uppercase tracking-wider">Скорость ({speed.toFixed(2)}×)</span>
+              <input
+                type="range"
+                min={0.5} max={2.0} step={0.05}
+                value={speed}
+                onChange={(e) => setSpeed(parseFloat(e.target.value))}
+                className="w-40"
+              />
+            </label>
+          )}
+          {(engine === 'f5' || engine === 'qwen3') && (
+            <label className="text-xs flex flex-col gap-1">
+              <span className="text-zinc-500 uppercase tracking-wider">Пауза, сек/предлож.</span>
+              <input
+                type="number"
+                min={0} max={30} step={0.5}
+                value={pause}
+                onChange={(e) => setPause(Math.max(0, Math.min(30, parseFloat(e.target.value) || 0)))}
+                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 font-mono w-24"
+              />
+            </label>
           )}
           <div className="flex gap-2 ml-auto">
             <button

@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState, use } from 'react';
-import { api, ShortsPlan, ShortsPlanItem, YoutubePackage, YoutubeShort, ShortResult } from '@/lib/api';
+import { api, ShortsPlan, ShortsPlanItem, YoutubePackage, YoutubeShort, ShortResult, YoutubeAuthStatus, YoutubeUploadResult, YoutubeUploadJob, YoutubeCaptionJob } from '@/lib/api';
+import { YoutubeSubnav } from '@/components/YoutubeSubnav';
 
 // Shorts tab: a gallery of the curated teaser reels. Each card previews the
 // short with real frame thumbnails (9:16 crop — the same center-crop the cover
@@ -40,6 +41,7 @@ export default function ShortsPage({ params }: { params: Promise<{ id: string }>
 
   return (
     <main className="px-4 sm:px-8 py-6 max-w-5xl">
+      <YoutubeSubnav id={id} />
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold">Шорты</h1>
@@ -86,21 +88,10 @@ export default function ShortsPage({ params }: { params: Promise<{ id: string }>
               key={s.slug}
               short={s}
               pack={pkg.shorts[s.slug]}
-              onOpen={() => setOpenSlug(s.slug)}
+              onOpen={() => { window.location.href = `/projects/${id}/youtube/shorts/${s.slug}`; }}
             />
           ))}
         </div>
-      )}
-
-      {openShort && (
-        <ShortModal
-          key={openShort.slug}
-          projectId={id}
-          short={openShort}
-          pack={pkg.shorts[openShort.slug]}
-          onSaved={load}
-          onClose={() => setOpenSlug(null)}
-        />
       )}
 
       {creating && (
@@ -317,6 +308,8 @@ function ShortModal({
           )}
         </Row>
 
+        <ShortUpload projectId={projectId} shortSlug={short.slug} onUploaded={(u) => setUrl(u)} />
+
         <div className="flex items-center gap-3 mt-4">
           <button onClick={save} disabled={busy}
             className="text-sm bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3 py-1.5 rounded">
@@ -330,6 +323,167 @@ function ShortModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Short → YouTube upload (inside the short editor modal) ──────────────────────
+function nextTueThuS(hour = 17): Date {
+  const d = new Date(); d.setHours(hour, 0, 0, 0);
+  for (let i = 0; i < 14; i++) { const day = d.getDay(); if ((day === 2 || day === 4) && d.getTime() > Date.now()) return d; d.setDate(d.getDate() + 1); }
+  return d;
+}
+function toLocalInputS(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function ShortUpload({ projectId, shortSlug, onUploaded }: {
+  projectId: string; shortSlug: string; onUploaded: (url: string) => void;
+}) {
+  const [status, setStatus]       = useState<YoutubeAuthStatus | null>(null);
+  const [videoPath, setVideoPath] = useState('');
+  const [thumbPath, setThumbPath] = useState('');
+  const [synthetic, setSynthetic] = useState(true);
+  const [autoCaptions, setAutoCaptions] = useState(true);
+  const [schedule, setSchedule]   = useState(false);
+  const [publishAtLocal, setPublishAtLocal] = useState('');
+  const [busy, setBusy]           = useState(false);
+  const [result, setResult]       = useState<YoutubeUploadResult | null>(null);
+  const [caption, setCaption]     = useState<YoutubeCaptionJob | null>(null);
+  const [capBusy, setCapBusy]     = useState(false);
+  const [err, setErr]             = useState<string | null>(null);
+
+  useEffect(() => { api.getYoutubeAuthStatus().then(setStatus).catch(() => setStatus(null)); }, []);
+  useEffect(() => {
+    if (!caption || (caption.status !== 'pending' && caption.status !== 'running')) return;
+    const t = setTimeout(() => api.getYoutubeCaptions(projectId).then(setCaption).catch(() => {}), 4000);
+    return () => clearTimeout(t);
+  }, [caption, projectId]);
+
+  const connected = status?.connected === true;
+  const capActive = caption && (caption.status === 'pending' || caption.status === 'running');
+
+  const [picking, setPicking] = useState<'video' | 'image' | null>(null);
+  const pick = async (kind: 'video' | 'image', setter: (v: string) => void) => {
+    setPicking(kind);
+    try { const r = await api.pickYoutubeFile(kind); if (r.path) setter(r.path); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setPicking(null); }
+  };
+
+  // Background upload (POST → jobId → poll), same as the main form.
+  const pollUpload = async (jobId: string) => {
+    let misses = 0;
+    for (let i = 0; i < 600; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      let job: YoutubeUploadJob | null = null;
+      try { job = await api.getYoutubeUploadJob(jobId); } catch { if (++misses > 5) break; continue; }
+      if (!job) { if (++misses > 5) break; continue; }
+      misses = 0;
+      if (job.status === 'done')  { setResult(job.result ?? null); if (job.result?.url) onUploaded(job.result.url); setBusy(false); return; }
+      if (job.status === 'error') { setErr(job.error ?? 'upload failed'); setBusy(false); return; }
+    }
+    setErr('заливка не завершилась (нет статуса)'); setBusy(false);
+  };
+
+  const upload = async () => {
+    if (!videoPath.trim() || !thumbPath.trim() || busy) return;
+    setBusy(true); setErr(null); setResult(null);
+    try {
+      const { jobId } = await api.uploadYoutubeShort(projectId, shortSlug, {
+        videoPath:     videoPath.trim(),
+        thumbnailPath: thumbPath.trim(),
+        containsSyntheticMedia: synthetic,
+        publishAt: schedule && publishAtLocal ? new Date(publishAtLocal).toISOString() : undefined,
+        generateCaptions: autoCaptions,
+      });
+      await pollUpload(jobId);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); }
+  };
+
+  const genCaptions = async () => {
+    const videoId = result?.videoId ?? caption?.videoId;
+    if (!videoId || !videoPath.trim() || capBusy) return;
+    setCapBusy(true); setErr(null);
+    try { setCaption(await api.enqueueYoutubeCaptions(projectId, { videoId, videoPath: videoPath.trim() })); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setCapBusy(false); }
+  };
+
+  return (
+    <div className="mt-4 border border-zinc-800 rounded-lg p-3 bg-zinc-950/60">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs text-zinc-300 font-medium">Залить шорт на YouTube (плейлист «шорты»)</span>
+        {connected
+          ? <span className="text-[11px] text-emerald-400">● {status?.channelTitle}</span>
+          : <a href={api.youtubeOAuthUrl()} target="_blank" rel="noreferrer" className="text-[11px] text-red-400 underline">подключить канал</a>}
+      </div>
+
+      <div className="flex gap-2 mb-2">
+        <input value={videoPath} onChange={(e) => setVideoPath(e.target.value)}
+          placeholder="путь к вертикальному mp4 шорта"
+          className="flex-1 min-w-0 bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono" />
+        <button onClick={() => pick('video', setVideoPath)} disabled={picking === 'video'}
+          className="shrink-0 text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 px-2.5 rounded disabled:opacity-50">
+          {picking === 'video' ? '…' : '📁'}
+        </button>
+      </div>
+      <div className="flex gap-2 mb-2">
+        <input value={thumbPath} onChange={(e) => setThumbPath(e.target.value)}
+          placeholder="путь к обложке *обязательно (≤50MB)"
+          className={`flex-1 min-w-0 bg-zinc-950 border rounded px-2 py-1.5 text-xs font-mono ${thumbPath.trim() ? 'border-zinc-700' : 'border-red-800'}`} />
+        <button onClick={() => pick('image', setThumbPath)} disabled={picking === 'image'}
+          className="shrink-0 text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 px-2.5 rounded disabled:opacity-50">
+          {picking === 'image' ? '…' : '📁'}
+        </button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 mb-2">
+        <label className="flex items-center gap-1.5 text-[11px] text-zinc-300">
+          <input type="checkbox" checked={schedule}
+            onChange={async (e) => {
+              setSchedule(e.target.checked);
+              if (e.target.checked && !publishAtLocal) {
+                try { const r = await api.getYoutubeNextSlot('short'); setPublishAtLocal(toLocalInputS(new Date(r.publishAt))); }
+                catch { setPublishAtLocal(toLocalInputS(nextTueThuS())); }
+              }
+            }} />
+          вт/чт
+        </label>
+        {schedule && (
+          <input type="datetime-local" value={publishAtLocal} onChange={(e) => setPublishAtLocal(e.target.value)}
+            className="bg-zinc-950 border border-zinc-700 rounded px-1.5 py-1 text-[11px]" />
+        )}
+        <label className="flex items-center gap-1.5 text-[11px] text-zinc-300">
+          <input type="checkbox" checked={synthetic} onChange={(e) => setSynthetic(e.target.checked)} />
+          AI-дисклеймер
+        </label>
+        <label className="flex items-center gap-1.5 text-[11px] text-zinc-300" title="После заливки авто-ставит субтитры в очередь">
+          <input type="checkbox" checked={autoCaptions} onChange={(e) => setAutoCaptions(e.target.checked)} />
+          субтитры авто
+        </label>
+        <button onClick={upload} disabled={!connected || !videoPath.trim() || !thumbPath.trim() || busy}
+          className="ml-auto text-xs bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white px-3 py-1.5 rounded">
+          {busy ? '⏳…' : schedule ? '▲ залить + запланировать' : '▲ залить'}
+        </button>
+      </div>
+
+      {result && (
+        <div className="text-[11px] text-zinc-400">
+          ✓ <a className="underline text-emerald-300" href={result.url} target="_blank" rel="noreferrer">{result.url}</a>
+          {' · '}<b>{result.actualPrivacy}</b>
+          {result.thumbnailSet && ' · обложка ✓'}
+          {result.playlistAdded === true && ' · в «шорты» ✓'}
+          <button onClick={genCaptions} disabled={capBusy || !!capActive}
+            className="ml-2 text-[11px] text-zinc-300 hover:text-white underline disabled:opacity-50">
+            {capBusy || capActive ? 'субтитры в очереди…' : '💬 субтитры'}
+          </button>
+          {caption?.status === 'completed' && caption.uploaded && <span className="text-emerald-400"> ✓ субтитры</span>}
+          {caption?.status === 'failed' && <span className="text-red-400"> ✗ {caption.errorMessage}</span>}
+        </div>
+      )}
+      {err && <p className="text-red-400 text-[11px] font-mono break-all mt-1">{err}</p>}
     </div>
   );
 }

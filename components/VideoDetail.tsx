@@ -172,21 +172,21 @@ export function VideoDetail({
       {video.status === 'completed' && (
         <section className="bg-zinc-900 border border-zinc-800 rounded p-4 mb-4">
           <div className="flex items-baseline justify-between mb-2">
-            <h2 className="text-sm font-semibold text-zinc-300">FHD (1920×1080, 4x-UltraSharp)</h2>
+            <h2 className="text-sm font-semibold text-zinc-300">FHD (1920×1080, 4x-UltraSharp) + FPS ×2 — один проход</h2>
             <UpscaleStatusBadge status={video.upscaleStatus} />
           </div>
 
-          {!video.upscaleStatus && (
+          {(!video.upscaleStatus || video.upscaleStatus === 'cancelled') && (
             <div className="flex items-center gap-3">
               <button
                 onClick={startUpscale}
                 disabled={upscaleBusy}
                 className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded"
               >
-                {upscaleBusy ? '⏳ ставим в очередь…' : '🔼 апскейлить в FHD'}
+                {upscaleBusy ? '⏳ ставим в очередь…' : '🔼 FHD + FPS (один проход)'}
               </button>
               <span className="text-zinc-500 text-xs">
-                Прогонит mp4 через 4x-UltraSharp и сожмёт в 1920×1080 (~1–2 мин на 5-сек видео).
+                Один джоб в ComfyUI: апскейл 4x-UltraSharp → 1920×1080 и сразу интерполяция FPS ×2. Оба клипа за один проход, модели не перегружаются.
               </span>
               {upscaleError && <span className="text-red-400 text-xs">{upscaleError}</span>}
             </div>
@@ -232,8 +232,9 @@ export function VideoDetail({
         </section>
       )}
 
-      {/* FPS interpolation — MANDATORY, only after the FHD upscale is done.
-          This is the clip CapCut export ships, so it's required before export. */}
+      {/* FPS interpolation — the clip CapCut export ships. The combined
+          one-pass job fills this together with the FHD, so the standalone
+          button below only surfaces on LEGACY clips (FHD done, no smooth). */}
       {video.upscaleStatus === 'completed' && (
         <section className="bg-zinc-900 border border-amber-800/40 rounded p-4 mb-4">
           <div className="flex items-baseline justify-between mb-2">
@@ -253,7 +254,7 @@ export function VideoDetail({
                 {interpBusy ? '⏳ ставим в очередь…' : '🎞️ увеличить FPS (2×)'}
               </button>
               <span className="text-zinc-500 text-xs">
-                Прогонит FHD-клип через интерполяцию кадров и удвоит частоту кадров для плавного движения.
+                Прогонит FHD-клип через интерполяцию кадров и удвоит частоту кадров. Нужно только старым клипам — новый «FHD + FPS» делает это одним проходом.
               </span>
               {interpError && <span className="text-red-400 text-xs">{interpError}</span>}
             </div>
@@ -364,13 +365,14 @@ function StatusBadge({ status }: { status: VideoRender['status'] }) {
 
 function UpscaleStatusBadge({ status }: { status: VideoRender['upscaleStatus'] }) {
   if (!status) return <span className="text-zinc-600 text-[10px] uppercase tracking-wider">не запускался</span>;
-  const map: Record<NonNullable<VideoRender['upscaleStatus']>, { label: string; cls: string }> = {
-    pending:   { label: '⏳ pending',   cls: 'text-amber-300 bg-amber-900/40' },
-    running:   { label: '⚙ upscaling', cls: 'text-blue-300 bg-blue-900/40' },
-    completed: { label: '✓ FHD ready', cls: 'text-emerald-300 bg-emerald-900/40' },
-    failed:    { label: '✕ failed',    cls: 'text-red-300 bg-red-900/40' },
+  const map: Record<string, { label: string; cls: string }> = {
+    pending:   { label: '⏳ pending',     cls: 'text-amber-300 bg-amber-900/40' },
+    running:   { label: '⚙ upscaling',   cls: 'text-blue-300 bg-blue-900/40' },
+    completed: { label: '✓ FHD ready',   cls: 'text-emerald-300 bg-emerald-900/40' },
+    failed:    { label: '✕ failed',      cls: 'text-red-300 bg-red-900/40' },
+    cancelled: { label: '○ cancelled',   cls: 'text-zinc-400 bg-zinc-800/40' },
   };
-  const m = map[status];
+  const m = map[status] ?? { label: status, cls: 'text-zinc-300 bg-zinc-800/40' };
   return <span className={`${m.cls} text-[11px] uppercase tracking-wider px-2 py-0.5 rounded`}>{m.label}</span>;
 }
 

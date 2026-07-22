@@ -314,9 +314,11 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
   // Strategies registered per style.
   //   photoreal: environment (0), single-character (1), dual-regional 2-LoRA (2)
   //   cartoon:   environment (0), single-character (1), dual-regional text (2)
+  //   realcomic_qwen: 0-3 — Qwen-Image-Edit-2511 takes up to 3 anchor references
   // Cartoon dual uses regional TEXT conditioning (ConditioningSetArea), no
   // character LoRA / no IP-Adapter weights — so 2 is supported for both styles.
-  const supportedByStrategy = (charCount === 0 || charCount === 1 || charCount === 2);
+  const maxParticipants = visualStyle === 'realcomic_qwen' ? 3 : 2;
+  const supportedByStrategy = charCount <= maxParticipants;
 
   const canRender = allReady && supportedByStrategy && state.status !== 'queued' && state.status !== 'running';
 
@@ -480,21 +482,30 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
         ))}
       </div>
 
-      {!supportedByStrategy && charCount > 2 && (
+      {!supportedByStrategy && charCount > maxParticipants && (
         <div className="bg-amber-900/30 border border-amber-700/50 rounded p-3 mb-3 text-xs text-amber-200">
-          ⚠ Сейчас есть стратегии только на 0, 1 и 2 персонажей.
+          ⚠ Для этого стиля есть стратегии только на 0–{maxParticipants} персонажей.
           Для {charCount} персонажей пайплайн ещё не построен.
+        </div>
+      )}
+
+      {visualStyle === 'realcomic_qwen' && charCount > 0 && supportedByStrategy && (
+        <div className="bg-zinc-800/40 border border-zinc-700/50 rounded p-3 mb-3 text-xs text-zinc-400">
+          Qwen-кадр ({charCount} перс.) — якорь каждого персонажа подаётся как
+          картинка-референс (image1..image{charCount}), идентичность держит сама модель.
+          Workflow: <code>scene_realcomic_qwen_p{charCount}</code>. Без якоря рендер
+          не запустится — сначала сгенерируй anchor каждому профилю.
         </div>
       )}
 
       {charCount === 0 && (
         <div className="bg-zinc-800/40 border border-zinc-700/50 rounded p-3 mb-3 text-xs text-zinc-400">
           Кадр без персонажей — рендерится по промпту (positive/negative из поля).
-          Workflow: <code>{!isCartoon ? 'scene_environment' : visualStyle === 'graphic_novel_flux' ? 'scene_environment_flux_comic' : 'scene_environment_graphic_novel'}</code>.
+          Workflow: <code>{!isCartoon ? 'scene_environment' : visualStyle === 'realcomic_qwen' ? 'scene_realcomic_qwen_p0' : visualStyle === 'graphic_novel_flux' ? 'scene_environment_flux_comic' : 'scene_environment_graphic_novel'}</code>.
         </div>
       )}
 
-      {charCount === 1 && isCartoon && (
+      {charCount === 1 && isCartoon && visualStyle !== 'realcomic_qwen' && (
         <div className="bg-zinc-800/40 border border-zinc-700/50 rounded p-3 mb-3 text-xs text-zinc-400">
           Cartoon-кадр (1 персонаж) — идентичность через <code>promptBase</code> +{' '}
           <code>triggerToken</code> (LoRA не нужна). Workflow:{' '}
@@ -510,7 +521,7 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
         </div>
       )}
 
-      {charCount === 2 && isCartoon && (
+      {charCount === 2 && isCartoon && visualStyle !== 'realcomic_qwen' && (
         <div className="bg-zinc-800/40 border border-zinc-700/50 rounded p-3 mb-3 text-xs text-zinc-400">
           Cartoon-кадр (2 персонажа) — региональное разделение по тексту:
           левая половина = первый participant, правая = второй. Идентичность из{' '}

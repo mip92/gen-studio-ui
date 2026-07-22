@@ -528,14 +528,16 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
               <button
                 onClick={(e) => { stop(e); enqueueUpscale(); }}
                 disabled={busy !== false}
-                title="Прогнать выбранное видео через 4x-UltraSharp → 1920×1080"
+                title="Один джоб в ComfyUI: 4x-UltraSharp → 1920×1080 и сразу интерполяция FPS ×2 — оба клипа за один проход"
                 className="text-[11px] bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded whitespace-nowrap"
               >
-                {busy === 'upscale' ? '⏳ FHD…' : '🔼 апскейл FHD'}
+                {busy === 'upscale' ? '⏳ FHD+FPS…' : '🔼 FHD + FPS'}
               </button>
             )
           ) : (
-            // FHD ready → mandatory FPS interpolation stage.
+            // LEGACY tail: FHD exists but smooth doesn't — only old clips
+            // upscaled before the one-pass merge land here (the combined job
+            // ships both files at once). Keep the standalone FPS button for them.
             interpReady || interpStatus === 'running' || interpStatus === 'pending' ? null : (
               <button
                 onClick={(e) => { stop(e); enqueueInterp(); }}

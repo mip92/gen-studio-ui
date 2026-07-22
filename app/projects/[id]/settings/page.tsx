@@ -103,6 +103,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
     { id: 'photoreal_cinematic',       displayName: 'Photoreal cinematic' },
     { id: 'graphic_novel_cell_shaded', displayName: 'Graphic novel (SDXL)' },
     { id: 'graphic_novel_flux',        displayName: 'Graphic novel (Flux)' },
+    { id: 'realcomic_qwen',            displayName: 'RealComic (Qwen 2511)' },
   ];
   const styleOpts = visualStyles.length > 0
     ? visualStyles.map((s) => ({ id: s.id, displayName: s.displayName ?? s.id }))

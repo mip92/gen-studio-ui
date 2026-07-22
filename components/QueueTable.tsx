@@ -24,7 +24,7 @@ import { HeaderCell, MultiSelect, MultiSelectLabeled } from './table/TableContro
 
 const POLL_MS = 3000;
 
-const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_upscale', 'video_interp', 'tts', 'bgm', 'anchor', 'validation', 'anchor_validation'];
+const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_upscale', 'video_interp', 'tts', 'bgm', 'anchor', 'validation', 'anchor_validation', 'caption'];
 const ALL_STATUSES = [
   'pending', 'blocked',
   'preparing', 'captioning', 'training', 'running',
@@ -449,12 +449,12 @@ function renderRowTargets(row: QueueRow, pl?: ProjectLinks, projectId?: string):
   // (scene render / video / video_upscale / shot-level TTS); the projectLinks
   // map lookup is the legacy fallback.
   const fallbackShotId = (() => {
-    const lookupCode = row.profileCode.replace(/\s*↑FHD\s*$/, '').replace(/\s*⏩FPS\s*$/, '');
+    const lookupCode = row.profileCode.replace(/\s*(?:↑FHD|⏩FPS)+\s*$/u, '');
     return pl?.shots.get(lookupCode)?.shotId ?? null;
   })();
   const shotId  = row.shotId ?? fallbackShotId;
   const sceneInfo = (() => {
-    const lookupCode = row.profileCode.replace(/\s*↑FHD\s*$/, '').replace(/\s*⏩FPS\s*$/, '');
+    const lookupCode = row.profileCode.replace(/\s*(?:↑FHD|⏩FPS)+\s*$/u, '');
     return pl?.shots.get(lookupCode) ?? null;
   })();
 
@@ -563,6 +563,7 @@ function typeBadge(t: QueueJobType): string {
   if (t === 'anchor')        return 'bg-fuchsia-950/40 text-fuchsia-300 border-fuchsia-900';
   if (t === 'validation')    return 'bg-indigo-950/40 text-indigo-300 border-indigo-900';
   if (t === 'anchor_validation') return 'bg-violet-950/40 text-violet-300 border-violet-900';
+  if (t === 'caption')       return 'bg-teal-950/40   text-teal-300   border-teal-900';
   return                            'bg-emerald-950/40 text-emerald-300 border-emerald-900';  // bgm
 }
 
