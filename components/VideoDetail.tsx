@@ -168,11 +168,12 @@ export function VideoDetail({
         </section>
       )}
 
-      {/* Upscale section — only meaningful once the main render is done */}
-      {video.status === 'completed' && (
+      {/* One-pass finalize — trigger + progress only; hidden once done, since
+          the finished clip lives in the card below. */}
+      {video.status === 'completed' && video.upscaleStatus !== 'completed' && (
         <section className="bg-zinc-900 border border-zinc-800 rounded p-4 mb-4">
           <div className="flex items-baseline justify-between mb-2">
-            <h2 className="text-sm font-semibold text-zinc-300">FHD (1920×1080, 4x-UltraSharp) + FPS ×2 — один проход</h2>
+            <h2 className="text-sm font-semibold text-zinc-300">Финализация: 4x-UltraSharp → 1920×1080 + FPS ×2 (один проход)</h2>
             <UpscaleStatusBadge status={video.upscaleStatus} />
           </div>
 
@@ -183,7 +184,7 @@ export function VideoDetail({
                 disabled={upscaleBusy}
                 className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded"
               >
-                {upscaleBusy ? '⏳ ставим в очередь…' : '🔼 FHD + FPS (один проход)'}
+                {upscaleBusy ? '⏳ ставим в очередь…' : '🔼 Финальный клип (1080p + FPS ×2)'}
               </button>
               <span className="text-zinc-500 text-xs">
                 Один джоб в ComfyUI: апскейл 4x-UltraSharp → 1920×1080 и сразу интерполяция FPS ×2. Оба клипа за один проход, модели не перегружаются.
@@ -212,23 +213,6 @@ export function VideoDetail({
               </button>
             </div>
           )}
-          {video.upscaleStatus === 'completed' && video.upscaledFilename && (
-            <div className="space-y-2">
-              <video
-                src={api.videoFhdFileUrl(video.id)}
-                controls
-                loop
-                className="w-full bg-black rounded"
-              />
-              <a
-                href={api.videoFhdFileUrl(video.id)}
-                download
-                className="inline-block text-blue-400 hover:text-blue-300 text-xs"
-              >
-                ⬇ скачать FHD ({video.upscaledFilename})
-              </a>
-            </div>
-          )}
         </section>
       )}
 
@@ -239,7 +223,7 @@ export function VideoDetail({
         <section className="bg-zinc-900 border border-amber-800/40 rounded p-4 mb-4">
           <div className="flex items-baseline justify-between mb-2">
             <h2 className="text-sm font-semibold text-zinc-300">
-              Плавность · интерполяция FPS (RIFE → 2×) <span className="text-amber-400/80 text-xs">обязательно перед экспортом</span>
+              Финальный клип · 1080p + FPS ×2 <span className="text-amber-400/80 text-xs">обязательно перед экспортом</span>
             </h2>
             <InterpStatusBadge status={video.interpStatus} />
           </div>
@@ -293,7 +277,7 @@ export function VideoDetail({
                 download
                 className="inline-block text-blue-400 hover:text-blue-300 text-xs"
               >
-                ⬇ скачать плавный клип ({video.interpFilename})
+                ⬇ скачать финальный клип ({video.interpFilename})
               </a>
             </div>
           )}
