@@ -1462,7 +1462,7 @@ export const api = {
    *  folder, so CapCut must be closed. Hits the backend DIRECTLY (DIRECT_API_BASE),
    *  bypassing the /api rewrite proxy whose ~5-min timeout would drop the request;
    *  browser fetch has no timeout so the long POST runs to completion. */
-  exportComic: async (idOrSlug: string): Promise<{ draft_name: string; draft_path: string; spreads: number }> => {
+  exportComic: async (idOrSlug: string): Promise<{ draft_name: string; spreads: number; status: string }> => {
     const res = await fetch(`${DIRECT_API_BASE}/projects/${idOrSlug}/export/comic`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1472,8 +1472,15 @@ export const api = {
       const text = await res.text();
       throw new Error(`${res.status} ${res.statusText}: ${text.slice(0, 200)}`);
     }
-    return JSON.parse(await res.text()) as { draft_name: string; draft_path: string; spreads: number };
+    return JSON.parse(await res.text()) as { draft_name: string; spreads: number; status: string };
   },
+
+  /** Poll a comic build (started by exportComic). `done` flips true once the draft
+   *  is written into CapCut. Quick call — goes through the /api proxy. */
+  comicStatus: (idOrSlug: string, name: string) =>
+    http<{ done: boolean; building: boolean; rendered: number; total: number }>(
+      `/projects/${idOrSlug}/export/comic/status?name=${encodeURIComponent(name)}`,
+    ),
 
   // ── YouTube-Shorts export ───────────────────────────────────────────────────
   /** The project's curated shorts plan (which shots go into each teaser reel). */

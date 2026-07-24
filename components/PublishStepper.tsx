@@ -43,6 +43,8 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
   const [picking, setPicking] = useState<string | null>(null);
   const [err,     setErr]     = useState<string | null>(null);
   const [exported, setExported] = useState<{ draftPath?: string; draftName?: string; sceneCount?: number; shotCount?: number; spreads?: number } | null>(null);
+  // Comic build runs async on the backend; we poll its status and show progress.
+  const [comicProgress, setComicProgress] = useState<{ rendered: number; total: number } | null>(null);
 
   const load = () =>
     Promise.all([
@@ -108,10 +110,27 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
   const doExport = () => act(async () => {
     if (isMain) {
       if (exportType === 'comic') {
-        // Slow (minutes) — writes straight into CapCut's drafts folder. The api
-        // helper uses fetch with no client timeout, so the long POST is fine.
+        // Async build: the POST returns immediately with a draft name; the render
+        // runs detached on the backend. Poll status until the draft is written.
         const r = await api.exportComic(id);
-        setExported({ draftPath: r.draft_path, draftName: r.draft_name, spreads: r.spreads });
+        setComicProgress({ rendered: 0, total: r.spreads });
+        const started = Date.now();
+        for (;;) {
+          await new Promise((res) => setTimeout(res, 4500));
+          let st: { done: boolean; building: boolean; rendered: number; total: number };
+          try { st = await api.comicStatus(id, r.draft_name); }
+          catch { continue; }                       // transient — keep polling
+          setComicProgress({ rendered: st.rendered, total: st.total || r.spreads });
+          if (st.done) break;
+          if (!st.building && st.rendered === 0 && Date.now() - started > 20_000) {
+            throw new Error('Сборка комикса не запустилась — см. data/<slug>/exports/comic/comic_build.log');
+          }
+          if (Date.now() - started > 30 * 60_000) {
+            throw new Error('Ожидание сборки комикса превысило 30 мин — прервано (сборка могла продолжаться в фоне).');
+          }
+        }
+        setComicProgress(null);
+        setExported({ draftName: r.draft_name, spreads: r.spreads });
       } else {
         const r = await api.exportCapcut(id);
         setExported({ draftPath: r.draftPath, sceneCount: r.sceneCount, shotCount: r.shotCount });
@@ -199,18 +218,25 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
             title={isMain && readiness?.ready === false ? 'Не все кадры готовы' : ''}
             className="text-sm bg-fuchsia-800 hover:bg-fuchsia-700 disabled:opacity-50 text-white px-4 py-2 rounded">
             {busy
-              ? (isComic ? '⏳ собираю комикс… (несколько минут)' : '⏳…')
+              ? (isComic
+                  ? (comicProgress
+                      ? `⏳ собираю комикс… ${comicProgress.rendered}/${comicProgress.total} разворотов`
+                      : '⏳ запускаю сборку…')
+                  : '⏳…')
               : (isMain && readiness?.ready === false)
                 ? '🎬 не готово'
                 : (isComic ? '🎬 Экспорт комикса в CapCut' : '🎬 Экспорт в CapCut')}
           </button>
-          {exported?.draftPath && (
+          {(exported?.draftPath || exported?.draftName) && (
             <div className="mt-3 bg-fuchsia-950/40 border border-fuchsia-700 rounded p-3 text-xs">
               <p className="text-fuchsia-200">
                 ✓ {exported.draftName ? `«${exported.draftName}»` : 'draft'}
                 {exported.spreads ? ` — ${exported.spreads} разворотов` : exported.sceneCount ? ` — ${exported.sceneCount} сцен, ${exported.shotCount} кадров` : ''}
+                {isComic ? ' — черновик в списке CapCut' : ''}
               </p>
-              <code className="block text-fuchsia-100/80 font-mono break-all mt-1">{exported.draftPath}</code>
+              {exported.draftPath && (
+                <code className="block text-fuchsia-100/80 font-mono break-all mt-1">{exported.draftPath}</code>
+              )}
             </div>
           )}
           <div className="mt-3"><button onClick={() => setActiveStep(3)} className="text-sm text-zinc-300 hover:text-white">Готово, дальше →</button></div>
