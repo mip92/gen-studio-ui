@@ -25,6 +25,14 @@ function transitionPresetOf(settings: unknown): TransitionPreset {
   return s === 'comic' ? 'comic' : 'default';
 }
 
+/** CapCut export type out of project.settings. 'comic' = film→comic spreads
+ *  with camera fly-through + page flips; anything else = the linear export. */
+type ExportType = 'linear' | 'comic';
+function exportTypeOf(settings: unknown): ExportType {
+  const s = (settings as { exportType?: unknown } | null | undefined)?.exportType;
+  return s === 'comic' ? 'comic' : 'linear';
+}
+
 /** Per-project Flux base UNET (graphic_novel_flux). '' = use the workflow default. */
 function fluxBaseOf(settings: unknown): string {
   const s = (settings as { fluxBaseModel?: unknown } | null | undefined)?.fluxBaseModel;
@@ -57,6 +65,11 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
   const [fluxBase, setFluxBase]               = useState<string>('');
   const [initialFluxBase, setInitialFluxBase] = useState<string>('');
 
+  // CapCut export type: 'linear' (existing simple-transition export) vs 'comic'
+  // (film→comic spreads, camera fly-through + page flips).
+  const [exportType, setExportType]             = useState<ExportType>('linear');
+  const [initialExportType, setInitialExportType] = useState<ExportType>('linear');
+
   useEffect(() => {
     (async () => {
       try {
@@ -80,6 +93,9 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
         const curBase = fluxBaseOf(proj.settings);
         setFluxBase(curBase);
         setInitialFluxBase(curBase);
+        const curExport = exportTypeOf(proj.settings);
+        setExportType(curExport);
+        setInitialExportType(curExport);
         setStatus('idle');
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -114,6 +130,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
     || styleLora !== initialStyleLora
     || transitionPreset !== initialTransitionPreset
     || fluxBase !== initialFluxBase
+    || exportType !== initialExportType
     || scriptText !== (project ? '' : '') /* always allow script save */;
 
   const onChange = <K extends keyof UpdateProjectBody>(k: K, val: string) => {
@@ -138,7 +155,12 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
       // settings JSON override: PATCH replaces settings wholesale, so send the
       // full merged object whenever styleLora OR transitionPreset changed.
       // Empty/default values clear the key (falls back to JSON/export default).
-      if (styleLora !== initialStyleLora || transitionPreset !== initialTransitionPreset || fluxBase !== initialFluxBase) {
+      if (
+        styleLora !== initialStyleLora
+        || transitionPreset !== initialTransitionPreset
+        || fluxBase !== initialFluxBase
+        || exportType !== initialExportType
+      ) {
         const base = (project.settings as Record<string, unknown> | null) ?? {};
         const nextSettings = { ...base };
         if (styleLora) nextSettings.styleLora = { name: styleLora };
@@ -147,6 +169,8 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
         else delete nextSettings.transitionPreset;
         if (fluxBase.trim()) nextSettings.fluxBaseModel = fluxBase.trim();
         else delete nextSettings.fluxBaseModel;
+        if (exportType === 'comic') nextSettings.exportType = 'comic';
+        else delete nextSettings.exportType;
         promptPatch.settings = nextSettings;
       }
       let nextProject = project;
@@ -156,6 +180,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
       setInitialStyleLora(styleLora);
       setInitialTransitionPreset(transitionPreset);
       setInitialFluxBase(fluxBase);
+      setInitialExportType(exportType);
       // scriptText goes through the separate endpoint (handles null/empty correctly).
       const currentScript = (await api.getProjectScript(project.id)).text ?? '';
       if (scriptText !== currentScript) {
@@ -252,6 +277,18 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
               className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm font-mono" />
           </Row>
         )}
+
+        <Row
+          label="Тип экспорта (CapCut)"
+          hint="project.settings.exportType — как собирается CapCut-драфт на шаге «Экспорт в CapCut». «Линейный» = обычная лента шотов с простыми переходами. «Комикс» = фильм раскладывается на страницы-комиксы, камера летает по панелям (кейфреймы) с переворотами страниц. Комикс-экспорт МЕДЛЕННЫЙ (несколько минут) и пишет драфт прямо в папку CapCut — CapCut должен быть закрыт.">
+          <select
+            value={exportType}
+            onChange={(e) => setExportType(e.target.value as ExportType)}
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
+            <option value="linear">Линейный (простые переходы)</option>
+            <option value="comic">Комикс (камера + переворот страниц)</option>
+          </select>
+        </Row>
 
         <Row
           label="Переходы между шотами (CapCut)"

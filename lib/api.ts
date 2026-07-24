@@ -16,6 +16,17 @@ export const API_BASE =
 // Using this for every <... src> URL is what makes images work from a phone.
 export const MEDIA_BASE = process.env.NEXT_PUBLIC_API_BASE ?? '/api';
 
+// Long-running endpoints (the comic export renders for 10+ minutes) must BYPASS
+// the Next.js `/api` rewrite proxy: that proxy waits for the upstream response
+// with a fixed internal timeout (~5 min, not configurable via rewrites) and drops
+// the request with a socket hang-up. The browser instead talks straight to the
+// backend on :4000 (CORS is enabled) — no proxy in the middle, and fetch has no
+// client-side timeout, so the request lives as long as the backend needs.
+export const DIRECT_API_BASE =
+  typeof window === 'undefined'
+    ? process.env.INTERNAL_API_BASE ?? 'http://localhost:4000'
+    : `${window.location.protocol}//${window.location.hostname}:4000`;
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -1445,6 +1456,24 @@ export const api = {
       `/projects/${idOrSlug}/export/capcut`,
       { method: 'POST' },
     ),
+
+  /** Comic export (film → comic spreads with camera fly-through + page flips).
+   *  Slow — runs for MINUTES — and writes the draft straight into CapCut's drafts
+   *  folder, so CapCut must be closed. Hits the backend DIRECTLY (DIRECT_API_BASE),
+   *  bypassing the /api rewrite proxy whose ~5-min timeout would drop the request;
+   *  browser fetch has no timeout so the long POST runs to completion. */
+  exportComic: async (idOrSlug: string): Promise<{ draft_name: string; draft_path: string; spreads: number }> => {
+    const res = await fetch(`${DIRECT_API_BASE}/projects/${idOrSlug}/export/comic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`${res.status} ${res.statusText}: ${text.slice(0, 200)}`);
+    }
+    return JSON.parse(await res.text()) as { draft_name: string; draft_path: string; spreads: number };
+  },
 
   // ── YouTube-Shorts export ───────────────────────────────────────────────────
   /** The project's curated shorts plan (which shots go into each teaser reel). */

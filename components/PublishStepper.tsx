@@ -3,6 +3,14 @@
 import { useEffect, useState } from 'react';
 import { api, YoutubePackage, YoutubeAuthStatus, LaunchView, CapcutReadiness } from '@/lib/api';
 
+// Which CapCut export the MAIN video uses, read from Project.settings.exportType.
+// 'comic' → the slow film→comic-spreads export; anything else → linear.
+type ExportType = 'linear' | 'comic';
+function exportTypeOf(settings: unknown): ExportType {
+  const s = (settings as { exportType?: unknown } | null | undefined)?.exportType;
+  return s === 'comic' ? 'comic' : 'linear';
+}
+
 // Reusable per-asset publish stepper (MAIN video or one SHORT). 5 steps, ending
 // at an Unlisted upload — the actual publish (link + schedule) lives in «Связка».
 //   1 Параметры → 2 CapCut → 3 Файл → 4 Субтитры → 5 Заливка (Unlisted)
@@ -20,6 +28,7 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
   const [status, setStatus] = useState<YoutubeAuthStatus | null>(null);
   const [view,   setView]   = useState<LaunchView | null>(null);
   const [readiness, setReadiness] = useState<CapcutReadiness | null>(null);
+  const [exportType, setExportType] = useState<ExportType>('linear');
   // packaging edit
   const [title, setTitle] = useState('');
   const [desc,  setDesc]  = useState('');
@@ -33,14 +42,16 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
   const [busy,    setBusy]    = useState(false);
   const [picking, setPicking] = useState<string | null>(null);
   const [err,     setErr]     = useState<string | null>(null);
-  const [exported, setExported] = useState<{ draftPath?: string; sceneCount?: number; shotCount?: number } | null>(null);
+  const [exported, setExported] = useState<{ draftPath?: string; draftName?: string; sceneCount?: number; shotCount?: number; spreads?: number } | null>(null);
 
   const load = () =>
     Promise.all([
       api.getYoutube(id), api.getYoutubeAuthStatus(), api.getLaunch(id),
       isMain ? api.capcutReadiness(id).catch(() => null) : Promise.resolve(null),
-    ]).then(([p, s, v, r]) => {
+      isMain ? api.getProject(id).catch(() => null) : Promise.resolve(null),
+    ]).then(([p, s, v, r, proj]) => {
       setPkg(p); setStatus(s); setView(v); setReadiness(r);
+      if (proj) setExportType(exportTypeOf(proj.settings));
       const pk = isMain ? p.main : (p.shorts?.[itemKey] ?? { title: '', descBefore: '', tags: [] });
       setTitle(pk.title ?? '');
       setDesc(isMain ? (p.main.description ?? '') : (p.shorts?.[itemKey]?.descBefore ?? ''));
@@ -96,8 +107,15 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
   });
   const doExport = () => act(async () => {
     if (isMain) {
-      const r = await api.exportCapcut(id);
-      setExported({ draftPath: r.draftPath, sceneCount: r.sceneCount, shotCount: r.shotCount });
+      if (exportType === 'comic') {
+        // Slow (minutes) — writes straight into CapCut's drafts folder. The api
+        // helper uses fetch with no client timeout, so the long POST is fine.
+        const r = await api.exportComic(id);
+        setExported({ draftPath: r.draft_path, draftName: r.draft_name, spreads: r.spreads });
+      } else {
+        const r = await api.exportCapcut(id);
+        setExported({ draftPath: r.draftPath, sceneCount: r.sceneCount, shotCount: r.shotCount });
+      }
     } else {
       const r = (await api.exportShorts(id, { only: itemKey })).shorts[0];
       setExported(r ? { draftPath: r.draft_path ?? r.draft_name } : {});
@@ -163,23 +181,42 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
       )}
 
       {/* 2 — CapCut */}
-      {shownStep === 2 && (
-        <Section n={2} title="Экспорт в CapCut">
-          <p className="text-xs text-zinc-500 mb-3">Соберу CapCut-драфт. Доступно в любой момент — можно монтировать, пока основное ещё не готово. Дальше рендеришь сам и на шаге 3 указываешь путь к готовому mp4.</p>
+      {shownStep === 2 && (() => {
+        const isComic = isMain && exportType === 'comic';
+        return (
+        <Section n={2} title={isComic ? 'Экспорт комикса в CapCut' : 'Экспорт в CapCut'}>
+          {isComic ? (
+            <p className="text-xs text-zinc-500 mb-3">Разложу фильм на страницы-комиксы и соберу CapCut-драфт с полётом камеры по панелям и переворотами страниц. Экспорт медленный — может занять несколько минут. По готовности рендеришь сам и на шаге 3 указываешь путь к готовому mp4.</p>
+          ) : (
+            <p className="text-xs text-zinc-500 mb-3">Соберу CapCut-драфт. Доступно в любой момент — можно монтировать, пока основное ещё не готово. Дальше рендеришь сам и на шаге 3 указываешь путь к готовому mp4.</p>
+          )}
+          {isComic && (
+            <div className="mb-3 bg-amber-950/40 border border-amber-700 rounded p-3 text-xs text-amber-200">
+              ⚠ Закройте CapCut перед экспортом комикса (открытый CapCut удалит черновик при закрытии). Экспорт может занять несколько минут — не закрывайте вкладку, пока идёт сборка.
+            </div>
+          )}
           <button onClick={doExport} disabled={busy || (isMain && readiness?.ready === false)}
             title={isMain && readiness?.ready === false ? 'Не все кадры готовы' : ''}
             className="text-sm bg-fuchsia-800 hover:bg-fuchsia-700 disabled:opacity-50 text-white px-4 py-2 rounded">
-            {busy ? '⏳…' : (isMain && readiness?.ready === false) ? '🎬 не готово' : '🎬 Экспорт в CapCut'}
+            {busy
+              ? (isComic ? '⏳ собираю комикс… (несколько минут)' : '⏳…')
+              : (isMain && readiness?.ready === false)
+                ? '🎬 не готово'
+                : (isComic ? '🎬 Экспорт комикса в CapCut' : '🎬 Экспорт в CapCut')}
           </button>
           {exported?.draftPath && (
             <div className="mt-3 bg-fuchsia-950/40 border border-fuchsia-700 rounded p-3 text-xs">
-              <p className="text-fuchsia-200">✓ draft{exported.sceneCount ? ` — ${exported.sceneCount} сцен, ${exported.shotCount} кадров` : ''}</p>
+              <p className="text-fuchsia-200">
+                ✓ {exported.draftName ? `«${exported.draftName}»` : 'draft'}
+                {exported.spreads ? ` — ${exported.spreads} разворотов` : exported.sceneCount ? ` — ${exported.sceneCount} сцен, ${exported.shotCount} кадров` : ''}
+              </p>
               <code className="block text-fuchsia-100/80 font-mono break-all mt-1">{exported.draftPath}</code>
             </div>
           )}
           <div className="mt-3"><button onClick={() => setActiveStep(3)} className="text-sm text-zinc-300 hover:text-white">Готово, дальше →</button></div>
         </Section>
-      )}
+        );
+      })()}
 
       {/* 3 — файл */}
       {shownStep === 3 && (
