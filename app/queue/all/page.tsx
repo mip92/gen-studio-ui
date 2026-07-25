@@ -2,12 +2,14 @@
 
 import QueueTable from '../../../components/QueueTable';
 
-// "All" tab — no pre-filter, newest first.
+// "All" tab - no status pre-filter. Opens in QUEUE order like the Active tab:
+// the running job, then everything pending in the order it will be dispatched,
+// then history newest-first.
 export default function AllQueuePage() {
   return (
     <QueueTable
       key="all"
-      initialSort={{ id: 'queuedAt', desc: true }}
+      initialSort={{ id: 'queue', desc: false }}
     />
   );
 }

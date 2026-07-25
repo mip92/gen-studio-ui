@@ -43,11 +43,7 @@ export default function OverviewPage() {
   // anything not in the terminal bucket. Server already filtered via finished=false.
   const activeCount  = active?.total ?? 0;
   const doneCount    = done?.total   ?? 0;
-  const runningRows  = (active?.rows ?? []).filter((r) =>
-    r.status === 'running' || r.status === 'preparing' || r.status === 'captioning' || r.status === 'training',
-  );
-  const pendingCount = (active?.rows ?? []).filter((r) => r.status === 'pending').length
-    + Math.max(0, activeCount - (active?.rows ?? []).length); // include rows not in the slice
+  const runningRows  = (active?.rows ?? []).filter((r) => r.status === 'running');
 
   return (
     <div className="bg-zinc-950 text-zinc-100">
@@ -75,14 +71,14 @@ export default function OverviewPage() {
         <Section title="Сейчас на GPU" linkHref="/queue/active" linkLabel="к очереди →">
           {runningRows.length === 0
             ? <Empty>ничего не работает</Empty>
-            : runningRows.map((r) => <ActivityRow key={`${r.type}-${r.id}`} row={r} mode="running" />)}
+            : runningRows.map((r) => <ActivityRow key={r.entryId} row={r} mode="running" />)}
         </Section>
 
         {/* ── Recent done ────────────────────────────────────────────── */}
         <Section title="Последние завершённые" linkHref="/queue/done" linkLabel="всё →">
           {(done?.rows.length ?? 0) === 0
             ? <Empty>пока пусто</Empty>
-            : done!.rows.map((r) => <ActivityRow key={`${r.type}-${r.id}`} row={r} mode="done" />)}
+            : done!.rows.map((r) => <ActivityRow key={r.entryId} row={r} mode="done" />)}
         </Section>
       </main>
     </div>
@@ -129,7 +125,7 @@ function ActivityRow({ row, mode }: { row: QueueRow; mode: 'running' | 'done' })
       <div className="flex-1 min-w-0">
         <div className="font-mono text-xs truncate text-zinc-300">
           <span className="text-zinc-500">{row.projectSlug} / </span>
-          {row.characterCode} <span className="text-zinc-500">·</span> {row.profileCode}
+          {row.context && <>{row.context} <span className="text-zinc-500">·</span> </>}{row.label}
         </div>
       </div>
       <span className="text-xs text-zinc-500 whitespace-nowrap">{fmt(ts)}</span>
@@ -153,8 +149,7 @@ function typeBadge(t: string): string {
   if (t === 'dataset')       return 'bg-blue-950/40   text-blue-300   border-blue-900';
   if (t === 'scene')         return 'bg-amber-950/40  text-amber-300  border-amber-900';
   if (t === 'video')         return 'bg-rose-950/40   text-rose-300   border-rose-900';
-  if (t === 'video_upscale') return 'bg-pink-950/40   text-pink-300   border-pink-900';
-  if (t === 'video_interp')  return 'bg-orange-950/40 text-orange-300 border-orange-900';
+  if (t === 'video_post')    return 'bg-pink-950/40   text-pink-300   border-pink-900';
   if (t === 'tts')           return 'bg-cyan-950/40   text-cyan-300   border-cyan-900';
   return                            'bg-emerald-950/40 text-emerald-300 border-emerald-900';
 }

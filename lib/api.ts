@@ -593,34 +593,59 @@ export interface SceneSummary {
   shots:           SceneShot[];
 }
 
-export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_upscale' | 'video_interp' | 'tts' | 'bgm' | 'anchor' | 'validation' | 'anchor_validation' | 'caption';
+/** `video_post` is the combined one-pass upscale->RIFE job. It replaced the old
+ *  `video_upscale` + `video_interp` pair, which were two queue jobs for what is
+ *  a single ComfyUI workflow. */
+export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_post' | 'tts' | 'bgm' | 'anchor' | 'validation' | 'anchor_validation' | 'caption';
 
-/** Wire format from /pipeline/queue rows. Backend pairs slug + UUID so
+/** Wire format from /pipeline/queue rows - one row per attempt at one unit of
+ *  work, straight out of the queue ledger. Backend pairs slug + UUID so
  *  Link-builders can always go straight to the canonical /projects/<uuid>/
- *  form without a slug→uuid middleware bounce. */
+ *  form without a slug->uuid middleware bounce. */
 export interface QueueRow {
+  /** Queue entry id - what the reorder and cancel endpoints take. */
+  entryId:       string;
   type:          QueueJobType;
-  id:            string;
+  /** Id of the row in the type-specific table (VideoRender.id, TTSJob.id, ...). */
+  jobId:         string;
+  attemptNumber: number;
   status:        string;
-  profileCode:   string;
-  characterCode: string;
-  projectSlug:   string;
+  /** What is being worked on ("SH014B FHD+FPS", "act_03"). */
+  label:         string;
+  /** Where it sits - scene key, character code, or music block. */
+  context:       string | null;
+  projectSlug:   string | null;
   /** Canonical project UUID; prefer over slug for hrefs. */
   projectId:     string | null;
-  /** Shot UUID for shot-anchored jobs (scene/video/video_upscale/shot-TTS); null otherwise. */
+  /** Shot UUID for shot-anchored jobs (scene/video/video_post/shot-TTS); null otherwise. */
   shotId:        string | null;
-  triggerToken:  string | null;
+  profileCode:   string | null;
+  /** Batching group (workflow/model identity) - jobs sharing it run back-to-back. */
+  groupKey:      string;
+  rank:          number;
+  /** 1-based place in the pending queue; null for anything not pending. */
+  position:      number | null;
+  /** Owning project priority tier (0 = normal). */
+  projectTier:   number;
   queuedAt:      string;
   startedAt:     string | null;
   completedAt:   string | null;
+  /** Real elapsed ms; live value while running. */
+  durationMs:    number | null;
   errorMessage:  string | null;
-  /** Server-computed: head of the unified pending FIFO. Used to disable ↑. */
+  /** 'useful' | 'wasted' | null (not decided yet). */
+  outcome:       string | null;
+  outcomeReason: string | null;
+  workflowFilename: string | null;
+  outputFilename:   string | null;
+  /** Server-computed: head of the pending queue. Used to disable the up arrow. */
   isFirstPending: boolean;
-  /** Server-computed: tail of the unified pending FIFO. Used to disable ↓. */
+  /** Server-computed: tail of the pending queue. Used to disable the down arrow. */
   isLastPending:  boolean;
 }
 
-export type QueueSortField = 'queuedAt' | 'startedAt' | 'completedAt' | 'status' | 'type' | 'project';
+/** 'queue' = true dispatch order (project priority tier, then rank). */
+export type QueueSortField = 'queue' | 'queuedAt' | 'startedAt' | 'completedAt' | 'status' | 'type' | 'project' | 'duration';
 
 export interface QueueListParams {
   id?:       string;
@@ -1105,20 +1130,60 @@ export const api = {
   // Pipeline timing + waste statistics for the Overview page.
   getProjectStats: (idOrSlug: string) =>
     http<{
-      project:      { id: string; slug: string; name: string };
-      sceneRender:  { count: number; avgSeconds: number | null };
-      videoRender:  { count: number; avgSeconds: number | null };
-      videoUpscale: { count: number; avgSeconds: number | null };
-      tts:          { count: number; avgSeconds: number | null };
-      bgm:          { count: number; avgSeconds: number | null };
-      dataset:      { count: number; avgSeconds: number | null };
-      training:     { count: number; avgSeconds: number | null };
-      waste: {
-        currentImages:      number;
-        estimatedGenerated: number;
-        estimatedDeleted:   number;
-        shotsRegenerated:   number;
-        totalRegenerations: number;
+      project: { id: string; slug: string; name: string };
+      /** Real measured machine time on this film, split by what shipped. */
+      spent: {
+        totalSeconds:      number;
+        usefulSeconds:     number;
+        wastedSeconds:     number;
+        unresolvedSeconds: number;
+        wastePercent:      number | null;
+      };
+      byType: Array<{
+        type:              string;
+        attempts:          number;
+        totalSeconds:      number;
+        usefulSeconds:     number;
+        wastedSeconds:     number;
+        unresolvedSeconds: number;
+        wastePercent:      number | null;
+        avgSeconds:        number | null;
+      }>;
+      /** Where the wasted time went: failed / cancelled / superseded / rejected / deleted / orphaned. */
+      byReason: Array<{ reason: string; count: number; seconds: number }>;
+      forecast: {
+        exclusiveSeconds: number;
+        realisticSeconds: number;
+        breakdown: {
+          queuedOwnJobs:           number;
+          queuedOwnSeconds:        number;
+          jobsAheadOfIt:           number;
+          queueAheadSeconds:       number;
+          notQueuedSeconds:        number;
+          notQueuedStages:         Record<string, number>;
+          notQueuedBgmSegments:    number;
+          runningRemainderSeconds: number;
+        };
+        stageCosts: Array<{
+          type:               string;
+          samples:            number;
+          avgSeconds:         number | null;
+          defectPercent:      number | null;
+          expectedSeconds:    number | null;
+          usedGlobalFallback: boolean;
+        }>;
+        calendar: {
+          secondsOfWorkPerDay: number;
+          exclusiveDays:       number;
+          realisticDays:       number;
+          basis:               string;
+        } | null;
+        excludes: string[];
+      };
+      caveats: {
+        backfilledEntries:       number;
+        truncatedHistoryEntries: number;
+        note:                    string;
       };
     }>(`/projects/${idOrSlug}/stats`),
 
@@ -1241,14 +1306,32 @@ export const api = {
     return http<QueueListResponse>(`/pipeline/queue${q ? `?${q}` : ''}`);
   },
 
-  pipelineMove: (type: QueueJobType, id: string, direction: 'up' | 'down' | 'top') =>
-    http<{ moved: boolean; swappedWith?: { type: QueueJobType; id: string }; reason?: string }>(
-      `/pipeline/queue/${type}/${id}/move`,
+  /** Reorder a pending entry. `reason: 'tier-boundary'` means the neighbour
+   *  belongs to a prioritised project, so rank alone cannot express the move. */
+  pipelineMove: (entryId: string, direction: 'up' | 'down' | 'top') =>
+    http<{ moved: boolean; swappedWith?: string; reason?: string }>(
+      `/pipeline/queue/${entryId}/move`,
       { method: 'POST', body: JSON.stringify({ direction }) },
     ),
 
-  pipelineCancel: (type: QueueJobType, id: string) =>
-    http(`/pipeline/queue/${type}/${id}/cancel`, { method: 'POST' }),
+  /** Drag and drop: put `entryId` immediately before `beforeEntryId`
+   *  (null = drop at the end of the queue). */
+  pipelineMoveTo: (entryId: string, beforeEntryId: string | null) =>
+    http<{ moved: boolean; reason?: string }>(
+      `/pipeline/queue/${entryId}/move-to`,
+      { method: 'POST', body: JSON.stringify({ beforeEntryId }) },
+    ),
+
+  /** Push a whole film to the front of the queue (tier 1) or let it back down
+   *  (tier 0). Sticky: jobs the project queues later inherit the boost. */
+  pipelinePrioritizeProject: (projectId: string, tier: number) =>
+    http<{ projectId: string; tier: number }>(
+      `/pipeline/queue/projects/${projectId}/prioritize`,
+      { method: 'POST', body: JSON.stringify({ tier }) },
+    ),
+
+  pipelineCancel: (entryId: string) =>
+    http(`/pipeline/queue/${entryId}/cancel`, { method: 'POST' }),
 
   // ── Video renders (Wan2.2 i2v from the shot's chosen render) ──────────────
   startVideoRender: (

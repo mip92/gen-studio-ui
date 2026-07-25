@@ -10,6 +10,7 @@ import {
   type ColumnFiltersState,
   type SortingState,
   type PaginationState,
+  type VisibilityState,
 } from '@tanstack/react-table';
 import {
   api,
@@ -24,17 +25,16 @@ import { HeaderCell, MultiSelect, MultiSelectLabeled } from './table/TableContro
 
 const POLL_MS = 3000;
 
-const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_upscale', 'video_interp', 'tts', 'bgm', 'anchor', 'validation', 'anchor_validation', 'caption'];
-const ALL_STATUSES = [
-  'pending', 'blocked',
-  'preparing', 'captioning', 'training', 'running',
-  'completed', 'failed', 'cancelled',
-];
-const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_post', 'tts', 'bgm', 'anchor', 'validation', 'anchor_validation', 'caption'];
+// The ledger has one status vocabulary for every job type; the old per-table
+// values (blocked / preparing / captioning / training) no longer reach the queue.
+const ALL_STATUSES = ['pending', 'running', 'completed', 'failed', 'cancelled', 'skipped'];
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'skipped']);
 
+/** Only character profiles still need a lookup: shot-anchored rows carry their
+ *  own project/scene/shot ids in the queue entry's snapshot. */
 type ProjectLinks = {
   chars: Map<string, { characterId: string; profiles: Map<string, string> }>;
-  shots: Map<string, { shotId: string; sceneKey: string }>;
 };
 
 export interface QueueTableProps {
@@ -47,6 +47,9 @@ export interface QueueTableProps {
   initialTypes?:    QueueJobType[];
   /** Project slugs pre-selected in the Project column filter dropdown. */
   initialProjects?: string[];
+  /** Column ids to hide. The Active view drops the timing columns: pending rows
+   *  have nothing to put in them, so they are three columns of dashes. */
+  hiddenColumns?:   string[];
 }
 
 /**
@@ -79,12 +82,16 @@ function tsStateToApiParams(
 }
 
 export default function QueueTable({
-  initialSort     = { id: 'queuedAt', desc: true },
+  initialSort     = { id: 'queue', desc: false },
   initialStatuses = [],
   initialTypes    = [],
   initialProjects = [],
+  hiddenColumns   = [],
 }: QueueTableProps) {
   const [sorting,    setSorting]    = useState<SortingState>([initialSort]);
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(
+    () => Object.fromEntries(hiddenColumns.map((id) => [id, false])),
+  );
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(() => {
     const init: ColumnFiltersState = [];
@@ -137,46 +144,90 @@ export default function QueueTable({
   useEffect(() => {
     if (!data?.rows) return;
     const slugs = new Set<string>();
-    for (const r of data.rows) slugs.add(r.projectSlug);
+    for (const r of data.rows) if (r.projectSlug) slugs.add(r.projectSlug);
 
     for (const slug of slugs) {
       if (links[slug] || inflightSlugs.current.has(slug)) continue;
       inflightSlugs.current.add(slug);
-      void Promise.all([api.listCharacters(slug), api.listScenes(slug)])
-        .then(([chars, scenesRes]) => {
+      void api.listCharacters(slug)
+        .then((chars) => {
           const charMap: ProjectLinks['chars'] = new Map();
           for (const c of chars) {
             const profileMap = new Map<string, string>();
             for (const p of c.profiles) profileMap.set(p.profileCode, p.id);
             charMap.set(c.code, { characterId: c.id, profiles: profileMap });
           }
-          const shotMap: ProjectLinks['shots'] = new Map();
-          for (const s of scenesRes.scenes) {
-            for (const sh of s.shots) shotMap.set(sh.shotCode, { shotId: sh.id, sceneKey: s.sceneKey });
-          }
-          setLinks((prev) => ({ ...prev, [slug]: { chars: charMap, shots: shotMap } }));
+          setLinks((prev) => ({ ...prev, [slug]: { chars: charMap } }));
         })
         .catch(() => { /* leave links unset */ })
         .finally(() => { inflightSlugs.current.delete(slug); });
     }
   }, [data, links]);
 
-  const move = async (type: QueueJobType, id: string, direction: 'up' | 'down' | 'top') => {
-    setBusy(`${type}:${id}:${direction}`);
-    try { await api.pipelineMove(type, id, direction); await refresh(); }
+  /** Reorder step. A refused move reports why instead of silently doing nothing. */
+  const move = async (entryId: string, direction: 'up' | 'down' | 'top') => {
+    setBusy(`${entryId}:${direction}`);
+    try {
+      const res = await api.pipelineMove(entryId, direction);
+      if (!res.moved && res.reason === 'tier-boundary') {
+        setError('Соседняя задача принадлежит приоритетному проекту — порядок задаёт приоритет, а не позиция. Сначала снимите приоритет.');
+      }
+      await refresh();
+    }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally   { setBusy(null); }
   };
 
-  const cancel = async (type: QueueJobType, id: string) => {
-    if (!confirm(`Cancel ${type} job ${id.slice(0, 8)}…?`)) return;
-    setBusy(`${type}:${id}:cancel`);
-    try { await api.pipelineCancel(type, id); await refresh(); }
+  /** Drop the dragged row immediately before `beforeEntryId` (null = to the end). */
+  const moveTo = async (entryId: string, beforeEntryId: string | null) => {
+    setBusy(`${entryId}:drag`);
+    try {
+      const res = await api.pipelineMoveTo(entryId, beforeEntryId);
+      if (!res.moved && res.reason === 'tier-boundary') {
+        setError('Нельзя перетащить через границу приоритета проекта — сначала снимите приоритет.');
+      }
+      await refresh();
+    }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally   { setBusy(null); }
+  };
+
+  /** Raise (or clear) the whole project's priority. Sticky: future jobs inherit it. */
+  const prioritizeProject = async (projectId: string, tier: number) => {
+    setBusy(`proj:${projectId}`);
+    try { await api.pipelinePrioritizeProject(projectId, tier); await refresh(); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally   { setBusy(null); }
+  };
+
+  const cancel = async (r: QueueRow) => {
+    if (!confirm(`Cancel ${r.type} — ${r.label}?`)) return;
+    setBusy(`${r.entryId}:cancel`);
+    try { await api.pipelineCancel(r.entryId); await refresh(); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally   { setBusy(null); }
   };
 
   const columns = useMemo<ColumnDef<QueueRow>[]>(() => [
+    {
+      // id is `queue` so sorting by it asks the API for true dispatch order.
+      // The accessor is what makes the header clickable at all: TanStack refuses
+      // to sort a column that has none, however it is configured.
+      id: 'queue', accessorFn: (r) => r.position ?? Number.MAX_SAFE_INTEGER,
+      enableSorting: true, enableColumnFilter: false,
+      header: ({ column }) => <HeaderCell label="#" column={column} />,
+      cell: ({ row }) => {
+        const r = row.original;
+        if (r.status === 'running') return <span className="text-xs text-amber-300 font-mono">▶</span>;
+        if (r.position === null)    return <span className="text-xs text-zinc-700">—</span>;
+        return (
+          <span className="text-xs font-mono text-zinc-400 whitespace-nowrap" title="Перетащите строку, чтобы поменять место">
+            <span className="text-zinc-600 mr-1 cursor-grab">⠿</span>{r.position}
+            {r.projectTier > 0 && <span className="ml-1 text-emerald-400" title="Проект приоритетный">⚑</span>}
+          </span>
+        );
+      },
+    },
     {
       id: 'type', accessorKey: 'type', enableSorting: true, enableColumnFilter: true,
       header: ({ column }) => (
@@ -214,14 +265,15 @@ export default function QueueTable({
       ),
       cell: ({ row }) => {
         const slug = row.original.projectSlug;
-        const proj = projectList.find((p) => p.slug === slug);
-        // Prefer the UUID from the row itself (always populated by the API);
-        // fall back to a lookup, then to the slug.
+        const proj = slug ? projectList.find((p) => p.slug === slug) : undefined;
+        // Prefer the UUID carried by the row; fall back to a lookup, then the
+        // slug. A few job types (library-character work) have no project at all.
         const id = row.original.projectId ?? proj?.id ?? slug;
+        if (!id) return <span className="text-xs text-zinc-600">—</span>;
         return (
           <Link href={`/projects/${id}`}
                 className="text-xs text-zinc-300 hover:text-white underline-offset-2 hover:underline truncate inline-block max-w-[140px]"
-                title={proj?.name ?? slug}>
+                title={proj?.name ?? slug ?? undefined}>
             {proj?.name ?? slug}
           </Link>
         );
@@ -251,8 +303,10 @@ export default function QueueTable({
         return (
           <div className="min-w-0">
             <div className="font-mono text-xs truncate">
-              {renderRowTargets(r, links[r.projectSlug], projectList.find((p) => p.slug === r.projectSlug)?.id)}
-              {r.triggerToken && <span className="text-zinc-600 ml-2">→ {r.triggerToken}</span>}
+              {renderRowTargets(r, r.projectSlug ? links[r.projectSlug] : undefined)}
+              {r.attemptNumber > 1 && (
+                <span className="text-amber-500 ml-2" title="Повторная попытка на той же строке">#{r.attemptNumber}</span>
+              )}
             </div>
             {r.errorMessage && (
               <div className="text-xs text-red-400 truncate" title={r.errorMessage}>
@@ -279,17 +333,22 @@ export default function QueueTable({
       cell: ({ getValue }) => <TimeCell iso={getValue() as string | null} />,
     },
     {
-      id: 'duration', enableSorting: false, enableColumnFilter: false,
-      header: () => <span className="text-left">Duration</span>,
+      id: 'duration', accessorKey: 'durationMs', enableSorting: true, enableColumnFilter: false,
+      header: ({ column }) => <HeaderCell label="Duration" column={column} />,
       cell: ({ row }) => {
         const r = row.original;
-        if (!r.startedAt) return <span className="text-xs text-zinc-600">—</span>;
-        const end = r.completedAt ? new Date(r.completedAt).getTime() : Date.now();
-        const ms  = end - new Date(r.startedAt).getTime();
+        // The server measures this once at close time (and reports live elapsed
+        // time while running), so the number here is the same one the film's
+        // statistics are billed from.
+        if (r.durationMs === null) return <span className="text-xs text-zinc-600">—</span>;
         const running = !r.completedAt;
         return (
           <span className={`text-xs font-mono whitespace-nowrap ${running ? 'text-amber-300' : 'text-zinc-300'}`}>
-            {fmtDuration(ms)}{running && ' ↻'}
+            {fmtDuration(r.durationMs)}{running && ' ↻'}
+            {r.outcome === 'wasted' && (
+              <span className="ml-1 text-red-400" title={`Впустую: ${r.outcomeReason ?? ''}`}>✗</span>
+            )}
+            {r.outcome === 'useful' && <span className="ml-1 text-emerald-500" title="В финальной версии">✓</span>}
           </span>
         );
       },
@@ -309,29 +368,41 @@ export default function QueueTable({
           <div className="text-right whitespace-nowrap">
             {isPending && (
               <span className="inline-flex flex-col mr-2 align-middle">
-                <button disabled={!!busy || r.isFirstPending} onClick={() => move(r.type, r.id, 'up')}
+                <button disabled={!!busy || r.isFirstPending} onClick={() => move(r.entryId, 'up')}
                         className="text-zinc-500 hover:text-zinc-200 disabled:opacity-20 disabled:hover:text-zinc-500 px-1 leading-none" title="Move up">↑</button>
-                <button disabled={!!busy || r.isLastPending} onClick={() => move(r.type, r.id, 'down')}
+                <button disabled={!!busy || r.isLastPending} onClick={() => move(r.entryId, 'down')}
                         className="text-zinc-500 hover:text-zinc-200 disabled:opacity-20 disabled:hover:text-zinc-500 px-1 leading-none" title="Move down">↓</button>
               </span>
             )}
-            {/* Jump to the front of the pending queue (right behind the running
-                job — a running job can never be preempted). Disabled when the row
-                is already first in the FIFO, which also covers the lone-pending
-                case (a single pending row is both first and last). */}
+            {/* Front of the pending queue. A running job is never preempted, so
+                "first" means "next to run". */}
             {isPending && (
               <button disabled={!!busy || r.isFirstPending}
-                      onClick={() => move(r.type, r.id, 'top')}
+                      onClick={() => move(r.entryId, 'top')}
                       className="text-xs text-emerald-400 hover:text-emerald-300 border border-emerald-900/50 hover:border-emerald-700 px-2 py-1 rounded disabled:opacity-30 disabled:hover:border-emerald-900/50 mr-2"
-                      title="Поднять в начало очереди (сразу после текущей задачи; выше запущенной поднять нельзя)">
-                {busy === `${r.type}:${r.id}:top` ? '…' : '⤒ в начало'}
+                      title="Поднять в начало очереди (сразу после текущей задачи)">
+                {busy === `${r.entryId}:top` ? '…' : '⤒ в начало'}
+              </button>
+            )}
+            {/* Whole-film priority. Sticky, so shots queued later jump too. */}
+            {isPending && r.projectId && (
+              <button disabled={!!busy}
+                      onClick={() => prioritizeProject(r.projectId!, r.projectTier > 0 ? 0 : 1)}
+                      className={`text-xs px-2 py-1 rounded border mr-2 disabled:opacity-30 ${
+                        r.projectTier > 0
+                          ? 'text-emerald-300 border-emerald-700 hover:border-emerald-500'
+                          : 'text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200'}`}
+                      title={r.projectTier > 0
+                        ? 'Снять приоритет проекта'
+                        : 'Весь проект вперёд: все его задачи, включая будущие, идут раньше остальных'}>
+                {busy === `proj:${r.projectId}` ? '…' : (r.projectTier > 0 ? '⚑ проект' : '⚐ проект')}
               </button>
             )}
             {canCancel && (
-              <button onClick={() => cancel(r.type, r.id)}
-                      disabled={busy === `${r.type}:${r.id}:cancel`}
+              <button onClick={() => cancel(r)}
+                      disabled={busy === `${r.entryId}:cancel`}
                       className="text-xs text-red-400 hover:text-red-300 border border-red-900/50 hover:border-red-700 px-2 py-1 rounded disabled:opacity-50">
-                {busy === `${r.type}:${r.id}:cancel` ? '…' : 'cancel'}
+                {busy === `${r.entryId}:cancel` ? '…' : 'cancel'}
               </button>
             )}
           </div>
@@ -345,13 +416,20 @@ export default function QueueTable({
   const rows  = data?.rows  ?? [];
   const total = data?.total ?? 0;
 
+  // Native HTML5 drag & drop — no extra dependency for what is one row move.
+  // Only pending rows participate: a running job cannot be preempted and a
+  // finished one has no position to change.
+  const [dragId, setDragId]   = useState<string | null>(null);
+  const [dropId, setDropId]   = useState<string | null>(null);
+
   const table = useReactTable({
     data: rows,
     columns,
-    state: { sorting, columnFilters, pagination },
-    onSortingChange:        setSorting,
-    onColumnFiltersChange:  setColumnFilters,
-    onPaginationChange:     setPagination,
+    state: { sorting, columnFilters, pagination, columnVisibility },
+    onSortingChange:          setSorting,
+    onColumnFiltersChange:    setColumnFilters,
+    onPaginationChange:       setPagination,
+    onColumnVisibilityChange: setColumnVisibility,
     manualSorting:    true,
     manualFiltering:  true,
     manualPagination: true,
@@ -386,20 +464,46 @@ export default function QueueTable({
             <tbody className="divide-y divide-zinc-800">
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={columns.length} className="px-3 py-8 text-center text-zinc-600 italic">
+                  <td colSpan={table.getVisibleLeafColumns().length} className="px-3 py-8 text-center text-zinc-600 italic">
                     — no rows match these filters —
                   </td>
                 </tr>
               )}
-              {table.getRowModel().rows.map((r) => (
-                <tr key={r.id} className="hover:bg-zinc-900/50">
-                  {r.getVisibleCells().map((c) => (
-                    <td key={c.id} className="px-3 py-2 align-top">
-                      {flexRender(c.column.columnDef.cell, c.getContext())}
-                    </td>
-                  ))}
-                </tr>
-              ))}
+              {table.getRowModel().rows.map((r) => {
+                const row       = r.original;
+                const draggable = row.status === 'pending';
+                const isDragged = dragId === row.entryId;
+                const isTarget  = dropId === row.entryId && dragId !== row.entryId;
+                return (
+                  <tr key={r.id}
+                      draggable={draggable}
+                      onDragStart={() => setDragId(row.entryId)}
+                      onDragEnd={() => { setDragId(null); setDropId(null); }}
+                      onDragOver={(e) => {
+                        if (!dragId || !draggable) return;
+                        e.preventDefault();                 // required to allow a drop
+                        if (dropId !== row.entryId) setDropId(row.entryId);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const dragged = dragId;
+                        setDragId(null);
+                        setDropId(null);
+                        // Dropping onto a row means "take this row's place",
+                        // i.e. land immediately before it.
+                        if (dragged && dragged !== row.entryId) void moveTo(dragged, row.entryId);
+                      }}
+                      className={`hover:bg-zinc-900/50 ${draggable ? 'cursor-grab' : ''} ${
+                        isDragged ? 'opacity-40' : ''} ${
+                        isTarget  ? 'border-t-2 border-t-emerald-500' : ''}`}>
+                    {r.getVisibleCells().map((c) => (
+                      <td key={c.id} className="px-3 py-2 align-top">
+                        {flexRender(c.column.columnDef.cell, c.getContext())}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -437,80 +541,61 @@ export default function QueueTable({
   );
 }
 
-function renderRowTargets(row: QueueRow, pl?: ProjectLinks, projectId?: string): React.ReactNode {
+function renderRowTargets(row: QueueRow, pl?: ProjectLinks): React.ReactNode {
   const cls = 'underline-offset-2 hover:underline hover:text-white';
 
-  // Canonical URL form is always /projects/<uuid>/...; the row already carries
-  // the UUID (`row.projectId`), so a slug fallback is only used when the API
-  // is older than the projectId field.
-  const projSeg = row.projectId ?? projectId ?? row.projectSlug;
+  // Every id needed for a deep link is already on the row: the queue entry keeps
+  // a denormalised snapshot of its project, scene and shot, so no lookup table is
+  // consulted for shot-anchored work any more (and the link still resolves even
+  // after the shot itself is deleted, which is the point of the snapshot).
+  const projSeg = row.projectId ?? row.projectSlug;
+  const shotId  = row.shotId;
 
-  // Shot UUID. Backend now ships `shotId` directly for shot-anchored jobs
-  // (scene render / video / video_upscale / shot-level TTS); the projectLinks
-  // map lookup is the legacy fallback.
-  const fallbackShotId = (() => {
-    const lookupCode = row.profileCode.replace(/\s*(?:↑FHD|⏩FPS)+\s*$/u, '');
-    return pl?.shots.get(lookupCode)?.shotId ?? null;
-  })();
-  const shotId  = row.shotId ?? fallbackShotId;
-  const sceneInfo = (() => {
-    const lookupCode = row.profileCode.replace(/\s*(?:↑FHD|⏩FPS)+\s*$/u, '');
-    return pl?.shots.get(lookupCode) ?? null;
-  })();
-
-  // Map queue job type → the shot tab where the result is viewable.
-  // scene  → /render   (image generation candidates land in the Сцена tab)
-  // video  → /videos   (i2v output list)
-  // tts    → /narration (per-shot voiceover)
-  function shotTabHrefFor(type: QueueRow['type']): string | null {
-    if (!shotId) return null;
-    if (type === 'scene')         return `/projects/${projSeg}/shots/${shotId}/render`;
-    if (type === 'video')         return `/projects/${projSeg}/shots/${shotId}/videos`;
-    if (type === 'video_upscale') return `/projects/${projSeg}/shots/${shotId}/videos`;
-    if (type === 'video_interp')  return `/projects/${projSeg}/shots/${shotId}/videos`;
-    if (type === 'tts')           return `/projects/${projSeg}/shots/${shotId}/narration`;
-    if (type === 'validation')    return `/projects/${projSeg}/shots/${shotId}/render`;
+  // Map job type -> the shot tab where its result is viewable.
+  function shotTabHref(): string | null {
+    if (!shotId || !projSeg) return null;
+    if (row.type === 'scene')      return `/projects/${projSeg}/shots/${shotId}/render`;
+    if (row.type === 'video')      return `/projects/${projSeg}/shots/${shotId}/videos`;
+    if (row.type === 'video_post') return `/projects/${projSeg}/shots/${shotId}/videos`;
+    if (row.type === 'tts')        return `/projects/${projSeg}/shots/${shotId}/narration`;
+    if (row.type === 'validation') return `/projects/${projSeg}/shots/${shotId}/render`;
     return null;
   }
 
-  if (row.type === 'scene' || row.type === 'video' || row.type === 'video_upscale' || row.type === 'video_interp' || row.type === 'validation') {
-    const sceneHref = sceneInfo ? `/projects/${projSeg}/scenes#${sceneInfo.sceneKey}` : null;
-    const shotHref  = shotTabHrefFor(row.type);
+  if (shotId) {
+    // `context` carries the scene key for shot-anchored jobs.
+    const sceneHref = row.context && projSeg ? `/projects/${projSeg}/scenes#${row.context}` : null;
+    const shotHref  = shotTabHref();
     const sceneNode = sceneHref
-      ? <Link href={sceneHref} className={`text-zinc-300 ${cls}`}>{row.characterCode}</Link>
-      : <span className="text-zinc-300">{row.characterCode}</span>;
+      ? <Link href={sceneHref} className={`text-zinc-300 ${cls}`}>{row.context}</Link>
+      : <span className="text-zinc-300">{row.context ?? '—'}</span>;
     const shotNode = shotHref
-      ? <Link href={shotHref} className={`text-zinc-200 ${cls}`}>{row.profileCode}</Link>
-      : <span className="text-zinc-200">{row.profileCode}</span>;
+      ? <Link href={shotHref} className={`text-zinc-200 ${cls}`}>{row.label}</Link>
+      : <span className="text-zinc-200">{row.label}</span>;
     return <>{sceneNode}<span className="text-zinc-500"> · </span>{shotNode}</>;
   }
 
-  // Per-shot TTS row → link the profileCode (which is the shotCode) to the
-  // shot's narration tab. Scene-level TTS rows (no shotId) fall through to
-  // a plain label since the project's /scenes anchor already exists from the
-  // scene-cell column.
-  if (row.type === 'tts' && shotId) {
-    const shotHref = shotTabHrefFor('tts')!;
-    return (
-      <>
-        <span className="text-zinc-300">{row.characterCode}</span>
-        <span className="text-zinc-500"> · </span>
-        <Link href={shotHref} className={`text-zinc-200 ${cls}`}>{row.profileCode}</Link>
-      </>
-    );
+  // Profile-scoped work (anchors, datasets, LoRA training, anchor QC): the
+  // characters map is still the only way to turn a code into a profile id.
+  if (row.profileCode) {
+    const char      = row.context ? pl?.chars.get(row.context) : undefined;
+    const profileId = char?.profiles.get(row.profileCode.replace(/^[^A-Za-z0-9]+/u, '').trim());
+    const charNode = profileId
+      ? <Link href={`/characters/${profileId}/description`} className={`text-zinc-300 ${cls}`}>{row.context}</Link>
+      : <span className="text-zinc-300">{row.context ?? '—'}</span>;
+    const profNode = profileId
+      ? <Link href={`/characters/${profileId}/description`} className={`text-zinc-200 ${cls}`}>{row.label}</Link>
+      : <span className="text-zinc-200">{row.label}</span>;
+    return <>{charNode}<span className="text-zinc-500"> · </span>{profNode}</>;
   }
 
-  const char = pl?.chars.get(row.characterCode);
-  const profileId = char?.profiles.get(row.profileCode);
-  // Persona pages are project-independent now — always link to the global
-  // /characters/<profileId>/description, not the legacy project-scoped URL.
-  const charNode = profileId
-    ? <Link href={`/characters/${profileId}/description`} className={`text-zinc-300 ${cls}`}>{row.characterCode}</Link>
-    : <span className="text-zinc-300">{row.characterCode}</span>;
-  const profNode = profileId
-    ? <Link href={`/characters/${profileId}/description`} className={`text-zinc-200 ${cls}`}>{row.profileCode}</Link>
-    : <span className="text-zinc-200">{row.profileCode}</span>;
-  return <>{charNode}<span className="text-zinc-500"> · </span>{profNode}</>;
+  // Scene-level narration, music, subtitles: label alone says it.
+  return (
+    <>
+      {row.context && <><span className="text-zinc-300">{row.context}</span><span className="text-zinc-500"> · </span></>}
+      <span className="text-zinc-200">{row.label}</span>
+    </>
+  );
 }
 
 function TimeCell({ iso }: { iso: string | null }) {
@@ -557,8 +642,7 @@ function typeBadge(t: QueueJobType): string {
   if (t === 'dataset')       return 'bg-blue-950/40   text-blue-300   border-blue-900';
   if (t === 'scene')         return 'bg-amber-950/40  text-amber-300  border-amber-900';
   if (t === 'video')         return 'bg-rose-950/40   text-rose-300   border-rose-900';
-  if (t === 'video_upscale') return 'bg-pink-950/40   text-pink-300   border-pink-900';
-  if (t === 'video_interp')  return 'bg-orange-950/40 text-orange-300 border-orange-900';
+  if (t === 'video_post')    return 'bg-pink-950/40   text-pink-300   border-pink-900';
   if (t === 'tts')           return 'bg-cyan-950/40   text-cyan-300   border-cyan-900';
   if (t === 'anchor')        return 'bg-fuchsia-950/40 text-fuchsia-300 border-fuchsia-900';
   if (t === 'validation')    return 'bg-indigo-950/40 text-indigo-300 border-indigo-900';
@@ -578,6 +662,7 @@ function statusBadge(s: string): string {
     case 'completed':  return 'bg-emerald-900/40 text-emerald-400';
     case 'failed':     return 'bg-red-950 text-red-400';
     case 'cancelled':  return 'bg-zinc-800 text-zinc-500';
+    case 'skipped':    return 'bg-zinc-800 text-zinc-600';
     default:           return 'bg-zinc-800 text-zinc-400';
   }
 }
