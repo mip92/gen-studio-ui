@@ -1451,11 +1451,22 @@ export const api = {
   capcutReadiness: (idOrSlug: string) =>
     http<CapcutReadiness>(`/projects/${idOrSlug}/export/capcut/readiness`),
 
-  exportCapcut: (idOrSlug: string) =>
-    http<{ draftPath: string; sceneCount: number; shotCount: number }>(
-      `/projects/${idOrSlug}/export/capcut`,
-      { method: 'POST' },
-    ),
+  /** Linear CapCut export. Can hang for minutes when the backend is busy with
+   *  renders, so hit the backend DIRECTLY (bypass the Next /api proxy whose ~5-min
+   *  timeout drops the request with a socket hang-up). Browser fetch has no timeout;
+   *  the nest server timeout is disabled. */
+  exportCapcut: async (idOrSlug: string): Promise<{ draftPath: string; sceneCount: number; shotCount: number }> => {
+    const res = await fetch(`${DIRECT_API_BASE}/projects/${idOrSlug}/export/capcut`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`${res.status} ${res.statusText}: ${text.slice(0, 200)}`);
+    }
+    return JSON.parse(await res.text()) as { draftPath: string; sceneCount: number; shotCount: number };
+  },
 
   /** Comic export (film → comic spreads with camera fly-through + page flips).
    *  Slow — runs for MINUTES — and writes the draft straight into CapCut's drafts
