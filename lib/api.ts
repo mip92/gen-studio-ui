@@ -1470,7 +1470,7 @@ export const api = {
   // ── Video renders (Wan2.2 i2v from the shot's chosen render) ──────────────
   startVideoRender: (
     shotId: string,
-    body: { motionPrompt?: string; seed?: number; width?: number; height?: number; length?: number; fps?: number; count?: number; mode?: 'fast' | 'cfg' } = {},
+    body: { motionPrompt?: string; seed?: number; width?: number; height?: number; length?: number; fps?: number; count?: number; mode?: 'fast' | 'guard' | 'cfg' } = {},
   ) =>
     http<VideoRender[]>(`/generation/shots/${shotId}/videos`, {
       method: 'POST',

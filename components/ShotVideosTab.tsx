@@ -18,10 +18,14 @@ export function ShotVideosTab() {
   const [motionPrompt, setMotionPrompt] = useState(shot.promptFields?.motionPrompt ?? '');
   useEffect(() => { setMotionPrompt(shot.promptFields?.motionPrompt ?? ''); }, [shotId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [count, setCount]               = useState(1);
-  // Default = fast (4-step, no negative influence). cfg/auto are ~5× slower, so
-  // they're an explicit opt-in — picking the slow path by default made routine
-  // video renders crawl.
-  const [mode, setMode]                 = useState<'fast' | 'cfg'>('fast');
+  // Default = «страж» (user call 2026-07-30): the fast graph with cfg 2.5 on the
+  // high-noise sampler, so the negative prompt is actually evaluated on the pass
+  // that decides what is in the frame. Costs +31 % (~196 s vs 150 s) — cheap
+  // next to «качество» at 6.5×, and it is meant to pay for itself by cutting the
+  // re-renders caused by figures walking into a shot. «быстро» stays one click
+  // away. Keep this in sync with resolveWorkflowFilename's fallback in
+  // video-render.service.ts — that is what scripted bulk enqueues get.
+  const [mode, setMode]                 = useState<'fast' | 'guard' | 'cfg'>('guard');
   const [videos, setVideos]             = useState<VideoRender[] | null>(null);
   const [busy, setBusy]                 = useState<false | 'start'>(false);
   const [error, setError]               = useState<string | null>(null);
@@ -188,19 +192,22 @@ export function ShotVideosTab() {
             режим
             <select
               value={mode}
-              onChange={(e) => setMode(e.target.value as 'fast' | 'cfg')}
+              onChange={(e) => setMode(e.target.value as 'fast' | 'guard' | 'cfg')}
               className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200"
             >
-              <option value="fast">быстро (distill 4-step, ~2 мин, негатив НЕ работает)</option>
-              <option value="cfg">качество (cfg=4, негатив работает, ~5× медленнее)</option>
+              <option value="guard">страж (по умолчанию — негатив на 1-м проходе, ~3.3 мин)</option>
+              <option value="fast">быстро (4-step, ~2.5 мин, негатив НЕ работает)</option>
+              <option value="cfg">качество (cfg=4, ~16 мин, 6.5× медленнее)</option>
             </select>
           </label>
           {error && <span className="text-red-400 text-xs">{error}</span>}
         </div>
         <p className="text-zinc-600 text-[11px] mt-2 leading-relaxed">
           {mode === 'fast'
-            ? 'Быстрый режим (по умолчанию): lightx2v full-distill fp8, 4 шага, cfg=1.0, ~2 мин. Движение задаётся ТОЛЬКО позитивным промптом — motionNegative при cfg=1 игнорируется.'
-            : 'Режим качества: полный Wan 2.2, 20 шагов, cfg=4.0. motionNegative реально подавляет нежелательное движение, но рендер примерно в 5 раз дольше.'}
+            ? 'Быстрый режим (по умолчанию): lightx2v full-distill fp8, 4 шага, cfg=1.0, медиана 150 с. При cfg=1 ComfyUI вообще не считает негативную ветку — motionNegative не игнорируется «слабо», его нет. Движение задаётся ТОЛЬКО позитивным промптом.'
+            : mode === 'guard'
+            ? 'Страж: тот же быстрый граф, но cfg=2.5 на ВЫСОКОШУМНОМ проходе (шаги 0–2); низкошумный остаётся на cfg=1. Высокошумный эксперт решает композицию — что вообще есть в кадре, — поэтому именно там негатив может не пустить лишнюю фигуру. 6 прогонов модели вместо 4, оценка ~196 с. Брать, когда в клип лезут люди/аниме.'
+            : 'Режим качества: полный Wan 2.2 без дистилляции, 20 шагов, cfg=4.0 на обоих экспертах, 40 прогонов. Замеренная медиана 980 с — в 6.5 раза дольше быстрого. Брать точечно.'}
         </p>
       </section>
 
