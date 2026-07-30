@@ -473,7 +473,9 @@ function ShortUpload({ projectId, shortSlug, onUploaded }: {
         <div className="text-[11px] text-zinc-400">
           ✓ <a className="underline text-emerald-300" href={result.url} target="_blank" rel="noreferrer">{result.url}</a>
           {' · '}<b>{result.actualPrivacy}</b>
-          {result.thumbnailSet && ' · обложка ✓'}
+          {result.thumbnailSet
+            ? ' · обложка ✓'
+            : result.thumbnailError && <span className="text-amber-400"> · ⚠ обложка не встала: {result.thumbnailError}</span>}
           {result.playlistAdded === true && ' · в «шорты» ✓'}
           <button onClick={genCaptions} disabled={capBusy || !!capActive}
             className="ml-2 text-[11px] text-zinc-300 hover:text-white underline disabled:opacity-50">

@@ -25,7 +25,7 @@ import { HeaderCell, MultiSelect, MultiSelectLabeled } from './table/TableContro
 
 const POLL_MS = 3000;
 
-const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_post', 'tts', 'bgm', 'anchor', 'validation', 'anchor_validation', 'caption'];
+const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_post', 'tts', 'bgm', 'anchor', 'validation', 'anchor_validation', 'caption', 'thumbnail', 'thumbnail_ideas'];
 // The ledger has one status vocabulary for every job type; the old per-table
 // values (blocked / preparing / captioning / training) no longer reach the queue.
 const ALL_STATUSES = ['pending', 'running', 'completed', 'failed', 'cancelled', 'skipped'];
@@ -587,6 +587,16 @@ function renderRowTargets(row: QueueRow, pl?: ProjectLinks): React.ReactNode {
       ? <Link href={`/characters/${profileId}/description`} className={`text-zinc-200 ${cls}`}>{row.label}</Link>
       : <span className="text-zinc-200">{row.label}</span>;
     return <>{charNode}<span className="text-zinc-500"> · </span>{profNode}</>;
+  }
+
+  // Cover work is project-scoped, not shot- or profile-scoped: both the art
+  // renders and the model's idea rounds land on the project's Обложка tab.
+  if ((row.type === 'thumbnail' || row.type === 'thumbnail_ideas') && projSeg) {
+    return (
+      <Link href={`/projects/${projSeg}/thumbnail`} className={`text-zinc-200 ${cls}`}>
+        {row.label}
+      </Link>
+    );
   }
 
   // Scene-level narration, music, subtitles: label alone says it.

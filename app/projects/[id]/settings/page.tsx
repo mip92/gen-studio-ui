@@ -17,6 +17,41 @@ function styleLoraNameOf(settings: unknown): string {
   return '';
 }
 
+/** Style-LoRA strength out of project.settings.styleLora.strengthModel.
+ *  '' = the render default (1.0). Read and saved SEPARATELY from the name: the
+ *  picker used to rebuild the key as `{ name }`, which silently dropped a
+ *  hand-tuned strength every time anything on this page was saved. */
+function styleLoraStrengthOf(settings: unknown): string {
+  const s = (settings as { styleLora?: unknown } | null | undefined)?.styleLora;
+  if (!s || typeof s !== 'object') return '';
+  const val = (s as { strengthModel?: unknown }).strengthModel;
+  return typeof val === 'number' ? String(val) : '';
+}
+
+/** project.settings.sceneSteps — sampler steps for scene renders. '' = the
+ *  workflow JSON's own value. */
+function sceneStepsOf(settings: unknown): string {
+  const val = (settings as { sceneSteps?: unknown } | null | undefined)?.sceneSteps;
+  return typeof val === 'number' ? String(val) : '';
+}
+
+/** project.settings.qwenReferenceLatents — tri-state. Unset means "whatever the
+ *  strategy defaults to": off for realcomic_qwen (RealComic carries the style),
+ *  on for the Qwen dual-character overlay (the anchors are the only style
+ *  carrier). Explicit true/false pins it for this project. */
+type RefLatents = 'default' | 'on' | 'off';
+function refLatentsOf(settings: unknown): RefLatents {
+  const val = (settings as { qwenReferenceLatents?: unknown } | null | undefined)?.qwenReferenceLatents;
+  return val === true ? 'on' : val === false ? 'off' : 'default';
+}
+
+/** Styles whose renders go through a Qwen graph, so the reference-latents lever
+ *  applies to them (realcomic_qwen natively, the two cartoon styles via the
+ *  dual-character overlay). */
+const QWEN_GRAPH_STYLES = new Set([
+  'realcomic_qwen', 'graphic_novel_flux', 'graphic_novel_cell_shaded',
+]);
+
 /** Shot-boundary transition preset out of project.settings. Anything other
  *  than the literal 'comic' is the legacy rotation. */
 type TransitionPreset = 'default' | 'comic';
@@ -25,12 +60,14 @@ function transitionPresetOf(settings: unknown): TransitionPreset {
   return s === 'comic' ? 'comic' : 'default';
 }
 
-/** CapCut export type out of project.settings. 'comic' = film→comic spreads
- *  with camera fly-through + page flips; anything else = the linear export. */
-type ExportType = 'linear' | 'comic';
+/** CapCut export type out of project.settings. 'comic' = film→comic spreads with
+ *  camera fly-through + page flips, as ONE draft; 'comic_chunks' = the same picture
+ *  split into several small drafts that are rendered separately and reassembled into
+ *  one light final draft; anything else = the linear export. */
+type ExportType = 'linear' | 'comic' | 'comic_chunks';
 function exportTypeOf(settings: unknown): ExportType {
   const s = (settings as { exportType?: unknown } | null | undefined)?.exportType;
-  return s === 'comic' ? 'comic' : 'linear';
+  return s === 'comic' || s === 'comic_chunks' ? s : 'linear';
 }
 
 /** Per-project Flux base UNET (graphic_novel_flux). '' = use the workflow default. */
@@ -55,6 +92,20 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
   const [styleLoras, setStyleLoras]           = useState<StyleLoraItem[]>([]);
   const [styleLora, setStyleLora]             = useState<string>('');
   const [initialStyleLora, setInitialStyleLora] = useState<string>('');
+
+  // Strength of that LoRA. '' = render default (1.0). Lower values let the
+  // anchor references show through instead of being repainted by the LoRA.
+  const [styleLoraStrength, setStyleLoraStrength]             = useState<string>('');
+  const [initialStyleLoraStrength, setInitialStyleLoraStrength] = useState<string>('');
+
+  // Whether anchor references also enter the conditioning as reference_latents
+  // (the near-pixel appearance channel) on the Qwen graphs.
+  const [refLatents, setRefLatents]             = useState<RefLatents>('default');
+  const [initialRefLatents, setInitialRefLatents] = useState<RefLatents>('default');
+
+  // Sampler steps for scene renders. '' = whatever the workflow JSON ships.
+  const [sceneSteps, setSceneSteps]             = useState<string>('');
+  const [initialSceneSteps, setInitialSceneSteps] = useState<string>('');
 
   // Shot-boundary transition preset for the CapCut export. '' default rotation
   // vs 'comic' (Comic Tear 90% / Sticker 5% / Glitch Collage 5%).
@@ -87,6 +138,15 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
         const cur = styleLoraNameOf(proj.settings);
         setStyleLora(cur);
         setInitialStyleLora(cur);
+        const curStrength = styleLoraStrengthOf(proj.settings);
+        setStyleLoraStrength(curStrength);
+        setInitialStyleLoraStrength(curStrength);
+        const curRefLatents = refLatentsOf(proj.settings);
+        setRefLatents(curRefLatents);
+        setInitialRefLatents(curRefLatents);
+        const curSteps = sceneStepsOf(proj.settings);
+        setSceneSteps(curSteps);
+        setInitialSceneSteps(curSteps);
         const curPreset = transitionPresetOf(proj.settings);
         setTransitionPreset(curPreset);
         setInitialTransitionPreset(curPreset);
@@ -128,6 +188,9 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
   const dirty =
     Object.keys(draft).length > 0
     || styleLora !== initialStyleLora
+    || styleLoraStrength !== initialStyleLoraStrength
+    || refLatents !== initialRefLatents
+    || sceneSteps !== initialSceneSteps
     || transitionPreset !== initialTransitionPreset
     || fluxBase !== initialFluxBase
     || exportType !== initialExportType
@@ -157,19 +220,34 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
       // Empty/default values clear the key (falls back to JSON/export default).
       if (
         styleLora !== initialStyleLora
+        || styleLoraStrength !== initialStyleLoraStrength
+        || refLatents !== initialRefLatents
+    || sceneSteps !== initialSceneSteps
         || transitionPreset !== initialTransitionPreset
         || fluxBase !== initialFluxBase
         || exportType !== initialExportType
       ) {
         const base = (project.settings as Record<string, unknown> | null) ?? {};
         const nextSettings = { ...base };
-        if (styleLora) nextSettings.styleLora = { name: styleLora };
-        else delete nextSettings.styleLora;
+        if (styleLora) {
+          // Carry the strength alongside the name — rebuilding the key as
+          // `{ name }` alone is what used to reset a tuned strength to 1.0.
+          const strength = Number.parseFloat(styleLoraStrength);
+          nextSettings.styleLora = Number.isFinite(strength)
+            ? { name: styleLora, strengthModel: strength }
+            : { name: styleLora };
+        } else delete nextSettings.styleLora;
+        if (refLatents === 'on')       nextSettings.qwenReferenceLatents = true;
+        else if (refLatents === 'off') nextSettings.qwenReferenceLatents = false;
+        else delete nextSettings.qwenReferenceLatents;
+        const steps = Number.parseInt(sceneSteps, 10);
+        if (Number.isFinite(steps) && steps >= 1 && steps <= 60) nextSettings.sceneSteps = steps;
+        else delete nextSettings.sceneSteps;
         if (transitionPreset === 'comic') nextSettings.transitionPreset = 'comic';
         else delete nextSettings.transitionPreset;
         if (fluxBase.trim()) nextSettings.fluxBaseModel = fluxBase.trim();
         else delete nextSettings.fluxBaseModel;
-        if (exportType === 'comic') nextSettings.exportType = 'comic';
+        if (exportType === 'comic' || exportType === 'comic_chunks') nextSettings.exportType = exportType;
         else delete nextSettings.exportType;
         promptPatch.settings = nextSettings;
       }
@@ -178,6 +256,9 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
         nextProject = await api.updateProject(project.id, promptPatch);
       }
       setInitialStyleLora(styleLora);
+      setInitialStyleLoraStrength(styleLoraStrength);
+      setInitialRefLatents(refLatents);
+      setInitialSceneSteps(sceneSteps);
       setInitialTransitionPreset(transitionPreset);
       setInitialFluxBase(fluxBase);
       setInitialExportType(exportType);
@@ -265,6 +346,45 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
           </Row>
         )}
 
+        {effStyle !== 'photoreal_cinematic' && styleLora !== '' && (
+          <Row
+            label="Сила стилевой LoRA"
+            hint="project.settings.styleLora.strengthModel — насколько сильно стилевая LoRA перерисовывает кадр. Пусто = 1.0 (полная сила). Чем ниже, тем больше проступает манера рисунка ЯКОРЕЙ вместо стиля LoRA: на 0 LoRA не работает вообще и стиль целиком приходит с якорей, на 0.5 — смесь. Работает только вместе с включённым пиксельным каналом якоря (поле ниже), иначе якорь стиль не отдаёт. Разово можно переопределить на один рендер параметром loraStrength.">
+            <input
+              type="number" min={0} max={2} step={0.05}
+              value={styleLoraStrength}
+              onChange={(e) => setStyleLoraStrength(e.target.value)}
+              placeholder="1.0 (по умолчанию)"
+              className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm font-mono" />
+          </Row>
+        )}
+
+        <Row
+          label="Шагов сэмплера (рендер кадра)"
+          hint="project.settings.sceneSteps — сколько шагов делает KSampler на рендере КАДРА (видео и якорей не касается). Пусто = значение из воркфлоу (на квене 4 — под Lightning-LoRA). Больше шагов = у модели больше места перерисовать сцену, а не вернуть референс, и картинка обычно богаче; платишь временем. Разово переопределяется параметром steps на конкретном рендере. Допустимо 1–60.">
+          <input
+            type="number" min={1} max={60} step={1}
+            value={sceneSteps}
+            onChange={(e) => setSceneSteps(e.target.value)}
+            placeholder="из воркфлоу (квен: 4)"
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm font-mono" />
+        </Row>
+
+        {QWEN_GRAPH_STYLES.has(effStyle) && (
+          <Row
+            label="Якорь как пиксельная референс (Qwen)"
+            hint="project.settings.qwenReferenceLatents — второй канал, которым якорь входит в квен. ВЫКЛЮЧЕН: якорь идёт только через VL-энкодер в 384×384 — это «кто это, во что одет», манера рисунка НЕ передаётся, стиль кадра целиком за стилевой LoRA. ВКЛЮЧЁН: якорь дополнительно кодируется через VAE в 1024×1024 и подмешивается как reference_latents — почти пиксельно, поэтому дизайн персонажа сохраняется, но за ним могут протечь поза, крупность и фон якоря (портреты по пояс на бледной подложке — худший донор; лечится шагами 6–8 и промптом с действием и светом). «По умолчанию» = выключен для realcomic_qwen, включён для дуэт-оверлея на flux/cell-shaded.">
+            <select
+              value={refLatents}
+              onChange={(e) => setRefLatents(e.target.value as RefLatents)}
+              className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
+              <option value="default">По умолчанию (по стилю)</option>
+              <option value="on">Включён — дизайн из якоря, риск протечки позы/фона</option>
+              <option value="off">Выключен — только личность, стиль от LoRA</option>
+            </select>
+          </Row>
+        )}
+
         {effStyle === 'graphic_novel_flux' && (
           <Row
             label="Flux база (UNET)"
@@ -280,13 +400,14 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
 
         <Row
           label="Тип экспорта (CapCut)"
-          hint="project.settings.exportType — как собирается CapCut-драфт на шаге «Экспорт в CapCut». «Линейный» = обычная лента шотов с простыми переходами. «Комикс» = фильм раскладывается на страницы-комиксы, камера летает по панелям (кейфреймы) с переворотами страниц. Комикс-экспорт МЕДЛЕННЫЙ (несколько минут) и пишет драфт прямо в папку CapCut — CapCut должен быть закрыт.">
+          hint="project.settings.exportType — как собирается CapCut-драфт на шаге «Экспорт в CapCut». «Линейный» = обычная лента шотов с простыми переходами. «Комикс» = фильм раскладывается на страницы-комиксы, камера летает по панелям (кейфреймы) с переворотами страниц, ОДНИМ драфтом. «Комикс по частям» = та же картинка, но нарезанная на несколько лёгких драфтов: полнометражный комикс весит ~200 МБ кейфреймов, CapCut открывает его минутами и часто падает. Каждую часть рендеришь в mp4 сам, потом указываешь пути — и собирается один финальный драфт, где видео плоское, а озвучка, музыка и субтитры живые (правишь один раз). Оба комикс-экспорта МЕДЛЕННЫЕ и пишут драфты прямо в папку CapCut — CapCut должен быть закрыт.">
           <select
             value={exportType}
             onChange={(e) => setExportType(e.target.value as ExportType)}
             className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
             <option value="linear">Линейный (простые переходы)</option>
             <option value="comic">Комикс (камера + переворот страниц)</option>
+            <option value="comic_chunks">Комикс по частям (лёгкие драфты + сборка)</option>
           </select>
         </Row>
 

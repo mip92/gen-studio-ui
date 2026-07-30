@@ -43,3 +43,4 @@ next-env.d.ts
 # local dev logs
 frontend_stdout.log
 frontend_stderr.log
+serve_frontend.log

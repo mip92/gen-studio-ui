@@ -123,10 +123,12 @@ function AssetRow({ label, href, item, state, hint }: {
   label: string; href: string; item?: LaunchItemView; state?: string; hint?: string;
 }) {
   const st = item
-    ? (item.uploaded ? '✓ залито (Unlisted)' : item.uploadError ? `✗ ${item.uploadError}` : item.uploadJobId ? '⏳ заливаю…'
+    ? (item.uploaded ? (item.thumbnailMissing ? '✓ залито · ⚠ без обложки' : '✓ залито (Unlisted)')
+        : item.uploadError ? `✗ ${item.uploadError}` : item.uploadJobId ? '⏳ заливаю…'
         : item.transcribeStatus === 'completed' ? 'субтитры ✓ — залей' : item.transcribeStatus ? '⏳ субтитры…' : '—')
     : (state ?? '—');
-  const color = item?.uploaded ? 'text-emerald-400' : item?.uploadError ? 'text-red-400' : 'text-zinc-400';
+  const color = item?.uploadError ? 'text-red-400'
+    : item?.uploaded ? (item.thumbnailMissing ? 'text-amber-400' : 'text-emerald-400') : 'text-zinc-400';
   return (
     <div className="flex items-center justify-between border border-zinc-800 rounded px-3 py-2 mb-1.5 text-sm">
       <a href={href} className="text-zinc-300 hover:text-blue-300 truncate">{label}</a>

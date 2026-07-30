@@ -596,7 +596,71 @@ export interface SceneSummary {
 /** `video_post` is the combined one-pass upscale->RIFE job. It replaced the old
  *  `video_upscale` + `video_interp` pair, which were two queue jobs for what is
  *  a single ComfyUI workflow. */
-export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_post' | 'tts' | 'bgm' | 'anchor' | 'validation' | 'anchor_validation' | 'caption';
+export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_post' | 'tts' | 'bgm' | 'anchor' | 'validation' | 'anchor_validation' | 'caption' | 'thumbnail' | 'thumbnail_ideas';
+
+/** Caption drawn by scripts/render_caption.py — every field is a real parameter
+ *  of the overlay, not a wish addressed to a diffusion model. */
+export interface CaptionSpec {
+  lines:         string[];      // 1-2 lines, ALL CAPS
+  accent_word?:  string;        // the ONE word that burns
+  accent_color?: string;        // #RRGGBB
+  position?:     'top' | 'center' | 'bottom';
+  align?:        'left' | 'center' | 'right';
+  width_pct?:    number;
+  font?:         string;
+  fill?:         string;
+  outline?:      string;
+  line_scale?:   number;
+  shadow?:       boolean;
+}
+
+export interface ThumbnailIdeaInput {
+  idea?:             string;
+  prompt:            string;
+  negative?:         string;
+  /** Whose anchors go in as image1..image3 — the model picks, max 3. */
+  refProfileCodes?:  string[];
+  /** Why those faces and that age, in the model's words. */
+  refReason?:        string;
+  batchSize?:        number;
+  /** Keep the anchor's pixel channel (likeness) — default true. */
+  referenceLatents?: boolean;
+  /** Caption the model proposed alongside the art. */
+  captionSpec?:      CaptionSpec;
+}
+
+/** One round of "let the model invent covers from the screenplay". */
+export interface ThumbnailIdeaJob {
+  id:           string;
+  projectId:    string;
+  count:        number;
+  status:       'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  result:       ThumbnailIdeaInput[] | null;
+  errorMessage: string | null;
+  queuedAt:     string;
+  completedAt:  string | null;
+}
+
+/** One IDEA rendered as a batch of candidates. A project accumulates many. */
+export interface ThumbnailJob {
+  id:              string;
+  projectId:       string;
+  status:          'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  idea:            string | null;
+  prompt:          string;
+  negative:        string | null;
+  batchSize:       number;
+  candidates:      string[] | null;
+  chosenFilename:  string | null;
+  refProfileCodes: string[];
+  referenceLatents: boolean | null;
+  captionSpec:     CaptionSpec | null;
+  artPath:         string | null;
+  outputPath:      string | null;
+  errorMessage:    string | null;
+  queuedAt:        string;
+  completedAt:     string | null;
+}
 
 /** Wire format from /pipeline/queue rows - one row per attempt at one unit of
  *  work, straight out of the queue ledger. Backend pairs slug + UUID so
@@ -1098,6 +1162,76 @@ export const api = {
   // reusable description of a key story object (token, scarf, thermos, tiles…). On a
   // prop-hero shot the renderer makes the object dominate the frame so it actually
   // gets drawn instead of "just a room".
+  // ── Thumbnail workshop ─────────────────────────────────────────────────────
+  // A POOL of cover concepts, not one cover: each job is one idea rendered as a
+  // batch of candidates, `enqueueThumbnailIdeas` can be called repeatedly to top
+  // the pool up, and exactly one candidate is finally chosen and captioned.
+  listThumbnailJobs: (projectId: string) =>
+    http<ThumbnailJob[]>(`/projects/${projectId}/thumbnail`),
+
+  /** Ask the local model for concepts. Queued (Ollama needs the whole card), so
+   *  this returns a job — the proposals arrive in `listThumbnailProposals`. */
+  proposeThumbnailIdeas: (projectId: string, count = 6) =>
+    http<ThumbnailIdeaJob>(`/projects/${projectId}/thumbnail/propose`, {
+      method: 'POST',
+      body:   JSON.stringify({ count }),
+    }),
+
+  listThumbnailProposals: (projectId: string) =>
+    http<ThumbnailIdeaJob[]>(`/projects/${projectId}/thumbnail/proposals`),
+
+  /** Drop one proposed concept. Rounds accumulate; nothing else removes them. */
+  deleteProposedIdea: (projectId: string, jobId: string, index: number) =>
+    http<ThumbnailIdeaJob>(`/projects/${projectId}/thumbnail/proposals/${jobId}/ideas/${index}`, {
+      method: 'DELETE',
+    }),
+
+  enqueueThumbnailIdeas: (projectId: string, ideas: ThumbnailIdeaInput[]) =>
+    http<ThumbnailJob[]>(`/projects/${projectId}/thumbnail/ideas`, {
+      method: 'POST',
+      body:   JSON.stringify({ ideas }),
+    }),
+
+  /** Promote one candidate to the cover and draw the caption on it. No GPU —
+   *  safe to call again and again while wording the hook. */
+  chooseThumbnail: (
+    projectId: string,
+    body: { jobId: string; filename: string; captionSpec?: CaptionSpec },
+  ) =>
+    http<ThumbnailJob>(`/projects/${projectId}/thumbnail/choose`, {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  /** Render more frames for an idea, appended to the ones it already has. */
+  addMoreThumbnails: (projectId: string, jobId: string, count = 5) =>
+    http<ThumbnailJob>(`/projects/${projectId}/thumbnail/jobs/${jobId}/more`, {
+      method: 'POST',
+      body:   JSON.stringify({ count }),
+    }),
+
+  /** Stop a queued/rendering idea — keeps the row and whatever it produced. */
+  cancelThumbnailJob: (projectId: string, jobId: string) =>
+    http<ThumbnailJob>(`/projects/${projectId}/thumbnail/jobs/${jobId}/cancel`, { method: 'POST' }),
+
+  /** Delete an idea outright: the prompt and every frame it produced. */
+  deleteThumbnailJob: (projectId: string, jobId: string) =>
+    http<{ deleted: string; files: number }>(`/projects/${projectId}/thumbnail/jobs/${jobId}`, { method: 'DELETE' }),
+
+  /** Delete one frame from the pool. */
+  deleteThumbnailCandidate: (projectId: string, jobId: string, filename: string) =>
+    http<ThumbnailJob>(
+      `/projects/${projectId}/thumbnail/jobs/${jobId}/candidates/${encodeURIComponent(filename)}`,
+      { method: 'DELETE' },
+    ),
+
+  thumbnailCandidateUrl: (projectId: string, jobId: string, filename: string) =>
+    `${MEDIA_BASE}/projects/${projectId}/thumbnail/jobs/${jobId}/candidates/${encodeURIComponent(filename)}/raw`,
+
+  /** Cache-busted: recaptioning rewrites the same path. */
+  thumbnailCoverUrl: (projectId: string, bust?: string | number) =>
+    `${MEDIA_BASE}/projects/${projectId}/thumbnail/cover/raw${bust ? `?v=${bust}` : ''}`,
+
   listProps: (projectId: string) =>
     http<Prop[]>(`/projects/${projectId}/props`),
 
@@ -1569,11 +1703,56 @@ export const api = {
     return JSON.parse(await res.text()) as { draft_name: string; spreads: number; status: string };
   },
 
-  /** Poll a comic build (started by exportComic). `done` flips true once the draft
-   *  is written into CapCut. Quick call — goes through the /api proxy. */
-  comicStatus: (idOrSlug: string, name: string) =>
-    http<{ done: boolean; building: boolean; rendered: number; total: number }>(
-      `/projects/${idOrSlug}/export/comic/status?name=${encodeURIComponent(name)}`,
+  /** Start the CHUNKED comic build: the film is sliced into several small drafts
+   *  (~4 spreads each) so CapCut can actually open them, rendered detached. Same
+   *  DIRECT_API_BASE reasoning as exportComic — the manifest+slice step is quick but
+   *  still beyond the proxy's comfort zone on a long film. */
+  exportComicChunks: async (idOrSlug: string, perChunk?: number): Promise<{
+    chunks: ComicChunk[]; status: string;
+  }> => {
+    const res = await fetch(`${DIRECT_API_BASE}/projects/${idOrSlug}/export/comic/chunks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(perChunk ? { perChunk } : {}),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`${res.status} ${res.statusText}: ${text.slice(0, 200)}`);
+    }
+    return JSON.parse(await res.text()) as { chunks: ComicChunk[]; status: string };
+  },
+
+  /** Poll the chunked build: the plan plus, per chunk, whether its draft exists yet
+   *  (which is what makes that chunk exportable to mp4). */
+  comicChunksStatus: (idOrSlug: string) =>
+    http<{
+      chunks: (ComicChunk & { drafted: boolean })[];
+      building: boolean; done: boolean; drafted: number; total: number;
+    }>(`/projects/${idOrSlug}/export/comic/chunks/status`),
+
+  /** Assemble the final draft from the mp4s rendered out of each chunk. Quick — it
+   *  only measures durations and writes JSON, so the proxy timeout is not a concern. */
+  assembleComicChunks: (idOrSlug: string, files: { part: number; path: string }[]) =>
+    http<{ draft_name: string; draft_path: string }>(
+      `/projects/${idOrSlug}/export/comic/assemble`,
+      { method: 'POST', body: JSON.stringify({ files }) },
+    ),
+
+  /** Poll a comic build. `done` flips true once the draft is written into CapCut.
+   *  `name` is optional: without it the backend reports the CURRENT build from the
+   *  manifest, so a page that did not start the build still sees its progress.
+   *  Quick call — goes through the /api proxy. */
+  comicStatus: (idOrSlug: string, name?: string) =>
+    http<{
+      done: boolean; building: boolean; rendered: number; total: number; draftName: string;
+      /** Two render phases: spreads, then one page turn per boundary. */
+      spreads: number; spreadsTotal: number; turns: number; turnsTotal: number;
+      phase: 'spreads' | 'turns' | 'draft' | 'done';
+      /** Across BOTH phases — spreads alone reach 100% at roughly half the work. */
+      percent: number;
+    }>(
+      `/projects/${idOrSlug}/export/comic/status${name ? `?name=${encodeURIComponent(name)}` : ''}`,
     ),
 
   // ── YouTube-Shorts export ───────────────────────────────────────────────────
@@ -1734,6 +1913,17 @@ export const api = {
   /** Per-asset: upload ONE item as Unlisted. */
   uploadLaunchItem: (idOrSlug: string, key: string) =>
     http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/upload-item/${encodeURIComponent(key)}`, { method: 'POST' }),
+  /** Confirm the cover was set by hand in Studio (the only path for a cover over
+   *  the API's 2MB cap — we don't re-encode the artwork). On trust. */
+  confirmLaunchThumbnailManual: (idOrSlug: string, key: string) =>
+    http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/thumbnail-manual/${encodeURIComponent(key)}`, { method: 'POST' }),
+  /** Send the cover of an already-uploaded item through the API (needs ≤2MB).
+   *  Pass `thumbPath` to swap in a different image. */
+  retryLaunchThumbnail: (idOrSlug: string, key: string, thumbPath?: string) =>
+    http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/thumbnail/${encodeURIComponent(key)}`, {
+      method: 'POST',
+      body:   JSON.stringify(thumbPath ? { thumbPath } : {}),
+    }),
   /** Remove ONE item from the bundle. */
   removeLaunchItem: (idOrSlug: string, key: string) =>
     http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/remove-item/${encodeURIComponent(key)}`, { method: 'POST' }),
@@ -1909,6 +2099,16 @@ export const api = {
 
   // ── BGM (ACE-Step background music) ────────────────────────────────────
 
+  /** Valid ACE-Step metadata values, straight from the ComfyUI node's combo
+   *  options. Fetch instead of hardcoding: an unknown keyscale fails the whole
+   *  ComfyUI prompt, and the render queue is single-slot. */
+  bgmMetaOptions: () =>
+    http<{
+      bpm:            { min: number; max: number };
+      keyscales:      string[];
+      timesignatures: string[];
+    }>(`/bgm/meta-options`),
+
   listBlocks: (projectId: string) =>
     http<NarrativeBlock[]>(`/bgm/projects/${projectId}/blocks`),
 
@@ -1918,7 +2118,7 @@ export const api = {
     sortOrder?:  number;
     moodPrompt?: string;
     shotIds:     string[];
-  }) =>
+  } & MusicMetas) =>
     http<NarrativeBlock>(`/bgm/projects/${projectId}/blocks`, {
       method: 'POST',
       body:   JSON.stringify(body),
@@ -1933,7 +2133,7 @@ export const api = {
     moodPrompt?: string | null;
     shotIds?:    string[];
     status?:     'filling' | 'filled' | 'manual';
-  }) =>
+  } & MusicMetas) =>
     http<NarrativeBlock>(`/bgm/blocks/${blockId}`, {
       method: 'PATCH',
       body:   JSON.stringify(body),
@@ -1959,9 +2159,23 @@ export const api = {
     prompt?:      string | null;
     durationSec?: number;
     sortOrder?:   number;
-  }) =>
+  } & MusicMetas) =>
     http<MusicSegment>(`/bgm/segments`, {
       method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  /** Patch one tile. Each meta: a value overrides the block, `null` inherits it.
+   *  Changing `prompt` clears the segment's approval server-side — the approved
+   *  flac no longer matches the prompt. */
+  updateSegment: (segmentId: string, body: {
+    prompt?:      string | null;
+    durationSec?: number;
+    sortOrder?:   number;
+    spare?:       boolean;
+  } & MusicMetas) =>
+    http<MusicSegment>(`/bgm/segments/${segmentId}`, {
+      method: 'PATCH',
       body:   JSON.stringify(body),
     }),
 
@@ -1984,7 +2198,7 @@ export const api = {
     samplerName?: string;
     scheduler?:   string;
     count?:       number;
-  } = {}) =>
+  } & MusicMetas = {}) =>
     http<AudioRenderJob[]>(`/bgm/segments/${segmentId}/render`, {
       method: 'POST',
       body:   JSON.stringify(body),
@@ -2012,6 +2226,21 @@ export const api = {
 
 export type TTSVoice      = 'aidar' | 'baya' | 'kseniya' | 'xenia' | 'eugene' | 'ruslan' | 'random';
 export type TTSSampleRate = 8000 | 24000 | 48000;
+
+/** One chunk of the film in the `comic_chunks` export. */
+export interface ComicChunk {
+  part: number;
+  of: number;
+  draft_name: string;
+  spread_from: number;
+  spread_to: number;
+  spreads: number;
+  /** Where the chunk starts on the FILM timeline (µs) — the anchor the assembler
+   *  uses to re-place audio once the real mp4 durations are known. */
+  film_offset_us: number;
+  expected_us: number;
+  ends_on_turn: boolean;
+}
 
 export interface CapcutReadiness {
   ready: boolean;
@@ -2088,6 +2317,8 @@ export interface YoutubeUploadResult {
   publishAt:        string | null;
   containsSyntheticMedia: boolean;
   thumbnailSet:     boolean;
+  /** Why the cover didn't stick (null when it did / none was given). */
+  thumbnailError:   string | null;
   /** null = no playlist requested; true/false = add outcome. */
   playlistAdded:    boolean | null;
   markedPublished:  boolean;
@@ -2122,6 +2353,11 @@ export interface LaunchItemView {
   transcribeStatus: string | null;   // pending|running|completed|failed|null
   uploaded:         boolean;
   uploadError:      string | null;
+  /** Uploaded with a cover given, but it isn't on YouTube yet — fix before publishing. */
+  thumbnailMissing: boolean;
+  thumbnailError:   string | null;
+  /** Cover exceeds the API's 2MB cap — Studio (50MB) is the only path for it. */
+  thumbnailTooBig:  boolean;
 }
 export interface LaunchView {
   items:           LaunchItemView[];
@@ -2219,7 +2455,26 @@ export interface VideoRender {
 
 // ── BGM (ACE-Step background music) ──────────────────────────────────────
 
-export interface NarrativeBlock {
+/**
+ * ACE-Step 1.5 metadata conditioning. These are NOT cosmetic: the ComfyUI
+ * tokenizer appends them to the model prompt as a labelled `# Metas` block, so
+ * a caption that also names its own tempo or key contradicts them and the beat
+ * ends up belonging to neither — the cause of the reported «битый ритм».
+ *
+ * Tempo/key/metre live here; the caption stays prose. Every field is nullable:
+ * null = inherit (segment → block → workflow template default).
+ * Prompt-writing rules: Skill(gen-studio-acestep).
+ */
+export interface MusicMetas {
+  /** 10–300. Slow 60–80, mid 90–120, fast 130–180. */
+  bpm?:           number | null;
+  /** "<Root> major|minor", lowercase quality: "A minor", "Eb major". Not "Am". */
+  keyscale?:      string | null;
+  /** Bare digit: '2' | '3' | '4' | '6'. Not "4/4". */
+  timesignature?: string | null;
+}
+
+export interface NarrativeBlock extends MusicMetas {
   id:            string;
   projectId:     string;
   slug:          string;
@@ -2236,7 +2491,7 @@ export interface NarrativeBlock {
   segments?:     MusicSegment[];
 }
 
-export interface MusicSegment {
+export interface MusicSegment extends MusicMetas {
   id:            string;
   blockId:       string;
   sortOrder:     number;

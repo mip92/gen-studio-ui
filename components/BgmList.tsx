@@ -14,9 +14,35 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, NarrativeBlock, MusicSegment, AudioRenderJob } from '../lib/api';
 
+/** Valid ACE-Step meta values, fetched from the backend (which mirrors the
+ *  ComfyUI node's combo options). Null until the fetch lands. */
+type MetaOptions = {
+  bpm:            { min: number; max: number };
+  keyscales:      string[];
+  timesignatures: string[];
+};
+
+/**
+ * Does this caption still state a tempo, key or metre in its text, where it
+ * fights the `# Metas` block the tokenizer appends? Advisory only — never blocks
+ * a save. Twin of `captionMetaConflicts()` in the backend's bgm.types.ts; keep
+ * the two in step (there is no shared module between the API and this app).
+ */
+function captionMetaConflicts(prompt: string): string[] {
+  const found: string[] = [];
+  const bpm = prompt.match(/\b\d{2,3}\s?bpm\b/i);
+  if (bpm) found.push(`темп в тексте («${bpm[0]}») — перенесите в поле bpm`);
+  const key = prompt.match(/\b[A-G](?:\s?(?:#|b|sharp|flat))?\s+(?:major|minor)\b/);
+  if (key) found.push(`тональность в тексте («${key[0]}») — перенесите в поле keyscale`);
+  const ts = prompt.match(/\b[2-9]\s?\/\s?[248]\b/);
+  if (ts) found.push(`размер в тексте («${ts[0]}») — перенесите в поле размера`);
+  return found;
+}
+
 export function BgmList({ projectId }: { projectId: string }) {
   const [blocks, setBlocks] = useState<NarrativeBlock[] | null>(null);
   const [error,  setError]  = useState<string | null>(null);
+  const [opts,   setOpts]   = useState<MetaOptions | null>(null);
 
   const refresh = useCallback(() => {
     api.listBlocks(projectId)
@@ -29,6 +55,13 @@ export function BgmList({ projectId }: { projectId: string }) {
     const t = setInterval(refresh, 5000);
     return () => clearInterval(t);
   }, [refresh]);
+
+  // Option lists never change at runtime — fetch once, not on the 5s poll.
+  useEffect(() => {
+    api.bgmMetaOptions()
+      .then(setOpts)
+      .catch(() => { /* selects fall back to a free-text input */ });
+  }, []);
 
   if (error) {
     return (
@@ -56,16 +89,122 @@ export function BgmList({ projectId }: { projectId: string }) {
 
       <div className="space-y-6">
         {blocks.map((b) => (
-          <BlockCard key={b.id} block={b} onChanged={refresh} />
+          <BlockCard key={b.id} block={b} opts={opts} onChanged={refresh} />
         ))}
       </div>
     </main>
   );
 }
 
+// ─── Shared meta editor ─────────────────────────────────────────────────────
+//
+// One row of tempo / key / metre controls, used at both the act level and the
+// tile level. An empty value means "not set": at act level that leaves the
+// workflow template's own default (120 / A minor / 4) in place, at tile level it
+// inherits the act. Nothing is defaulted eagerly, so an act nobody has tuned
+// keeps rendering exactly as it did before these fields existed.
+
+type MetaDraft = { bpm: string; keyscale: string; timesignature: string };
+
+/** The node's `timesignature` combo holds a bare numerator; these are the metres
+ *  those numerators mean. '4' is by far the most stable. */
+const TIMESIG_LABELS: Record<string, string> = { '2': '2/4', '3': '3/4', '4': '4/4', '6': '6/8' };
+
+function metaDraftFrom(src: { bpm?: number | null; keyscale?: string | null; timesignature?: string | null }): MetaDraft {
+  return {
+    bpm:           src.bpm == null ? '' : String(src.bpm),
+    keyscale:      src.keyscale ?? '',
+    timesignature: src.timesignature ?? '',
+  };
+}
+
+/** Draft → PATCH body. Empty string becomes null (explicitly clears the field). */
+function metaBodyFrom(d: MetaDraft) {
+  const n = Number(d.bpm);
+  return {
+    bpm:           d.bpm.trim() === '' || !Number.isFinite(n) ? null : Math.round(n),
+    keyscale:      d.keyscale      === '' ? null : d.keyscale,
+    timesignature: d.timesignature === '' ? null : d.timesignature,
+  };
+}
+
+function metaDraftEquals(a: MetaDraft, b: MetaDraft): boolean {
+  return a.bpm === b.bpm && a.keyscale === b.keyscale && a.timesignature === b.timesignature;
+}
+
+function MetaFields({
+  draft,
+  opts,
+  disabled,
+  emptyLabel,
+  onChange,
+}: {
+  draft:      MetaDraft;
+  opts:       MetaOptions | null;
+  disabled:   boolean;
+  /** Label for the "not set" option — "шаблон (120)" on an act, "как в акте" on a tile. */
+  emptyLabel: string;
+  onChange:   (next: MetaDraft) => void;
+}) {
+  const sel = 'text-xs bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-zinc-200 font-mono disabled:text-zinc-600';
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <label className="flex items-center gap-1.5" title="Темп. ACE-Step считает его опорной точкой, итог гуляет на ±2–4. Медленно 60–80, средне 90–120, быстро 130–180.">
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500">bpm</span>
+        <input
+          type="number"
+          min={opts?.bpm.min ?? 10}
+          max={opts?.bpm.max ?? 300}
+          value={draft.bpm}
+          disabled={disabled}
+          placeholder={emptyLabel}
+          onChange={(e) => onChange({ ...draft, bpm: e.target.value })}
+          className={`w-24 text-center ${sel}`}
+        />
+      </label>
+
+      <label className="flex items-center gap-1.5" title="Тональность. Значения — ровно из combo-списка ноды: «A minor», «Eb major». «Am» нода не примет.">
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500">key</span>
+        <select
+          value={draft.keyscale}
+          disabled={disabled}
+          onChange={(e) => onChange({ ...draft, keyscale: e.target.value })}
+          className={sel}
+        >
+          <option value="">{emptyLabel}</option>
+          {(opts?.keyscales ?? []).map((k) => (
+            <option key={k} value={k}>{k}</option>
+          ))}
+          {/* An existing value the option list doesn't contain (older row, hand-edited
+              SQL) must stay visible, or opening this select would silently drop it. */}
+          {draft.keyscale !== '' && !(opts?.keyscales ?? []).includes(draft.keyscale) && (
+            <option value={draft.keyscale}>{draft.keyscale} (не из списка!)</option>
+          )}
+        </select>
+      </label>
+
+      <label className="flex items-center gap-1.5" title="Размер. Нода принимает только цифру: 2, 3, 4, 6. «4/4» — невалидное значение combo.">
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500">размер</span>
+        <select
+          value={draft.timesignature}
+          disabled={disabled}
+          onChange={(e) => onChange({ ...draft, timesignature: e.target.value })}
+          className={sel}
+        >
+          <option value="">{emptyLabel}</option>
+          {(opts?.timesignatures ?? ['2', '3', '4', '6']).map((t) => (
+            // The node stores a bare numerator; show the metre it stands for.
+            <option key={t} value={t}>{TIMESIG_LABELS[t] ?? t}</option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
 // ─── Block card ─────────────────────────────────────────────────────────────
 
-function BlockCard({ block, onChanged }: { block: NarrativeBlock; onChanged: () => void }) {
+function BlockCard({ block, opts, onChanged }: { block: NarrativeBlock; opts: MetaOptions | null; onChanged: () => void }) {
   const segments  = block.segments ?? [];
   const mains     = segments.filter((s) => !s.spare);
   const spares    = segments.filter((s) =>  s.spare);
@@ -76,6 +215,7 @@ function BlockCard({ block, onChanged }: { block: NarrativeBlock; onChanged: () 
   const tiled     = wantMain > 0 && mains.length >= wantMain && spares.length >= 2;
 
   const [prompt, setPrompt]     = useState(block.moodPrompt ?? '');
+  const [metas,  setMetas]      = useState<MetaDraft>(() => metaDraftFrom(block));
   const [dirty,  setDirty]      = useState(false);
   const [busy,   setBusy]       = useState(false);
 
@@ -83,11 +223,19 @@ function BlockCard({ block, onChanged }: { block: NarrativeBlock; onChanged: () 
   useEffect(() => {
     if (!dirty) setPrompt(block.moodPrompt ?? '');
   }, [block.moodPrompt, dirty]);
+  useEffect(() => {
+    if (!dirty) setMetas(metaDraftFrom(block));
+  }, [block.bpm, block.keyscale, block.timesignature, dirty]);
 
+  const conflicts = captionMetaConflicts(prompt);
+
+  /** Caption and metas go in ONE patch — they are two halves of the same prompt
+   *  and saving them separately would leave the model contradicting itself for
+   *  as long as the user takes to press the second button. */
   const savePrompt = async () => {
     setBusy(true);
     try {
-      await api.updateBlock(block.id, { moodPrompt: prompt });
+      await api.updateBlock(block.id, { moodPrompt: prompt, ...metaBodyFrom(metas) });
       setDirty(false);
       onChanged();
     } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
@@ -133,15 +281,40 @@ function BlockCard({ block, onChanged }: { block: NarrativeBlock; onChanged: () 
         {/* Mood prompt editor */}
         <div>
           <label className="block text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
-            Mood-промпт (английский, ACE-Step теги)
+            Mood-промпт (английский, ACE-Step теги) — жанр, ударные, инструменты, настроение, продакшн
           </label>
           <textarea
             value={prompt}
             onChange={(e) => { setPrompt(e.target.value); setDirty(true); }}
             rows={3}
             className="w-full font-mono text-xs bg-zinc-950 border border-zinc-800 rounded p-2 text-zinc-200 focus:outline-none focus:border-zinc-600"
-            placeholder="dark synthwave, industrial, 100 bpm, …"
+            placeholder="neoclassical chamber lament, no drums, solo cello, sparse felt piano, grief with the ceremony done properly, hall reverb, instrumental, no vocals"
           />
+
+          {/* Tempo / key / metre. The tokenizer hands these to the model as a
+              separate "# Metas" block, so they belong here and NOT in the
+              caption above — see Skill(gen-studio-acestep). */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+            <MetaFields
+              draft={metas}
+              opts={opts}
+              disabled={busy}
+              emptyLabel="шаблон"
+              onChange={(next) => { setMetas(next); setDirty(true); }}
+            />
+            <span className="text-[10px] text-zinc-600">
+              «шаблон» = как раньше (120 · A minor · 4/4)
+            </span>
+          </div>
+
+          {conflicts.length > 0 && (
+            <div className="mt-2 text-[10px] text-amber-300/90 bg-amber-950/30 border border-amber-900/60 rounded px-2 py-1.5 space-y-0.5">
+              {conflicts.map((c) => <div key={c}>⚠ {c}</div>)}
+              <div className="text-amber-200/60">
+                Темп и тональность ACE-Step получает отдельным блоком — цифра в тексте спорит с ним, и ритм выходит ничей.
+              </div>
+            </div>
+          )}
           <div className="mt-2 flex items-center justify-between">
             <div className="text-[10px] text-zinc-500">
               {dirty ? 'не сохранено' : ' '}
@@ -178,7 +351,8 @@ function BlockCard({ block, onChanged }: { block: NarrativeBlock; onChanged: () 
               <SegmentRow
                 key={seg.id}
                 segment={seg}
-                blockMoodPrompt={block.moodPrompt}
+                block={block}
+                opts={opts}
                 onChanged={onChanged}
               />
             ))}
@@ -193,13 +367,17 @@ function BlockCard({ block, onChanged }: { block: NarrativeBlock; onChanged: () 
 
 function SegmentRow({
   segment,
-  blockMoodPrompt,
+  block,
+  opts,
   onChanged,
 }: {
-  segment:         MusicSegment;
-  blockMoodPrompt: string | null;
-  onChanged:       () => void;
+  segment:   MusicSegment;
+  /** Parent act — supplies the inherited caption and the inherited metas. */
+  block:     NarrativeBlock;
+  opts:      MetaOptions | null;
+  onChanged: () => void;
 }) {
+  const blockMoodPrompt = block.moodPrompt;
   const jobs = segment.jobs ?? [];
   const approved   = jobs.find((j) => j.id === segment.approvedJobId);
   const inFlight   = jobs.find((j) => j.status === 'pending' || j.status === 'running');
@@ -218,6 +396,7 @@ function SegmentRow({
   const selected = selectedJobId ? jobs.find((j) => j.id === selectedJobId) ?? null : null;
 
   const [override,    setOverride]   = useState(segment.prompt ?? '');
+  const [segMetas,    setSegMetas]   = useState<MetaDraft>(() => metaDraftFrom(segment));
   const [dirty,       setDirty]      = useState(false);
   const [busy,        setBusy]       = useState(false);
   // Per-render duration override. Defaults to segment.durationSec; user can
@@ -227,15 +406,25 @@ function SegmentRow({
   const [secStr, setSecStr] = useState(String(segment.durationSec));
   useEffect(() => { setSecStr(String(segment.durationSec)); }, [segment.durationSec]);
   useEffect(() => { if (!dirty) setOverride(segment.prompt ?? ''); }, [segment.prompt, dirty]);
+  useEffect(() => {
+    if (!dirty) setSegMetas(metaDraftFrom(segment));
+  }, [segment.bpm, segment.keyscale, segment.timesignature, dirty]);
 
+  /**
+   * Persist the tile's own caption + metas. An empty caption saves as null,
+   * which is meaningfully different from an empty string: null inherits the
+   * act's mood prompt, "" would render on the generic fallback tags.
+   */
   const savePrompt = async () => {
     setBusy(true);
     try {
-      // PATCH segment via createSegment? — no, we don't have an updateSegment endpoint.
-      // Use delete+create as fallback OR add an endpoint. For now, surface a TODO.
-      alert(
-        'Per-segment prompt editing API is not implemented yet. Edit the block-level mood prompt or call POST /bgm/segments/<id>/render with an inline "prompt" override per take.',
-      );
+      const trimmed = override.trim();
+      await api.updateSegment(segment.id, {
+        prompt: trimmed === '' ? null : trimmed,
+        ...metaBodyFrom(segMetas),
+      });
+      setDirty(false);
+      onChanged();
     } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
@@ -352,27 +541,45 @@ function SegmentRow({
         </div>
       </div>
 
-      {/* Override prompt (read-only for now until backend exposes PATCH) */}
-      {segment.prompt !== null && (
-        <details className="mt-2 text-xs">
-          <summary className="cursor-pointer text-zinc-500">override-промпт</summary>
-          <textarea
-            value={override}
-            onChange={(e) => { setOverride(e.target.value); setDirty(true); }}
-            rows={2}
-            className="mt-1 w-full font-mono text-xs bg-zinc-900 border border-zinc-800 rounded p-2 text-zinc-300"
+      {/* Per-tile override: caption + metas. Always available now that the
+          backend exposes PATCH /bgm/segments/:id — it used to be visible only
+          when a prompt already existed, which made an override impossible to
+          author in the first place. */}
+      <details className="mt-2 text-xs" open={dirty}>
+        <summary className="cursor-pointer text-zinc-500">
+          override плитки
+          {segment.prompt !== null && <span className="text-amber-400/80 ml-1">· свой промпт</span>}
+          {(segment.bpm != null || segment.keyscale || segment.timesignature) && (
+            <span className="text-amber-400/80 ml-1">· свой темп/ключ</span>
+          )}
+        </summary>
+        <textarea
+          value={override}
+          onChange={(e) => { setOverride(e.target.value); setDirty(true); }}
+          rows={2}
+          placeholder={`пусто = как в акте: ${(blockMoodPrompt ?? '').slice(0, 80) || '(у акта тоже пусто)'}`}
+          className="mt-1 w-full font-mono text-xs bg-zinc-900 border border-zinc-800 rounded p-2 text-zinc-300"
+        />
+        <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+          <MetaFields
+            draft={segMetas}
+            opts={opts}
+            disabled={busy}
+            emptyLabel="как в акте"
+            onChange={(next) => { setSegMetas(next); setDirty(true); }}
           />
-          <div className="mt-1 flex justify-end">
-            <button
-              onClick={savePrompt}
-              disabled={!dirty || busy}
-              className="text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-2 py-0.5 rounded"
-            >
-              сохранить
-            </button>
-          </div>
-        </details>
-      )}
+          <button
+            onClick={savePrompt}
+            disabled={!dirty || busy}
+            className="text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-2 py-0.5 rounded"
+          >
+            сохранить
+          </button>
+        </div>
+        {captionMetaConflicts(override).map((c) => (
+          <div key={c} className="mt-1 text-[10px] text-amber-300/90">⚠ {c}</div>
+        ))}
+      </details>
 
       {/* Player + take selector */}
       {completed.length > 0 && (
@@ -438,10 +645,20 @@ function SegmentRow({
         </div>
       ))}
 
-      {/* Effective prompt preview */}
+      {/* Effective prompt preview — caption AND metas, laid out the way the
+          ACE-Step tokenizer actually hands them to the model, so a contradiction
+          between the two is visible at a glance. */}
       <details className="mt-2 text-[10px] text-zinc-600">
         <summary className="cursor-pointer">эффективный промпт</summary>
-        <div className="mt-1 font-mono text-zinc-500 whitespace-pre-wrap">{effectivePrompt}</div>
+        <div className="mt-1 font-mono text-zinc-500 whitespace-pre-wrap">
+          {'# Caption\n'}
+          {effectivePrompt}
+          {'\n\n# Metas\n'}
+          {`- bpm: ${segment.bpm ?? block.bpm ?? '120 (шаблон)'}\n`}
+          {`- timesignature: ${segment.timesignature ?? block.timesignature ?? '4 (шаблон)'}\n`}
+          {`- keyscale: ${segment.keyscale ?? block.keyscale ?? 'A minor (шаблон)'}\n`}
+          {`- duration: ${segment.durationSec} seconds`}
+        </div>
       </details>
     </div>
   );
