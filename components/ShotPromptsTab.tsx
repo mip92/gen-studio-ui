@@ -225,7 +225,7 @@ export function ShotPromptsTab() {
                         onChange={(v) => updatePf({ negative: v })} />}
         </Field>
 
-        <Field label="Motion prompt (для видео i2v)" hint="Wan2.2 positive motion — fallback Project.defaultMotionPrompt если пусто. На быстром i2v (cfg=1.0) рулит ТОЛЬКО он, негатив инертен: для env-кадров обязательно 'no people, no figures'.">
+        <Field label="Motion prompt (для видео i2v)" hint="Wan2.2 positive motion — единственный работающий канал на быстром i2v (cfg=1.0), негатив инертен. Формула I2V = движение + камера, 30–60 слов; сцену НЕ пересказывать (она уже на картинке). Отрицания запрещены: вместо 'no people' → 'the place stays deserted'. Камеру называть ВСЕГДА, даже 'the camera stays fixed'.">
           {!editing ? <Value v={pf.motionPrompt as string | undefined} multi />
                     : <Textarea value={(dpf.motionPrompt as string | undefined) ?? ''} rows={3}
                         onChange={(v) => updatePf({ motionPrompt: v })} />}

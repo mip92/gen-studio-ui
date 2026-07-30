@@ -21,7 +21,7 @@ export function ShotVideosTab() {
   // Default = fast (4-step, no negative influence). cfg/auto are ~5× slower, so
   // they're an explicit opt-in — picking the slow path by default made routine
   // video renders crawl.
-  const [mode, setMode]                 = useState<'fast' | 'cfg' | 'distill'>('fast');
+  const [mode, setMode]                 = useState<'fast' | 'cfg'>('fast');
   const [videos, setVideos]             = useState<VideoRender[] | null>(null);
   const [busy, setBusy]                 = useState<false | 'start'>(false);
   const [error, setError]               = useState<string | null>(null);
@@ -188,7 +188,7 @@ export function ShotVideosTab() {
             режим
             <select
               value={mode}
-              onChange={(e) => setMode(e.target.value as 'fast' | 'cfg' | 'distill')}
+              onChange={(e) => setMode(e.target.value as 'fast' | 'cfg')}
               className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200"
             >
               <option value="fast">быстро (distill 4-step, ~2 мин, негатив НЕ работает)</option>
