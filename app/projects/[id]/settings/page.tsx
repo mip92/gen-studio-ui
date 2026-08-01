@@ -76,6 +76,41 @@ function fluxBaseOf(settings: unknown): string {
   return typeof s === 'string' ? s : '';
 }
 
+/** Desk-prop slots/items for the comic exports — mirror the registries in
+ *  gen-studio/scripts/comic_desk_props.py (SLOTS / ITEMS). The python side
+ *  validates against its registries, so an unknown key is silently dropped
+ *  there — keep the two lists in sync. */
+const DESK_SLOTS = [
+  { key: 'top_left',     label: 'верх · слева' },
+  { key: 'top_center',   label: 'верх · центр' },
+  { key: 'top_right',    label: 'верх · справа' },
+  { key: 'left',         label: 'слева' },
+  { key: 'right',        label: 'справа' },
+  { key: 'bottom_left',  label: 'низ · слева' },
+  { key: 'bottom_right', label: 'низ · справа' },
+] as const;
+const DESK_ITEMS = [
+  { key: 'spinner',    label: 'спиннер' },
+  { key: 'rubik',      label: 'кубик Рубика' },
+  { key: 'gum',        label: 'жвачка' },
+  { key: 'headphones', label: 'наушники' },
+  { key: 'phone',      label: 'телефон' },
+];
+
+/** project.settings.comicDeskProps ([{slot, item}]) → Record<slot, item>. */
+function deskPropsOf(settings: unknown): Record<string, string> {
+  const arr = (settings as { comicDeskProps?: unknown } | null | undefined)?.comicDeskProps;
+  const out: Record<string, string> = {};
+  if (Array.isArray(arr)) {
+    for (const e of arr) {
+      const slot = (e as { slot?: unknown } | null)?.slot;
+      const item = (e as { item?: unknown } | null)?.item;
+      if (typeof slot === 'string' && typeof item === 'string') out[slot] = item;
+    }
+  }
+  return out;
+}
+
 export default function ProjectSettingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
 
@@ -121,6 +156,10 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
   const [exportType, setExportType]             = useState<ExportType>('linear');
   const [initialExportType, setInitialExportType] = useState<ExportType>('linear');
 
+  // Desk props for the comic exports: slot → item ('' / absent = empty slot).
+  const [deskProps, setDeskProps]               = useState<Record<string, string>>({});
+  const [initialDeskProps, setInitialDeskProps] = useState<Record<string, string>>({});
+
   useEffect(() => {
     (async () => {
       try {
@@ -156,6 +195,9 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
         const curExport = exportTypeOf(proj.settings);
         setExportType(curExport);
         setInitialExportType(curExport);
+        const curDesk = deskPropsOf(proj.settings);
+        setDeskProps(curDesk);
+        setInitialDeskProps(curDesk);
         setStatus('idle');
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -194,6 +236,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
     || transitionPreset !== initialTransitionPreset
     || fluxBase !== initialFluxBase
     || exportType !== initialExportType
+    || JSON.stringify(deskProps) !== JSON.stringify(initialDeskProps)
     || scriptText !== (project ? '' : '') /* always allow script save */;
 
   const onChange = <K extends keyof UpdateProjectBody>(k: K, val: string) => {
@@ -226,6 +269,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
         || transitionPreset !== initialTransitionPreset
         || fluxBase !== initialFluxBase
         || exportType !== initialExportType
+        || JSON.stringify(deskProps) !== JSON.stringify(initialDeskProps)
       ) {
         const base = (project.settings as Record<string, unknown> | null) ?? {};
         const nextSettings = { ...base };
@@ -249,6 +293,13 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
         else delete nextSettings.fluxBaseModel;
         if (exportType === 'comic' || exportType === 'comic_chunks') nextSettings.exportType = exportType;
         else delete nextSettings.exportType;
+        // Desk props are stored as an ORDERED array of filled slots; an empty
+        // config clears the key entirely (the exporter treats both the same).
+        const deskEntries = DESK_SLOTS
+          .filter((s) => deskProps[s.key])
+          .map((s) => ({ slot: s.key, item: deskProps[s.key] }));
+        if (deskEntries.length > 0) nextSettings.comicDeskProps = deskEntries;
+        else delete nextSettings.comicDeskProps;
         promptPatch.settings = nextSettings;
       }
       let nextProject = project;
@@ -262,6 +313,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
       setInitialTransitionPreset(transitionPreset);
       setInitialFluxBase(fluxBase);
       setInitialExportType(exportType);
+      setInitialDeskProps(deskProps);
       // scriptText goes through the separate endpoint (handles null/empty correctly).
       const currentScript = (await api.getProjectScript(project.id)).text ?? '';
       if (scriptText !== currentScript) {
@@ -398,30 +450,71 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
           </Row>
         )}
 
-        <Row
-          label="Тип экспорта (CapCut)"
-          hint="project.settings.exportType — как собирается CapCut-драфт на шаге «Экспорт в CapCut». «Линейный» = обычная лента шотов с простыми переходами. «Комикс» = фильм раскладывается на страницы-комиксы, камера летает по панелям (кейфреймы) с переворотами страниц, ОДНИМ драфтом. «Комикс по частям» = та же картинка, но нарезанная на несколько лёгких драфтов: полнометражный комикс весит ~200 МБ кейфреймов, CapCut открывает его минутами и часто падает. Каждую часть рендеришь в mp4 сам, потом указываешь пути — и собирается один финальный драфт, где видео плоское, а озвучка, музыка и субтитры живые (правишь один раз). Оба комикс-экспорта МЕДЛЕННЫЕ и пишут драфты прямо в папку CapCut — CapCut должен быть закрыт.">
-          <select
-            value={exportType}
-            onChange={(e) => setExportType(e.target.value as ExportType)}
-            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
-            <option value="linear">Линейный (простые переходы)</option>
-            <option value="comic">Комикс (камера + переворот страниц)</option>
-            <option value="comic_chunks">Комикс по частям (лёгкие драфты + сборка)</option>
-          </select>
-        </Row>
+        <div className="border border-zinc-800 rounded-lg p-4 space-y-4">
+          <div>
+            <div className="text-xs uppercase tracking-wider text-zinc-300">Экспорт в CapCut</div>
+            <div className="text-[11px] text-zinc-600 mt-1 leading-snug">
+              Воркфлоу сборки драфта. Набор настроек ниже зависит от выбранного типа:
+              у линейного — капкатовские переходы между шотами, у комикс-типов — предметы
+              на столе вокруг журнала.
+            </div>
+          </div>
 
-        <Row
-          label="Переходы между шотами (CapCut)"
-          hint="project.settings.transitionPreset — стиль переходов на стыках шотов при экспорте в CapCut. «Стандартный» = ротация 8 бесплатных переходов (затухание, наезды, сдвиги, глитч). «Комикс» = 漫画撕纸 (разрыв с угла) 90% + 便利贴 (стикер) 5% + 故障拼贴 (рваный коллаж) 5%, разложенные по случайным стыкам. Комикс-переходы — VIP (нужен CapCut Pro).">
-          <select
-            value={transitionPreset}
-            onChange={(e) => setTransitionPreset(e.target.value as TransitionPreset)}
-            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
-            <option value="default">Стандартный (ротация 8 переходов)</option>
-            <option value="comic">Комикс (разрыв 90% / стикер 5% / коллаж 5%)</option>
-          </select>
-        </Row>
+          <Row
+            label="Тип экспорта"
+            hint="project.settings.exportType — как собирается CapCut-драфт на шаге «Экспорт в CapCut». «Линейный» = обычная лента шотов с простыми переходами. «Комикс» = фильм раскладывается на страницы-комиксы, камера летает по панелям (кейфреймы) с переворотами страниц, ОДНИМ драфтом. «Комикс по частям» = та же картинка, но нарезанная на несколько лёгких драфтов: полнометражный комикс весит ~200 МБ кейфреймов, CapCut открывает его минутами и часто падает. Каждую часть рендеришь в mp4 сам, потом указываешь пути — и собирается один финальный драфт, где видео плоское, а озвучка, музыка и субтитры живые (правишь один раз). Оба комикс-экспорта МЕДЛЕННЫЕ и пишут драфты прямо в папку CapCut — CapCut должен быть закрыт.">
+            <select
+              value={exportType}
+              onChange={(e) => setExportType(e.target.value as ExportType)}
+              className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
+              <option value="linear">Линейный (простые переходы)</option>
+              <option value="comic">Комикс (камера + переворот страниц)</option>
+              <option value="comic_chunks">Комикс по частям (лёгкие драфты + сборка)</option>
+            </select>
+          </Row>
+
+          {exportType === 'linear' && (
+            <Row
+              label="Переходы между шотами"
+              hint="project.settings.transitionPreset — стиль переходов на стыках шотов при экспорте в CapCut. «Стандартный» = ротация 8 бесплатных переходов (затухание, наезды, сдвиги, глитч). «Комикс» = 漫画撕纸 (разрыв с угла) 90% + 便利贴 (стикер) 5% + 故障拼贴 (рваный коллаж) 5%, разложенные по случайным стыкам. Комикс-переходы — VIP (нужен CapCut Pro).">
+              <select
+                value={transitionPreset}
+                onChange={(e) => setTransitionPreset(e.target.value as TransitionPreset)}
+                className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
+                <option value="default">Стандартный (ротация 8 переходов)</option>
+                <option value="comic">Комикс (разрыв 90% / стикер 5% / коллаж 5%)</option>
+              </select>
+            </Row>
+          )}
+
+          {(exportType === 'comic' || exportType === 'comic_chunks') && (
+            <Row
+              label="Предметы на столе"
+              hint="project.settings.comicDeskProps — вещи, лежащие на столе вокруг журнала (запекаются в лист). Видны на широких планах: открытие разворота, отъезды камеры на перелётах и перевороты страниц. Каждая точка стола — своя позиция; предмет частично прячется под журнал, это нормально. Все точки опциональны. Тёмные предметы (телефон) в углах тонут в виньетке — туда лучше светлое.">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-2">
+                {DESK_SLOTS.map((s) => (
+                  <label key={s.key} className="block">
+                    <div className="text-[11px] text-zinc-500 mb-0.5">{s.label}</div>
+                    <select
+                      value={deskProps[s.key] ?? ''}
+                      onChange={(e) => setDeskProps((d) => {
+                        const next = { ...d };
+                        if (e.target.value) next[s.key] = e.target.value;
+                        else delete next[s.key];
+                        return next;
+                      })}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm">
+                      <option value="">— пусто —</option>
+                      {DESK_ITEMS.map((it) => (
+                        <option key={it.key} value={it.key}>{it.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+              </div>
+            </Row>
+          )}
+        </div>
 
         <Row
           label="SDXL Negative (обязательное)"
