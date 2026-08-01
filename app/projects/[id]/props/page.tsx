@@ -2,6 +2,7 @@
 
 import { useEffect, useState, use } from 'react';
 import { api, Prop } from '@/lib/api';
+import { PropAnchorPanel } from '@/components/PropAnchorPanel';
 
 export default function PropsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: projectId } = use(params);
@@ -14,9 +15,12 @@ export default function PropsPage({ params }: { params: Promise<{ id: string }> 
   const [creating, setCreating]   = useState(false);
   const [busy, setBusy]           = useState(false);
 
-  const refresh = async () => {
+  /** `silent` skips the loading state: the anchor panel refetches the list after
+   *  every queue/select/delete, and flipping the whole page back to «Загрузка…»
+   *  on each of those read as a page reload. */
+  const refresh = async (opts?: { silent?: boolean }) => {
     try {
-      setLoading(true);
+      if (!opts?.silent) setLoading(true);
       const rows = await api.listProps(projectId);
       setProps(rows);
     } catch (e) {
@@ -25,6 +29,7 @@ export default function PropsPage({ params }: { params: Promise<{ id: string }> 
       setLoading(false);
     }
   };
+  const refreshSilent = () => refresh({ silent: true });
 
   useEffect(() => { refresh(); }, [projectId]);
 
@@ -82,11 +87,13 @@ export default function PropsPage({ params }: { params: Promise<{ id: string }> 
         <div>
           <h1 className="text-xl font-semibold">Предметы</h1>
           <p className="text-xs text-zinc-500 mt-1 max-w-2xl">
-            Якоря на ПРЕДМЕТЫ — отдельно от персонажей. Каждый предмет (номерок, шарф, термос,
-            плитка, бусы…) получает своё переиспользуемое описание, как <code className="text-zinc-400">promptBase</code> у
-            персонажа. На предметных крупных планах рендерер делает предмет главным в кадре
-            (резкий фокус, фон в расфокусе), чтобы объект реально нарисовался, а не «просто комната».
-            Описание — английский, идёт в SDXL.
+            Предметы — отдельная сущность, не персонажи, но возможности те же: описание
+            (как <code className="text-zinc-400">promptBase</code>), сгенерированный якорь, галерея кандидатов,
+            ручной выбор, свой движок. Без якоря предмет доезжает до модели одним текстом, а текст
+            не держит форму — та же швейная машинка в каждом кадре получается другой. С якорем
+            рендерер прикладывает его отдельной картинкой и требует сохранить объект целиком:
+            ту же форму и цвет. Разница с людьми одна: у человека якорь отвечает только за лицо и
+            волосы, у предмета — за весь объект. Описание — английский.
           </p>
         </div>
         <button
@@ -161,6 +168,7 @@ export default function PropsPage({ params }: { params: Promise<{ id: string }> 
                   <div className="text-xs text-zinc-300 whitespace-pre-wrap font-sans leading-relaxed bg-zinc-950 rounded p-3 border border-zinc-800/50">
                     {p.description}
                   </div>
+                  <PropAnchorPanel prop={p} onChanged={refreshSilent} />
                 </div>
               )}
             </div>

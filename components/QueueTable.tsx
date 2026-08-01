@@ -25,7 +25,7 @@ import { HeaderCell, MultiSelect, MultiSelectLabeled } from './table/TableContro
 
 const POLL_MS = 3000;
 
-const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_post', 'tts', 'bgm', 'anchor', 'validation', 'anchor_validation', 'caption', 'thumbnail', 'thumbnail_ideas'];
+const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_post', 'tts', 'bgm', 'anchor', 'validation', 'anchor_validation', 'caption', 'thumbnail', 'thumbnail_ideas', 'prop_anchor'];
 // The ledger has one status vocabulary for every job type; the old per-table
 // values (blocked / preparing / captioning / training) no longer reach the queue.
 const ALL_STATUSES = ['pending', 'running', 'completed', 'failed', 'cancelled', 'skipped'];
@@ -591,6 +591,15 @@ function renderRowTargets(row: QueueRow, pl?: ProjectLinks): React.ReactNode {
 
   // Cover work is project-scoped, not shot- or profile-scoped: both the art
   // renders and the model's idea rounds land on the project's Обложка tab.
+  // Object anchors are project-scoped, like covers: they land on the Предметы tab.
+  if (row.type === 'prop_anchor' && projSeg) {
+    return (
+      <Link href={`/projects/${projSeg}/props`} className={`text-zinc-200 ${cls}`}>
+        {row.label}
+      </Link>
+    );
+  }
+
   if ((row.type === 'thumbnail' || row.type === 'thumbnail_ideas') && projSeg) {
     return (
       <Link href={`/projects/${projSeg}/thumbnail`} className={`text-zinc-200 ${cls}`}>
@@ -655,6 +664,9 @@ function typeBadge(t: QueueJobType): string {
   if (t === 'video_post')    return 'bg-pink-950/40   text-pink-300   border-pink-900';
   if (t === 'tts')           return 'bg-cyan-950/40   text-cyan-300   border-cyan-900';
   if (t === 'anchor')        return 'bg-fuchsia-950/40 text-fuchsia-300 border-fuchsia-900';
+  // Object anchors sit next to character anchors in the palette on purpose -
+  // same kind of work, different entity.
+  if (t === 'prop_anchor')   return 'bg-orange-950/40 text-orange-300 border-orange-900';
   if (t === 'validation')    return 'bg-indigo-950/40 text-indigo-300 border-indigo-900';
   if (t === 'anchor_validation') return 'bg-violet-950/40 text-violet-300 border-violet-900';
   if (t === 'caption')       return 'bg-teal-950/40   text-teal-300   border-teal-900';

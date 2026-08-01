@@ -200,6 +200,34 @@ export interface Prop {
   updatedAt?:  string;
 }
 
+/** Engine that draws a prop's object study. Same three the characters have. */
+export type PropAnchorPipeline = 'qwen' | 'flux_comic' | 'sdxl_comic';
+
+/** A row from prop_anchor_jobs — the object-study analogue of AnchorRenderJob. */
+export interface PropAnchorJob {
+  id:            string;
+  propId:        string;
+  status:        'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  /** Engine this job was queued for; null = resolved from project settings. */
+  pipeline?:     PropAnchorPipeline | null;
+  comfyPromptId?: string | null;
+  outputPath?:   string | null;
+  errorMessage?: string | null;
+  queuedAt:      string;
+  startedAt?:    string | null;
+  completedAt?:  string | null;
+}
+
+/** Object-study candidates on disk plus which one is currently installed. */
+export interface PropAnchorCandidates {
+  propId:           string;
+  propCode:         string;
+  anchorExists:     boolean;
+  /** installed anchor matches no candidate — promoted from a shot or hand-placed */
+  anchorIsExternal: boolean;
+  candidates: Array<{ filename: string; selected: boolean }>;
+}
+
 export interface ShotFull {
   id:                  string;
   projectId:           string;
@@ -596,7 +624,7 @@ export interface SceneSummary {
 /** `video_post` is the combined one-pass upscale->RIFE job. It replaced the old
  *  `video_upscale` + `video_interp` pair, which were two queue jobs for what is
  *  a single ComfyUI workflow. */
-export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_post' | 'tts' | 'bgm' | 'anchor' | 'validation' | 'anchor_validation' | 'caption' | 'thumbnail' | 'thumbnail_ideas';
+export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_post' | 'tts' | 'bgm' | 'anchor' | 'validation' | 'anchor_validation' | 'caption' | 'thumbnail' | 'thumbnail_ideas' | 'prop_anchor';
 
 /** Caption drawn by scripts/render_caption.py — every field is a real parameter
  *  of the overlay, not a wish addressed to a diffusion model. */
@@ -1260,6 +1288,48 @@ export const api = {
       `/shots/${shotId}/prop`,
       { method: 'PATCH', body: JSON.stringify({ propId }) },
     ),
+
+  // ── Prop anchors — the object-study equivalent of a character anchor ────────
+  // Same surface as the character panel (generate → candidates → pick → delete),
+  // separate routes because a prop is its own entity, not a CharacterProfile.
+
+  /** Queue an object study. `pipeline` overrides the project's engine for this
+   *  render only; omit it to use settings.propAnchorPipeline / anchorPipeline. */
+  generatePropAnchor: (propId: string, pipeline?: PropAnchorPipeline) =>
+    http<PropAnchorJob>(`/props/${propId}/generate-anchor`, {
+      method: 'POST',
+      body: JSON.stringify(pipeline ? { pipeline } : {}),
+    }),
+
+  listPropAnchorJobs: (propId: string) =>
+    http<PropAnchorJob[]>(`/props/${propId}/anchor-jobs`),
+
+  listPropAnchorCandidates: (propId: string) =>
+    http<PropAnchorCandidates>(`/props/${propId}/anchor-candidates`),
+
+  selectPropAnchorCandidate: (propId: string, filename: string) =>
+    http<Prop>(`/props/${propId}/anchor/select`, {
+      method: 'POST',
+      body: JSON.stringify({ filename }),
+    }),
+
+  uploadPropAnchor: async (propId: string, file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(`${API_BASE}/props/${propId}/upload-anchor`, { method: 'POST', body: fd });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json() as Promise<{ propId: string; anchorPath: string; sizeBytes: number }>;
+  },
+
+  deletePropAnchor: (propId: string) =>
+    http<Prop>(`/props/${propId}/anchor`, { method: 'DELETE' }),
+
+  /** Installed anchor image. Cache-busted — a re-render replaces the same path. */
+  propAnchorRawUrl: (propId: string, bust?: number) =>
+    `${MEDIA_BASE}/props/${propId}/anchor/raw${bust ? `?v=${bust}` : ''}`,
+
+  propAnchorCandidateUrl: (propId: string, filename: string) =>
+    `${MEDIA_BASE}/props/${propId}/anchor-candidates/${encodeURIComponent(filename)}/raw`,
 
   // Pipeline timing + waste statistics for the Overview page.
   getProjectStats: (idOrSlug: string) =>
