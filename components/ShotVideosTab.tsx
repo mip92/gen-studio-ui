@@ -18,14 +18,13 @@ export function ShotVideosTab() {
   const [motionPrompt, setMotionPrompt] = useState(shot.promptFields?.motionPrompt ?? '');
   useEffect(() => { setMotionPrompt(shot.promptFields?.motionPrompt ?? ''); }, [shotId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [count, setCount]               = useState(1);
-  // Default = «страж» (user call 2026-07-30): the fast graph with cfg 2.5 on the
-  // high-noise sampler, so the negative prompt is actually evaluated on the pass
-  // that decides what is in the frame. Costs +31 % (~196 s vs 150 s) — cheap
-  // next to «качество» at 6.5×, and it is meant to pay for itself by cutting the
-  // re-renders caused by figures walking into a shot. «быстро» stays one click
-  // away. Keep this in sync with resolveWorkflowFilename's fallback in
-  // video-render.service.ts — that is what scripted bulk enqueues get.
-  const [mode, setMode]                 = useState<'fast' | 'guard' | 'cfg'>('guard');
+  // Default = «быстро» again (user call 2026-08-01). «страж» held the default
+  // for two days on an unvalidated theory and cost +31 % on every clip; the
+  // positive motion prompt is the real steering channel at cfg=1. «страж» stays
+  // one click away for shots where figures actually walk in. Keep this in sync
+  // with resolveWorkflowFilename's fallback in video-render.service.ts — that is
+  // what scripted bulk enqueues get.
+  const [mode, setMode]                 = useState<'fast' | 'guard' | 'cfg'>('fast');
   const [videos, setVideos]             = useState<VideoRender[] | null>(null);
   const [busy, setBusy]                 = useState<false | 'start'>(false);
   const [error, setError]               = useState<string | null>(null);
@@ -195,8 +194,8 @@ export function ShotVideosTab() {
               onChange={(e) => setMode(e.target.value as 'fast' | 'guard' | 'cfg')}
               className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200"
             >
-              <option value="guard">страж (по умолчанию — негатив на 1-м проходе, ~3.3 мин)</option>
-              <option value="fast">быстро (4-step, ~2.5 мин, негатив НЕ работает)</option>
+              <option value="fast">быстро (по умолчанию — 4-step, ~2.5 мин, негатив НЕ работает)</option>
+              <option value="guard">страж (негатив на 1-м проходе, ~3.3 мин)</option>
               <option value="cfg">качество (cfg=4, ~16 мин, 6.5× медленнее)</option>
             </select>
           </label>
