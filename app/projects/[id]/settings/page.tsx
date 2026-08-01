@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, use } from 'react';
+import Link from 'next/link';
 import { api, ProjectFull, UpdateProjectBody, StyleLoraItem, VisualStyle } from '@/lib/api';
 import { ProjectTTSSettings } from '@/components/ProjectTTSSettings';
 
@@ -52,63 +53,10 @@ const QWEN_GRAPH_STYLES = new Set([
   'realcomic_qwen', 'graphic_novel_flux', 'graphic_novel_cell_shaded',
 ]);
 
-/** Shot-boundary transition preset out of project.settings. Anything other
- *  than the literal 'comic' is the legacy rotation. */
-type TransitionPreset = 'default' | 'comic';
-function transitionPresetOf(settings: unknown): TransitionPreset {
-  const s = (settings as { transitionPreset?: unknown } | null | undefined)?.transitionPreset;
-  return s === 'comic' ? 'comic' : 'default';
-}
-
-/** CapCut export type out of project.settings. 'comic' = film→comic spreads with
- *  camera fly-through + page flips, as ONE draft; 'comic_chunks' = the same picture
- *  split into several small drafts that are rendered separately and reassembled into
- *  one light final draft; anything else = the linear export. */
-type ExportType = 'linear' | 'comic' | 'comic_chunks';
-function exportTypeOf(settings: unknown): ExportType {
-  const s = (settings as { exportType?: unknown } | null | undefined)?.exportType;
-  return s === 'comic' || s === 'comic_chunks' ? s : 'linear';
-}
-
 /** Per-project Flux base UNET (graphic_novel_flux). '' = use the workflow default. */
 function fluxBaseOf(settings: unknown): string {
   const s = (settings as { fluxBaseModel?: unknown } | null | undefined)?.fluxBaseModel;
   return typeof s === 'string' ? s : '';
-}
-
-/** Desk-prop slots/items for the comic exports — mirror the registries in
- *  gen-studio/scripts/comic_desk_props.py (SLOTS / ITEMS). The python side
- *  validates against its registries, so an unknown key is silently dropped
- *  there — keep the two lists in sync. */
-const DESK_SLOTS = [
-  { key: 'top_left',     label: 'верх · слева' },
-  { key: 'top_center',   label: 'верх · центр' },
-  { key: 'top_right',    label: 'верх · справа' },
-  { key: 'left',         label: 'слева' },
-  { key: 'right',        label: 'справа' },
-  { key: 'bottom_left',  label: 'низ · слева' },
-  { key: 'bottom_right', label: 'низ · справа' },
-] as const;
-const DESK_ITEMS = [
-  { key: 'spinner',    label: 'спиннер' },
-  { key: 'rubik',      label: 'кубик Рубика' },
-  { key: 'gum',        label: 'жвачка' },
-  { key: 'headphones', label: 'наушники' },
-  { key: 'phone',      label: 'телефон' },
-];
-
-/** project.settings.comicDeskProps ([{slot, item}]) → Record<slot, item>. */
-function deskPropsOf(settings: unknown): Record<string, string> {
-  const arr = (settings as { comicDeskProps?: unknown } | null | undefined)?.comicDeskProps;
-  const out: Record<string, string> = {};
-  if (Array.isArray(arr)) {
-    for (const e of arr) {
-      const slot = (e as { slot?: unknown } | null)?.slot;
-      const item = (e as { item?: unknown } | null)?.item;
-      if (typeof slot === 'string' && typeof item === 'string') out[slot] = item;
-    }
-  }
-  return out;
 }
 
 export default function ProjectSettingsPage({ params }: { params: Promise<{ id: string }> }) {
@@ -142,23 +90,9 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
   const [sceneSteps, setSceneSteps]             = useState<string>('');
   const [initialSceneSteps, setInitialSceneSteps] = useState<string>('');
 
-  // Shot-boundary transition preset for the CapCut export. '' default rotation
-  // vs 'comic' (Comic Tear 90% / Sticker 5% / Glitch Collage 5%).
-  const [transitionPreset, setTransitionPreset]             = useState<TransitionPreset>('default');
-  const [initialTransitionPreset, setInitialTransitionPreset] = useState<TransitionPreset>('default');
-
   // Per-project Flux base UNET (graphic_novel_flux only). '' = workflow default.
   const [fluxBase, setFluxBase]               = useState<string>('');
   const [initialFluxBase, setInitialFluxBase] = useState<string>('');
-
-  // CapCut export type: 'linear' (existing simple-transition export) vs 'comic'
-  // (film→comic spreads, camera fly-through + page flips).
-  const [exportType, setExportType]             = useState<ExportType>('linear');
-  const [initialExportType, setInitialExportType] = useState<ExportType>('linear');
-
-  // Desk props for the comic exports: slot → item ('' / absent = empty slot).
-  const [deskProps, setDeskProps]               = useState<Record<string, string>>({});
-  const [initialDeskProps, setInitialDeskProps] = useState<Record<string, string>>({});
 
   useEffect(() => {
     (async () => {
@@ -186,18 +120,9 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
         const curSteps = sceneStepsOf(proj.settings);
         setSceneSteps(curSteps);
         setInitialSceneSteps(curSteps);
-        const curPreset = transitionPresetOf(proj.settings);
-        setTransitionPreset(curPreset);
-        setInitialTransitionPreset(curPreset);
         const curBase = fluxBaseOf(proj.settings);
         setFluxBase(curBase);
         setInitialFluxBase(curBase);
-        const curExport = exportTypeOf(proj.settings);
-        setExportType(curExport);
-        setInitialExportType(curExport);
-        const curDesk = deskPropsOf(proj.settings);
-        setDeskProps(curDesk);
-        setInitialDeskProps(curDesk);
         setStatus('idle');
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -233,10 +158,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
     || styleLoraStrength !== initialStyleLoraStrength
     || refLatents !== initialRefLatents
     || sceneSteps !== initialSceneSteps
-    || transitionPreset !== initialTransitionPreset
     || fluxBase !== initialFluxBase
-    || exportType !== initialExportType
-    || JSON.stringify(deskProps) !== JSON.stringify(initialDeskProps)
     || scriptText !== (project ? '' : '') /* always allow script save */;
 
   const onChange = <K extends keyof UpdateProjectBody>(k: K, val: string) => {
@@ -259,17 +181,16 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
         }
       }
       // settings JSON override: PATCH replaces settings wholesale, so send the
-      // full merged object whenever styleLora OR transitionPreset changed.
-      // Empty/default values clear the key (falls back to JSON/export default).
+      // full merged object whenever any settings-backed field changed. Empty/
+      // default values clear the key (falls back to JSON/export default).
+      // Export-related keys (exportType, transitionPreset, comicDeskProps,
+      // comicDeskColor) живут на странице «Экспорт» и здесь не трогаются.
       if (
         styleLora !== initialStyleLora
         || styleLoraStrength !== initialStyleLoraStrength
         || refLatents !== initialRefLatents
-    || sceneSteps !== initialSceneSteps
-        || transitionPreset !== initialTransitionPreset
+        || sceneSteps !== initialSceneSteps
         || fluxBase !== initialFluxBase
-        || exportType !== initialExportType
-        || JSON.stringify(deskProps) !== JSON.stringify(initialDeskProps)
       ) {
         const base = (project.settings as Record<string, unknown> | null) ?? {};
         const nextSettings = { ...base };
@@ -287,19 +208,8 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
         const steps = Number.parseInt(sceneSteps, 10);
         if (Number.isFinite(steps) && steps >= 1 && steps <= 60) nextSettings.sceneSteps = steps;
         else delete nextSettings.sceneSteps;
-        if (transitionPreset === 'comic') nextSettings.transitionPreset = 'comic';
-        else delete nextSettings.transitionPreset;
         if (fluxBase.trim()) nextSettings.fluxBaseModel = fluxBase.trim();
         else delete nextSettings.fluxBaseModel;
-        if (exportType === 'comic' || exportType === 'comic_chunks') nextSettings.exportType = exportType;
-        else delete nextSettings.exportType;
-        // Desk props are stored as an ORDERED array of filled slots; an empty
-        // config clears the key entirely (the exporter treats both the same).
-        const deskEntries = DESK_SLOTS
-          .filter((s) => deskProps[s.key])
-          .map((s) => ({ slot: s.key, item: deskProps[s.key] }));
-        if (deskEntries.length > 0) nextSettings.comicDeskProps = deskEntries;
-        else delete nextSettings.comicDeskProps;
         promptPatch.settings = nextSettings;
       }
       let nextProject = project;
@@ -310,10 +220,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
       setInitialStyleLoraStrength(styleLoraStrength);
       setInitialRefLatents(refLatents);
       setInitialSceneSteps(sceneSteps);
-      setInitialTransitionPreset(transitionPreset);
       setInitialFluxBase(fluxBase);
-      setInitialExportType(exportType);
-      setInitialDeskProps(deskProps);
       // scriptText goes through the separate endpoint (handles null/empty correctly).
       const currentScript = (await api.getProjectScript(project.id)).text ?? '';
       if (scriptText !== currentScript) {
@@ -450,88 +357,18 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
           </Row>
         )}
 
-        <div className="border border-zinc-800 rounded-lg p-4 space-y-4">
-          <div>
-            <div className="text-xs uppercase tracking-wider text-zinc-300">Экспорт в CapCut</div>
-            <div className="text-[11px] text-zinc-600 mt-1 leading-snug">
-              Воркфлоу сборки драфта. Набор настроек ниже зависит от выбранного типа:
-              у линейного — капкатовские переходы между шотами, у комикс-типов — предметы
-              на столе вокруг журнала.
-            </div>
+        {/* Настройки экспорта (тип, переходы, стол и предметы) живут на своей
+            странице — там интерактивный макет стола и тестовый рендер. */}
+        <Link
+          href={`/projects/${id}/export`}
+          className="block border border-zinc-800 hover:border-zinc-600 rounded-lg p-4 transition-colors"
+        >
+          <div className="text-xs uppercase tracking-wider text-zinc-300">Экспорт в CapCut →</div>
+          <div className="text-[11px] text-zinc-600 mt-1 leading-snug">
+            Тип экспорта, переходы, цвет стола и предметы вокруг журнала — на отдельной
+            странице с живым макетом стола и тестовым рендером разворота.
           </div>
-
-          <Row
-            label="Тип экспорта"
-            hint="project.settings.exportType — как собирается CapCut-драфт на шаге «Экспорт в CapCut». «Линейный» = обычная лента шотов с простыми переходами. «Комикс» = фильм раскладывается на страницы-комиксы, камера летает по панелям (кейфреймы) с переворотами страниц, ОДНИМ драфтом. «Комикс по частям» = та же картинка, но нарезанная на несколько лёгких драфтов: полнометражный комикс весит ~200 МБ кейфреймов, CapCut открывает его минутами и часто падает. Каждую часть рендеришь в mp4 сам, потом указываешь пути — и собирается один финальный драфт, где видео плоское, а озвучка, музыка и субтитры живые (правишь один раз). Оба комикс-экспорта МЕДЛЕННЫЕ и пишут драфты прямо в папку CapCut — CapCut должен быть закрыт.">
-            <select
-              value={exportType}
-              onChange={(e) => setExportType(e.target.value as ExportType)}
-              className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
-              <option value="linear">Линейный (простые переходы)</option>
-              <option value="comic">Комикс (камера + переворот страниц)</option>
-              <option value="comic_chunks">Комикс по частям (лёгкие драфты + сборка)</option>
-            </select>
-          </Row>
-
-          {exportType === 'linear' && (
-            <Row
-              label="Переходы между шотами"
-              hint="project.settings.transitionPreset — стиль переходов на стыках шотов при экспорте в CapCut. «Стандартный» = ротация 8 бесплатных переходов (затухание, наезды, сдвиги, глитч). «Комикс» = 漫画撕纸 (разрыв с угла) 90% + 便利贴 (стикер) 5% + 故障拼贴 (рваный коллаж) 5%, разложенные по случайным стыкам. Комикс-переходы — VIP (нужен CapCut Pro).">
-              <select
-                value={transitionPreset}
-                onChange={(e) => setTransitionPreset(e.target.value as TransitionPreset)}
-                className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
-                <option value="default">Стандартный (ротация 8 переходов)</option>
-                <option value="comic">Комикс (разрыв 90% / стикер 5% / коллаж 5%)</option>
-              </select>
-            </Row>
-          )}
-
-          {(exportType === 'comic' || exportType === 'comic_chunks') && (
-            <Row
-              label="Предметы на столе"
-              hint="project.settings.comicDeskProps — вещи, лежащие на столе вокруг журнала (запекаются в лист). Видны на широких планах: открытие разворота, отъезды камеры на перелётах и перевороты страниц. Каждая точка стола — своя позиция; предмет частично прячется под журнал, это нормально. Все точки опциональны. Тёмные предметы (телефон) в углах тонут в виньетке — туда лучше светлое.">
-              {/* the exact sprites the exporter composites — so the picker shows
-                  what actually lands on the desk, not a guess by name */}
-              <div className="flex flex-wrap gap-3 mb-3">
-                {DESK_ITEMS.map((it) => (
-                  <figure key={it.key} className="w-20">
-                    <div className="h-16 flex items-center justify-center bg-zinc-900 border border-zinc-800 rounded p-1">
-                      <img
-                        src={api.deskPropSpriteUrl(id, it.key)}
-                        alt={it.label}
-                        loading="lazy"
-                        className="max-h-full max-w-full object-contain"
-                      />
-                    </div>
-                    <figcaption className="text-[10px] text-zinc-500 text-center mt-0.5">{it.label}</figcaption>
-                  </figure>
-                ))}
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-2">
-                {DESK_SLOTS.map((s) => (
-                  <label key={s.key} className="block">
-                    <div className="text-[11px] text-zinc-500 mb-0.5">{s.label}</div>
-                    <select
-                      value={deskProps[s.key] ?? ''}
-                      onChange={(e) => setDeskProps((d) => {
-                        const next = { ...d };
-                        if (e.target.value) next[s.key] = e.target.value;
-                        else delete next[s.key];
-                        return next;
-                      })}
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm">
-                      <option value="">— пусто —</option>
-                      {DESK_ITEMS.map((it) => (
-                        <option key={it.key} value={it.key}>{it.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                ))}
-              </div>
-            </Row>
-          )}
-        </div>
+        </Link>
 
         <Row
           label="SDXL Negative (обязательное)"
