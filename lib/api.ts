@@ -1793,6 +1793,33 @@ export const api = {
     return JSON.parse(await res.text()) as { chunks: ComicChunk[]; status: string };
   },
 
+  /** TEMPORARY (2026-08-01): render ONE spread of the comic as a PNG — the baked
+   *  look for iterating on the desk/props styling. Synchronous and slow-ish
+   *  (tens of seconds), hence DIRECT_API_BASE like the other comic POSTs.
+   *  Fetch the picture itself via comicTestSpreadPngUrl(). Delete with the
+   *  backend endpoint once the desk look settles. */
+  comicTestSpread: async (idOrSlug: string): Promise<{ png: string; spread: number }> => {
+    const res = await fetch(`${DIRECT_API_BASE}/projects/${idOrSlug}/export/comic/test-spread`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`${res.status} ${res.statusText}: ${text.slice(0, 200)}`);
+    }
+    return JSON.parse(await res.text()) as { png: string; spread: number };
+  },
+
+  /** URL of the last test-spread PNG (append your own cache-buster). TEMPORARY. */
+  comicTestSpreadPngUrl: (idOrSlug: string) =>
+    `${DIRECT_API_BASE}/projects/${idOrSlug}/export/comic/test-spread/png`,
+
+  /** URL of a desk-prop sprite PNG — the exact file the comic exports composite
+   *  onto the desk (settings-page previews). */
+  deskPropSpriteUrl: (idOrSlug: string, item: string) =>
+    `${DIRECT_API_BASE}/projects/${idOrSlug}/export/comic/desk-props/${encodeURIComponent(item)}`,
+
   /** Poll the chunked build: the plan plus, per chunk, whether its draft exists yet
    *  (which is what makes that chunk exportable to mp4). */
   comicChunksStatus: (idOrSlug: string) =>

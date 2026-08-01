@@ -491,6 +491,23 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
             <Row
               label="Предметы на столе"
               hint="project.settings.comicDeskProps — вещи, лежащие на столе вокруг журнала (запекаются в лист). Видны на широких планах: открытие разворота, отъезды камеры на перелётах и перевороты страниц. Каждая точка стола — своя позиция; предмет частично прячется под журнал, это нормально. Все точки опциональны. Тёмные предметы (телефон) в углах тонут в виньетке — туда лучше светлое.">
+              {/* the exact sprites the exporter composites — so the picker shows
+                  what actually lands on the desk, not a guess by name */}
+              <div className="flex flex-wrap gap-3 mb-3">
+                {DESK_ITEMS.map((it) => (
+                  <figure key={it.key} className="w-20">
+                    <div className="h-16 flex items-center justify-center bg-zinc-900 border border-zinc-800 rounded p-1">
+                      <img
+                        src={api.deskPropSpriteUrl(id, it.key)}
+                        alt={it.label}
+                        loading="lazy"
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    </div>
+                    <figcaption className="text-[10px] text-zinc-500 text-center mt-0.5">{it.label}</figcaption>
+                  </figure>
+                ))}
+              </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-2">
                 {DESK_SLOTS.map((s) => (
                   <label key={s.key} className="block">

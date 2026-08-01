@@ -60,6 +60,10 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
   const [chunks, setChunks] = useState<(ComicChunk & { drafted: boolean })[]>([]);
   const [chunkPaths, setChunkPaths] = useState<Record<number, string>>({});
   const [assembled, setAssembled] = useState<{ draft_name: string; draft_path: string } | null>(null);
+  // TEMPORARY (2026-08-01): one-spread test render — own busy flag so it never
+  // locks the real export button; the timestamp doubles as the img cache-buster.
+  const [testBusy, setTestBusy] = useState(false);
+  const [testShownAt, setTestShownAt] = useState<number | null>(null);
 
   const load = () =>
     Promise.all([
@@ -221,6 +225,15 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
       setExported(r ? { draftPath: r.draft_path ?? r.draft_name } : {});
     }
   });
+  // TEMPORARY (2026-08-01): render the FIRST spread as one PNG — fast eyeball
+  // check of the desk/props/paper styling without a draft build. Delete with
+  // the backend endpoint.
+  const doTestSpread = async () => {
+    setTestBusy(true); setErr(null);
+    try { await api.comicTestSpread(id); setTestShownAt(Date.now()); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setTestBusy(false); }
+  };
   const doPrepare = () => act(() => api.prepareLaunchItem(id, { key: itemKey, kind, slug, videoPath: videoPath.trim(), thumbPath: thumbPath.trim() }));
   const doUpload  = () => act(() => api.uploadLaunchItem(id, itemKey));
   const doFixThumb    = () => act(() => api.retryLaunchThumbnail(id, itemKey));
@@ -312,6 +325,31 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
           {(isComic || isChunked) && (
             <div className="mb-3 bg-amber-950/40 border border-amber-700 rounded p-3 text-xs text-amber-200">
               ⚠ Закройте CapCut перед экспортом комикса — открытый CapCut удалит черновик при закрытии. Сборка идёт в отдельном процессе: вкладку можно закрыть и даже перезапустить сервер, прогресс ниже подхватится снова.
+            </div>
+          )}
+          {/* TEMPORARY (2026-08-01): быстрая проверка вида стола/предметов одним
+              разворотом, без сборки драфта. Удалить вместе с эндпоинтом. */}
+          {(isComic || isChunked) && (
+            <div className="mb-3 border border-zinc-800 rounded p-3">
+              <div className="flex items-center gap-3">
+                <button onClick={doTestSpread} disabled={testBusy}
+                  className="text-sm bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-white px-3 py-1.5 rounded shrink-0">
+                  {testBusy ? '⏳ рендерю разворот…' : '🖼 Тестовый разворот'}
+                </button>
+                <span className="text-[11px] text-zinc-600 leading-snug">
+                  Временная кнопка: рендерит ПЕРВЫЙ разворот одной картинкой (стол, предметы,
+                  панели, стопки страниц) за десятки секунд — проверить вид, не собирая драфт.
+                </span>
+              </div>
+              {testShownAt && (
+                <a href={`${api.comicTestSpreadPngUrl(id)}?t=${testShownAt}`} target="_blank" rel="noreferrer">
+                  <img
+                    src={`${api.comicTestSpreadPngUrl(id)}?t=${testShownAt}`}
+                    alt="тестовый разворот"
+                    className="mt-3 w-full rounded border border-zinc-700"
+                  />
+                </a>
+              )}
             </div>
           )}
           <button onClick={doExport} disabled={busy || (isMain && readiness?.ready === false)}
