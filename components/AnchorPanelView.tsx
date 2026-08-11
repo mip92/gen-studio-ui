@@ -160,25 +160,6 @@ export function AnchorPanelView(p: AnchorPanelViewProps) {
 
       <p className="text-xs text-zinc-500 mb-3">{p.hint}</p>
 
-      {/* The anchor exists but only the machine has seen it. Say so loudly —
-          this is the state that used to be invisible, and everything that
-          depends on the anchor is blocked while it lasts. */}
-      {hasAnchor && !approved && p.onApprove && (
-        <div className="mb-4 flex flex-wrap items-center gap-3 rounded border border-amber-900/60 bg-amber-950/30 px-3 py-2">
-          <span className="text-xs text-amber-200">
-            Якорь поставлен автоматически — пока ты его не утвердишь, кадры с ним не рендерятся.
-          </span>
-          <button
-            type="button"
-            onClick={p.onApprove}
-            disabled={busy}
-            className="text-xs px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white disabled:opacity-50"
-          >
-            {p.busy === 'approve' ? '…' : '✓ Утвердить якорь'}
-          </button>
-        </div>
-      )}
-
       {/* stack below sm: превью якоря 224px + колонка кнопок не делят 375px —
           кнопкам оставалось ~30px ширины */}
       <div className="flex flex-col sm:flex-row gap-4">
@@ -202,6 +183,19 @@ export function AnchorPanelView(p: AnchorPanelViewProps) {
             текущий якорь
             {p.anchorIsExternal && hasAnchor && (
               <span className="block text-amber-400">внешний файл (не из кандидатов)</span>
+            )}
+            {/* An external anchor matches no candidate tile, so the tile-level
+                approve above can't reach it — this is the only case that needs
+                its own button, not a second way to do the same thing. */}
+            {hasAnchor && !approved && p.anchorIsExternal && p.onApprove && (
+              <button
+                type="button"
+                onClick={p.onApprove}
+                disabled={busy}
+                className="mt-1 block w-full text-[11px] px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white disabled:opacity-50"
+              >
+                {p.busy === 'approve' ? '…' : '✓ утвердить'}
+              </button>
             )}
           </div>
         </div>
@@ -378,17 +372,26 @@ export function AnchorPanelView(p: AnchorPanelViewProps) {
                       </div>
                     )
                   )}
+                  {/* One control, not two. «Сделать якорем» already IS the
+                      approve — installing a candidate you picked yourself is a
+                      review by definition. The only gap it leaves is the anchor
+                      the MACHINE installed: that tile shows «утвердить» instead
+                      of an inert «выбран якорем». */}
                   <button
                     type="button"
-                    onClick={() => p.onSelect(c.filename)}
-                    disabled={busy || c.selected}
+                    onClick={() => (c.selected ? p.onApprove?.() : p.onSelect(c.filename))}
+                    disabled={busy || (c.selected && approved)}
                     className={`mt-auto text-[11px] px-2 py-1 rounded ${
-                      c.selected
+                      c.selected && approved
                         ? 'bg-purple-900/40 text-purple-300 cursor-default'
-                        : 'bg-zinc-800 hover:bg-purple-700 text-zinc-100'
+                        : c.selected
+                          ? 'bg-emerald-700 hover:bg-emerald-600 text-white'
+                          : 'bg-zinc-800 hover:bg-purple-700 text-zinc-100'
                     }`}
                   >
-                    {c.selected ? 'выбран якорем' : p.busy === 'select' ? '…' : 'сделать якорем'}
+                    {c.selected
+                      ? (approved ? 'выбран якорем' : p.busy === 'approve' ? '…' : '✓ утвердить')
+                      : p.busy === 'select' ? '…' : 'сделать якорем'}
                   </button>
                 </div>
               </div>

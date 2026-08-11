@@ -155,11 +155,18 @@ function StickyHeader({
   const anchorReady   = readiness
     ? Object.values(readiness.styles).some((s) => s.identityStack !== 'lora_face_lock' && s.ready)
     : false;
+  // `ready` means installed AND approved, so a plain not-ready badge would say
+  // «нет anchor» over a portrait that is plainly sitting right there. Split the
+  // two: no file at all vs a file waiting for the user's sign-off.
+  const anchorInstalled = readiness
+    ? Object.values(readiness.styles).some((s) => s.identityStack !== 'lora_face_lock' && s.assets.anchorPath)
+    : false;
   const badgeClass = isCartoonOnly
-    ? (anchorReady ? 'bg-emerald-700 text-emerald-100' : 'bg-zinc-700 text-zinc-200')
+    ? (anchorReady ? 'bg-emerald-700 text-emerald-100'
+      : anchorInstalled ? 'bg-amber-700 text-amber-50' : 'bg-zinc-700 text-zinc-200')
     : PHASE_COLOR[profile.phase];
   const badgeText = isCartoonOnly
-    ? (anchorReady ? 'anchor готов' : 'нет anchor')
+    ? (anchorReady ? 'anchor готов' : anchorInstalled ? 'anchor ждёт апрува' : 'нет anchor')
     : PHASE_LABEL[profile.phase];
 
   const pathname = usePathname();
