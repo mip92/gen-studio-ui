@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, VideoRender } from '../lib/api';
+import { api, VideoRender, VideoQcShotVerdict } from '../lib/api';
 import { useShotCtx } from './ShotPageShell';
 import { useScrollRestore } from '../lib/useScrollRestore';
 
@@ -51,9 +51,39 @@ export function ShotVideosTab() {
     } finally { setSavingPrompt(false); }
   };
 
+  // Video-QC verdicts per take (✓/⚠/✗ badges) — advisory, never blocks anything.
+  const [qcVerdicts, setQcVerdicts] = useState<Map<string, VideoQcShotVerdict>>(new Map());
+  // Spot re-check goes through the unified queue; while it's queued we poll so
+  // the badges refresh when the run lands (same idiom as ShotDetail's image QC).
+  const [qcPendingSince, setQcPendingSince] = useState<number | null>(null);
+
   const refresh = useCallback(() => {
     api.listVideosForShot(shotId).then(setVideos).catch(() => setVideos([]));
+    api.videoQcShotVerdicts(shotId)
+      .then((vs) => setQcVerdicts(new Map(vs.map((v) => [v.videoRenderId, v]))))
+      .catch(() => { /* badges are optional */ });
   }, [shotId]);
+
+  const revalidateQc = useCallback(async () => {
+    try {
+      const res = await api.revalidateShotVideos(shotId);
+      if (!res.queued) { alert(res.reason ?? 'Проверка уже в очереди.'); return; }
+      setQcPendingSince(Date.now());
+    } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+  }, [shotId]);
+
+  useEffect(() => {
+    if (qcPendingSince === null) return;
+    const t = setInterval(async () => {
+      try {
+        const vs = await api.videoQcShotVerdicts(shotId);
+        setQcVerdicts(new Map(vs.map((v) => [v.videoRenderId, v])));
+        const done = vs.length > 0 && vs.every((v) => new Date(v.updatedAt).getTime() >= qcPendingSince);
+        if (done || Date.now() - qcPendingSince > 30 * 60_000) setQcPendingSince(null);
+      } catch { /* keep polling */ }
+    }, 5000);
+    return () => clearInterval(t);
+  }, [qcPendingSince, shotId]);
 
   const approve = useCallback(async (videoId: string | null) => {
     try {
@@ -110,7 +140,7 @@ export function ShotVideosTab() {
       <main className="px-4 sm:px-8 py-6">
         <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
           <p className="text-zinc-400 text-sm">
-            Сначала выберите финальный рендер на вкладке <Link href={`/projects/${projectId}/shots/${shotId}/render`} className="text-blue-400 hover:text-blue-300">Рендер кадра</Link> — он пойдёт первым кадром видео.
+            Сначала выберите финальный рендер на вкладке <Link href={`/projects/${projectId}/shots/${shotId}/render`} className="text-blue-400 hover:text-blue-300">Рендер</Link> — он пойдёт стартовым кадром видео.
           </p>
         </section>
       </main>
@@ -141,7 +171,7 @@ export function ShotVideosTab() {
         <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-3">Запустить новый рендер</h3>
 
         <p className="text-zinc-500 text-xs mb-2">
-          Первый кадр: <code className="text-zinc-300">{shot.chosenRender}</code> · 768×432 (точные 16:9) · 81 кадр · 16 fps (~5 сек) · апскейл в FHD по кнопке в деталях видео
+          Стартовая картинка: <code className="text-zinc-300">{shot.chosenRender}</code> · 768×432 (точные 16:9) · 81 кадр · 16 fps (~5 сек) · апскейл в FHD по кнопке в деталях видео
         </p>
 
         <textarea
@@ -214,6 +244,16 @@ export function ShotVideosTab() {
       <div className="mb-3 flex items-baseline gap-3">
         <h3 className="text-xs uppercase tracking-wider text-zinc-500">Сгенерированные видео</h3>
         {videos && <span className="text-xs text-zinc-600">всего {videos.length}</span>}
+        {videos && videos.some((v) => v.status === 'completed') && (
+          <button
+            onClick={revalidateQc}
+            disabled={qcPendingSince !== null}
+            className="text-xs bg-indigo-700/80 hover:bg-indigo-600 disabled:opacity-50 text-white px-2 py-0.5 rounded"
+            title="Спот-перепроверка «Видео QC» этого шота — все клипы, вердикты перезапишутся; встанет в общую очередь"
+          >
+            {qcPendingSince !== null ? '🔎 QC в очереди…' : '🔎 перепроверить QC'}
+          </button>
+        )}
       </div>
 
       {videos === null && <p className="text-zinc-500 text-sm">Loading…</p>}
@@ -230,6 +270,7 @@ export function ShotVideosTab() {
               shotId={shotId}
               markBeforeNav={markBeforeNav}
               isChosen={shot.chosenVideoId === v.id}
+              qcVerdict={qcVerdicts.get(v.id) ?? null}
               onApprove={approve}
               onDelete={deleteVideo}
             />
@@ -240,12 +281,13 @@ export function ShotVideosTab() {
   );
 }
 
-function VideoCard({ video, projectId, shotId, markBeforeNav, isChosen, onApprove, onDelete }: {
+function VideoCard({ video, projectId, shotId, markBeforeNav, isChosen, qcVerdict, onApprove, onDelete }: {
   video: VideoRender;
   projectId: string;
   shotId: string;
   markBeforeNav: (targetId?: string) => void;
   isChosen: boolean;
+  qcVerdict: VideoQcShotVerdict | null;
   onApprove: (videoId: string | null) => Promise<void>;
   onDelete: (videoId: string) => Promise<void>;
 }) {
@@ -283,8 +325,9 @@ function VideoCard({ video, projectId, shotId, markBeforeNav, isChosen, onApprov
             <StatusBadge status={video.status} />
           </div>
         )}
-        <span className="absolute top-2 left-2">
+        <span className="absolute top-2 left-2 flex gap-1 items-center">
           <StatusBadge status={video.status} />
+          {qcVerdict && <QcBadge v={qcVerdict} />}
         </span>
         {hasFhd && (
           <span className="absolute top-2 right-2 bg-emerald-700/90 text-white text-[10px] uppercase tracking-wider px-2 py-0.5 rounded">
@@ -337,6 +380,22 @@ function VideoCard({ video, projectId, shotId, markBeforeNav, isChosen, onApprov
         )}
       </div>
     </Link>
+  );
+}
+
+/** Video-QC verdict chip. pass = смотреть не обязательно; tooltip = находки. */
+function QcBadge({ v }: { v: VideoQcShotVerdict }) {
+  const m = v.status === 'pass' ? { label: '✓ QC', cls: 'text-emerald-300 bg-emerald-900/60' }
+    : v.status === 'warn' ? { label: '⚠ QC', cls: 'text-amber-300 bg-amber-900/60' }
+    : v.status === 'fail' ? { label: '✗ QC', cls: 'text-red-300 bg-red-900/60' }
+    :                       { label: '? QC', cls: 'text-zinc-300 bg-zinc-800/60' };
+  return (
+    <span
+      className={`${m.cls} text-[10px] uppercase tracking-wider px-2 py-0.5 rounded`}
+      title={(v.issues ?? []).join('; ') || undefined}
+    >
+      {m.label}
+    </span>
   );
 }
 

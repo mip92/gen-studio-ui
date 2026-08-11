@@ -3,6 +3,7 @@
 import { use } from 'react';
 import { PublishStepper } from '@/components/PublishStepper';
 import { YoutubeSubnav } from '@/components/YoutubeSubnav';
+import { ReleaseSlotHint } from '@/components/releases/ReleaseSlotHint';
 
 // «Видео» — the main video's publish stepper (params → CapCut → file → subtitles
 // → Unlisted upload). The final publish (link + schedule) lives in «Связка-запуск».
@@ -13,6 +14,7 @@ export default function YoutubePage({ params }: { params: Promise<{ id: string }
       <YoutubeSubnav id={id} />
       <h1 className="text-xl font-semibold mb-1">Основное видео</h1>
       <p className="text-xs text-zinc-500 mb-5">Пошагово до заливки Unlisted. Публикация всего вместе — на вкладке «🔗 Связка-запуск».</p>
+      <ReleaseSlotHint idOrSlug={id} />
       <PublishStepper id={id} kind="main" />
     </main>
   );

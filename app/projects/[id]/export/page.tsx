@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useState, use } from 'react';
+import Link from 'next/link';
 import { api, ProjectFull } from '@/lib/api';
+import { ReleaseSlotHint } from '@/components/releases/ReleaseSlotHint';
 
 type Status = 'idle' | 'loading' | 'saving' | 'saved' | 'error';
 
@@ -24,13 +26,22 @@ function transitionPresetOf(settings: unknown): TransitionPreset {
  *  positions and scale. The python side validates against its registries, so
  *  an unknown key is silently dropped there — keep the lists in sync. */
 const DESK_SLOTS = [
-  { key: 'top_left',     label: 'верх · слева',  cx: 0.033, cy: 0.026 },
-  { key: 'top_center',   label: 'верх · центр',  cx: 0.500, cy: 0.018 },
-  { key: 'top_right',    label: 'верх · справа', cx: 0.965, cy: 0.026 },
-  { key: 'left',         label: 'слева',         cx: 0.020, cy: 0.400 },
-  { key: 'right',        label: 'справа',        cx: 0.980, cy: 0.430 },
-  { key: 'bottom_left',  label: 'низ · слева',   cx: 0.034, cy: 0.956 },
-  { key: 'bottom_right', label: 'низ · справа',  cx: 0.964, cy: 0.956 },
+  { key: 'top_left',            label: 'верх · слева',      cx: 0.033, cy: 0.026 },
+  { key: 'top_center_left',     label: 'верх · центр-лево', cx: 0.250, cy: 0.022 },
+  { key: 'top_center',          label: 'верх · центр',      cx: 0.500, cy: 0.018 },
+  { key: 'top_center_right',    label: 'верх · центр-право',cx: 0.750, cy: 0.022 },
+  { key: 'top_right',           label: 'верх · справа',     cx: 0.965, cy: 0.026 },
+  { key: 'left_upper',          label: 'слева · выше',      cx: 0.020, cy: 0.150 },
+  { key: 'left',                label: 'слева',             cx: 0.020, cy: 0.400 },
+  { key: 'left_lower',          label: 'слева · ниже',      cx: 0.020, cy: 0.680 },
+  { key: 'right_upper',         label: 'справа · выше',     cx: 0.980, cy: 0.160 },
+  { key: 'right',               label: 'справа',            cx: 0.980, cy: 0.430 },
+  { key: 'right_lower',         label: 'справа · ниже',     cx: 0.980, cy: 0.700 },
+  { key: 'bottom_left',         label: 'низ · слева',       cx: 0.034, cy: 0.956 },
+  { key: 'bottom_center_left',  label: 'низ · центр-лево',  cx: 0.250, cy: 0.960 },
+  { key: 'bottom_center',       label: 'низ · центр',       cx: 0.500, cy: 0.968 },
+  { key: 'bottom_center_right', label: 'низ · центр-право', cx: 0.750, cy: 0.960 },
+  { key: 'bottom_right',        label: 'низ · справа',      cx: 0.964, cy: 0.956 },
 ] as const;
 const DESK_ITEMS = [
   { key: 'spinner',    label: 'спиннер',      h: 0.150 },
@@ -38,6 +49,33 @@ const DESK_ITEMS = [
   { key: 'gum',        label: 'жвачка',       h: 0.062 },
   { key: 'headphones', label: 'наушники',     h: 0.190 },
   { key: 'phone',      label: 'телефон',      h: 0.230 },
+  { key: 'pen',        label: 'ручка',        h: 0.028 },
+  { key: 'pencil',     label: 'карандаш',     h: 0.190 },
+  { key: 'glasses',    label: 'очки',         h: 0.150 },
+  { key: 'scissors',   label: 'ножницы',      h: 0.130 },
+  { key: 'sticky',     label: 'стикеры',      h: 0.120 },
+  { key: 'envelope',   label: 'конверт',      h: 0.160 },
+  { key: 'postcard',   label: 'открытка',     h: 0.160 },
+  { key: 'loupe',      label: 'лупа',         h: 0.220 },
+  { key: 'calculator', label: 'калькулятор',  h: 0.220 },
+  { key: 'keys',       label: 'ключи',        h: 0.100 },
+  { key: 'watch',      label: 'часы',         h: 0.260 },
+  { key: 'lighter',    label: 'зажигалка',    h: 0.130 },
+  { key: 'coins',      label: 'монеты',       h: 0.120 },
+  { key: 'banknote',   label: 'купюра',       h: 0.150 },
+  { key: 'coffee',     label: 'кофе',         h: 0.200 },
+  { key: 'cookie',     label: 'печенье',      h: 0.130 },
+  { key: 'donut',      label: 'пончик',       h: 0.140 },
+  { key: 'chocolate',  label: 'шоколадка',    h: 0.140 },
+  { key: 'apple',      label: 'яблоко',       h: 0.130 },
+  { key: 'usb',        label: 'флешка',       h: 0.090 },
+  { key: 'mouse',      label: 'мышка',        h: 0.110 },
+  { key: 'gamepad',    label: 'геймпад',      h: 0.170 },
+  { key: 'cassette',   label: 'кассета',      h: 0.110 },
+  { key: 'dice',       label: 'кости',        h: 0.055 },
+  { key: 'cards',      label: 'карты',        h: 0.160 },
+  { key: 'domino',     label: 'домино',       h: 0.120 },
+  { key: 'compass',    label: 'компас',       h: 0.120 },
 ] as const;
 const ITEM_BY_KEY = new Map(DESK_ITEMS.map((it) => [it.key as string, it]));
 
@@ -102,6 +140,11 @@ export default function ProjectExportSettingsPage({ params }: { params: Promise<
   const [testBusy, setTestBusy] = useState(false);
   const [testShownAt, setTestShownAt] = useState<number | null>(null);
 
+  // Comic layout plan (template mode) — read-only indicator. The plan itself is
+  // authored by SQL seeding as the FIRST step of a comic project; this only
+  // shows uniform-vs-template and the gate's verdict.
+  const [plan, setPlan] = useState<Awaited<ReturnType<typeof api.comicPlanReadiness>> | null>(null);
+
   const snapshot = (et: ExportType, tp: TransitionPreset, dc: string, dp: Record<string, SlotCfg>) =>
     JSON.stringify([et, tp, dc, dp]);
 
@@ -117,6 +160,7 @@ export default function ProjectExportSettingsPage({ params }: { params: Promise<
         const dp = deskPropsOf(proj.settings);
         setExportType(et); setTransitionPreset(tp); setDeskColor(dc); setDeskProps(dp);
         setInitial(snapshot(et, tp, dc, dp));
+        api.comicPlanReadiness(proj.id).then(setPlan).catch(() => setPlan(null));
         setStatus('idle');
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -196,6 +240,7 @@ export default function ProjectExportSettingsPage({ params }: { params: Promise<
             Воркфлоу сборки драфта и вид стола для комикс-экспортов. Сам экспорт
             запускается на вкладке YouTube (шаг «Экспорт в CapCut»).
           </p>
+          <div className="mt-2"><ReleaseSlotHint idOrSlug={id} /></div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           {status === 'saved' && <span className="text-xs text-emerald-400">сохранено ✓</span>}
@@ -218,7 +263,7 @@ export default function ProjectExportSettingsPage({ params }: { params: Promise<
       <section className="space-y-4">
         <Row
           label="Тип экспорта"
-          hint="project.settings.exportType — как собирается CapCut-драфт. «Линейный» = обычная лента шотов с простыми переходами. «Комикс» = фильм раскладывается на страницы-комиксы, камера летает по панелям с переворотами страниц, ОДНИМ драфтом. «Комикс по частям» = та же картинка, нарезанная на несколько лёгких драфтов + финальная сборка. Оба комикс-экспорта МЕДЛЕННЫЕ и пишут драфты прямо в папку CapCut — CapCut должен быть закрыт.">
+          hint="project.settings.exportType — как собирается CapCut-драфт. «Линейный» = обычная лента кадров с простыми переходами. «Комикс» = фильм раскладывается на страницы-комиксы, камера летает по панелям с переворотами страниц, ОДНИМ драфтом. «Комикс по частям» = та же картинка, нарезанная на несколько лёгких драфтов + финальная сборка. Оба комикс-экспорта МЕДЛЕННЫЕ и пишут драфты прямо в папку CapCut — CapCut должен быть закрыт.">
           <select
             value={exportType}
             onChange={(e) => setExportType(e.target.value as ExportType)}
@@ -229,10 +274,44 @@ export default function ProjectExportSettingsPage({ params }: { params: Promise<
           </select>
         </Row>
 
+        {isComic && (
+          <div className="text-xs">
+            <Link href="/comic-templates" className="text-sky-400 hover:underline">
+              Галерея шаблонов страниц →
+            </Link>
+          </div>
+        )}
+
+        {isComic && plan && (
+          <Row
+            label="Вёрстка комикса"
+            hint="Наличие плана comic_pages переключает экспорт в шаблонный режим: страницы собираются по именованным шаблонам (панели wide/16:9/1:1/2:3, камера идёт по readingOrder шаблона), размер рендера каждого кадра диктует форма его панели. Без плана — прежняя однородная сетка 12 панелей. План сеется SQL-ом ПЕРВЫМ шагом проекта, до сценария; правится только там.">
+            <div className="text-sm space-y-1">
+              {plan.templateMode ? (
+                <>
+                  <div className={plan.ready ? 'text-emerald-400' : 'text-red-400'}>
+                    Шаблонный план: {plan.pages} страниц — {plan.ready ? 'готов ✓' : `${plan.errors.length} ошибок`}
+                  </div>
+                  {!plan.ready && plan.errors.slice(0, 5).map((e, i) => (
+                    <div key={i} className="text-xs text-red-300">
+                      {[e.page != null ? `стр.${e.page}` : null, e.slot != null ? `слот ${e.slot}` : null, e.shotCode].filter(Boolean).join(' ')} {e.message}
+                    </div>
+                  ))}
+                  {plan.warnings.slice(0, 3).map((w, i) => (
+                    <div key={i} className="text-xs text-amber-300">⚠ {w.message}</div>
+                  ))}
+                </>
+              ) : (
+                <div className="text-zinc-400">Однородная сетка (легаси) — план страниц не задан</div>
+              )}
+            </div>
+          </Row>
+        )}
+
         {exportType === 'linear' && (
           <Row
-            label="Переходы между шотами"
-            hint="project.settings.transitionPreset — стиль переходов на стыках шотов. «Стандартный» = ротация 8 бесплатных переходов. «Комикс» = 漫画撕纸 (разрыв с угла) 90% + 便利贴 (стикер) 5% + 故障拼贴 (рваный коллаж) 5%. Комикс-переходы — VIP (нужен CapCut Pro).">
+            label="Переходы между кадрами"
+            hint="project.settings.transitionPreset — стиль переходов на стыках кадров. «Стандартный» = ротация 8 бесплатных переходов. «Комикс» = 漫画撕纸 (разрыв с угла) 90% + 便利贴 (стикер) 5% + 故障拼贴 (рваный коллаж) 5%. Комикс-переходы — VIP (нужен CapCut Pro).">
             <select
               value={transitionPreset}
               onChange={(e) => setTransitionPreset(e.target.value as TransitionPreset)}

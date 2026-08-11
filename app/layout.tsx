@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Sidebar } from "../components/Sidebar";
@@ -17,7 +17,17 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Gen Studio",
-  description: "AI video production · LoRA pipeline · scene rendering",
+};
+
+// Deliberately minimal: no maximumScale lock. The page scrolls as an ordinary
+// document now (see <body> below), so pinch-zoom is a harmless escape hatch
+// rather than the only way to reach content the shell had pushed off-screen —
+// and locking it out is what made a mis-laid-out page unusable on a phone.
+// Auto-zoom-on-focus is prevented at the source instead: form controls are
+// ≥16px on coarse pointers (globals.css).
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default async function RootLayout({
@@ -34,31 +44,32 @@ export default async function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} antialiased`}
     >
       {/* Desktop (md+): a flex ROW — persistent sidebar on the left, page on the
           right. Mobile: a flex COLUMN — the MobileNav top bar on top, page below.
           The Sidebar is hidden on mobile and the MobileNav bar is hidden on
           desktop, so only one nav shows per breakpoint.
+
+          THE PAGE SCROLLS AS AN ORDINARY DOCUMENT. There is no viewport-height
+          cap and no inner scroll container — the body simply grows with its
+          content. The previous shell (h-dvh + overflow-hidden + an overflow-y
+          page column) is what made the app unusable on an iPhone: the inner
+          scroller regularly refused to reach its own end, so whatever sat at the
+          bottom of a page — the queue pager, most of all — was unreachable
+          without pinch-zooming out. A plain document scroll cannot land in that
+          state, and it gets the browser's own behaviours for free: the address
+          bar collapses to give back screen height, and scroll position is
+          restored on back/forward.
+
           min-w-0 on the page column lets long content (queue table, long scene
-          titles) shrink/scroll instead of stretching the row.
-          h-screen + overflow-hidden caps the body to the viewport so the sticky
-          page headers don't push the body past 100vh; vertical scroll for long
-          content happens inside the page column instead. h-dvh (dynamic viewport
-          height) overrides h-screen on browsers that support it so the iOS/iPadOS
-          Safari address bar collapsing doesn't leave the shell taller than the
-          visible area.
-          The page column needs min-h-0 (not just min-w-0): on mobile the body is
-          a flex COLUMN, and a flex item defaults to min-height:auto, which lets it
-          grow to its full content height instead of shrinking to the leftover
-          viewport. Without min-h-0 the column's overflow-y-auto never engages, the
-          content overflows the overflow-hidden body, and iOS Safari refuses to
-          scroll until you pinch-zoom to force a re-layout. min-h-0 makes the
-          column cap at the available height so its own scroller does the work. */}
-      <body className="h-screen h-dvh flex flex-col md:flex-row bg-zinc-950 overflow-hidden">
+          titles) shrink or scroll inside its own box instead of stretching the
+          row; overflow-x-hidden keeps an oversized child from making the WHOLE
+          document pan sideways. */}
+      <body className="min-h-dvh flex flex-col md:flex-row bg-zinc-950">
         <MobileNav projects={projects} />
         <Sidebar projects={projects} />
-        <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-y-auto overflow-x-hidden">{children}</div>
+        <div className="flex-1 min-w-0 overflow-x-hidden">{children}</div>
       </body>
     </html>
   );

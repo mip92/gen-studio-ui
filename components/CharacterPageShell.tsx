@@ -37,7 +37,7 @@ export function useCharacterCtx(): CharacterCtx {
 
 const ALL_TABS = [
   { slug: 'description', label: 'Описание',   pipelines: ['lora', 'anchor', 'mixed', 'none'] as const },
-  { slug: 'reference',   label: 'Reference',  pipelines: ['lora', 'anchor', 'mixed', 'none'] as const },
+  { slug: 'reference',   label: 'Референс',   pipelines: ['lora', 'anchor', 'mixed', 'none'] as const },
   // Dataset + Training + LoRA tabs only make sense for the photoreal pipeline.
   // For cartoon (anchor-only) characters these are hidden — anchor lives on
   // the Reference tab.

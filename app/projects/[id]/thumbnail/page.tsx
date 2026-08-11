@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState, use } from 'react';
-import { api, CaptionSpec, ThumbnailIdeaInput, ThumbnailIdeaJob, ThumbnailJob } from '@/lib/api';
+import { api, CaptionSpec, ThumbQuality, ThumbnailIdeaInput, ThumbnailIdeaJob, ThumbnailJob } from '@/lib/api';
 
 const POLL_MS = 3000;
 const ACTIVE = new Set(['pending', 'running']);
@@ -47,6 +47,9 @@ export default function ThumbnailPage({ params }: { params: Promise<{ id: string
   const [proposals, setProposals] = useState<ThumbnailIdeaJob[]>([]);
   /** Which proposed concepts are ticked for queueing. */
   const [chosenIdeas, setChosenIdeas] = useState<Record<string, boolean>>({});
+  /** Sampling tier for the next render. Defaults to the scene regime, which is
+   *  what the backend defaults to as well — `full` is ~13× the wait per frame. */
+  const [quality, setQuality] = useState<ThumbQuality>('scene');
 
   const refresh = useCallback(async () => {
     try {
@@ -111,7 +114,7 @@ export default function ThumbnailPage({ params }: { params: Promise<{ id: string
     if (picks.length === 0) { setError('Отметь хотя бы одну идею'); return; }
     setBusy(true); setError(null);
     try {
-      await api.enqueueThumbnailIdeas(projectId, picks.map((p) => ({ ...p.idea, batchSize: 5 })));
+      await api.enqueueThumbnailIdeas(projectId, picks.map((p) => ({ ...p.idea, batchSize: 5 })), quality);
       setChosenIdeas({});
       await refresh();
     } catch (e) {
@@ -149,7 +152,7 @@ export default function ThumbnailPage({ params }: { params: Promise<{ id: string
 
   const addMore = async (jobId: string) => {
     setBusy(true); setError(null);
-    try { await api.addMoreThumbnails(projectId, jobId, 5); await refresh(); }
+    try { await api.addMoreThumbnails(projectId, jobId, 5, quality); await refresh(); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
@@ -252,10 +255,28 @@ export default function ThumbnailPage({ params }: { params: Promise<{ id: string
                 </div>
               );
             })}
-            <button type="button" onClick={() => void queueChosen()} disabled={busy}
-                    className="self-start rounded bg-purple-700 px-3 py-1.5 text-xs text-white hover:bg-purple-600 disabled:opacity-40">
-              Отправить отмеченные в рендер
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <button type="button" onClick={() => void queueChosen()} disabled={busy}
+                      className="rounded bg-purple-700 px-3 py-1.5 text-xs text-white hover:bg-purple-600 disabled:opacity-40">
+                Отправить отмеченные в рендер
+              </button>
+              <label className="flex items-center gap-2 text-xs text-zinc-400">
+                Качество
+                <select value={quality} onChange={(e) => setQuality(e.target.value as ThumbQuality)}
+                        className={input}>
+                  <option value="scene">как в кадрах — быстро</option>
+                  <option value="balanced">средне — вдвое дольше</option>
+                  <option value="full">максимум — долго, живой негатив</option>
+                </select>
+              </label>
+              <span className="text-[11px] text-zinc-600">
+                {quality === 'scene'
+                  ? 'Тот же режим, что у обычных кадров: 4 шага. Пачка из 5 — пара минут.'
+                  : quality === 'balanced'
+                    ? '8 шагов с ускоряющей LoRA: больше запаса на перерисовку и пересвет. Вдвое дольше быстрого. Негатив тут не работает.'
+                    : '26 шагов, cfg 3.0 — единственный режим с живым негативом (запрет букв). Пачка из 5 доходила до получаса.'}
+              </span>
+            </div>
           </div>
         )}
       </section>
@@ -429,7 +450,7 @@ export default function ThumbnailPage({ params }: { params: Promise<{ id: string
               ? api.thumbnailCoverUrl(projectId, coverBust)
               : api.thumbnailCandidateUrl(projectId, lightbox.jobId, lightbox.filename)}
             alt="кандидат"
-            className="max-h-[90vh] max-w-[95vw] object-contain"
+            className="max-h-[90dvh] max-w-[95vw] object-contain"
             onClick={(e) => e.stopPropagation()}
           />
         </div>

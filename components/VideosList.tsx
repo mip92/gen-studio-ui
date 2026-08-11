@@ -38,7 +38,7 @@ export function VideosList({ projectId, shotId }: { projectId: string; shotId: s
         <Link href={`/projects/${projectId}/shots/${shotId}`} className="text-xs text-zinc-500 hover:text-zinc-300">
           ← к кадру
         </Link>
-        <h1 className="text-lg font-semibold text-zinc-200">Видео по шоту</h1>
+        <h1 className="text-lg font-semibold text-zinc-200">Видео по кадру</h1>
         {videos && (
           <span className="text-xs text-zinc-500">всего {videos.length}</span>
         )}
@@ -46,7 +46,7 @@ export function VideosList({ projectId, shotId }: { projectId: string; shotId: s
 
       {videos === null && <p className="text-zinc-500 text-sm">Loading…</p>}
       {videos && videos.length === 0 && (
-        <p className="text-zinc-600 text-sm italic">Пока ничего не нагенерировано. Вернитесь на страницу шота и запустите рендер.</p>
+        <p className="text-zinc-600 text-sm italic">Пока ничего не нагенерировано. Вернитесь на страницу кадра и запустите рендер.</p>
       )}
 
       {videos && videos.length > 0 && (

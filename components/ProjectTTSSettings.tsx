@@ -7,6 +7,8 @@ import {
   type ProjectTTSEmotionRef,
   type TTSEngine,
   type Voiceover,
+  TTS_ENGINES,
+  TTS_ENGINE_LABELS,
 } from '@/lib/api';
 
 const INDEXTTS2_PRESETS = ['neutral', 'happy', 'sad', 'angry', 'fear', 'disgust', 'surprise', 'calm'] as const;
@@ -164,10 +166,11 @@ export function ProjectTTSSettings({ projectId, initialEngine, initialVoiceRefPa
         <div>
           <h2 className="text-sm uppercase tracking-wider text-zinc-400">🎙 TTS Engine</h2>
           <p className="text-[11px] text-zinc-600 mt-1 leading-snug">
-            Silero — CPU, фиксированные голоса (диктор). XTTS-v2 и F5-TTS Russian — GPU, voice
-            cloning по референс-клипу проекта (+ опциональные emotion-refs). F5 дополнительно
-            авто-расставляет ударения (RUAccent). Переключение моментальное; уже отрендеренные
-            wav-файлы переключение не трогает.
+            Silero — CPU, фиксированные голоса (диктор). XTTS-v2, F5-TTS Russian и Fish S2 Pro —
+            GPU, voice cloning по референс-клипу проекта (+ опциональные emotion-refs). F5
+            дополнительно авто-расставляет ударения (RUAccent). Fish S2 Pro читает кадр целиком
+            (просодия по контексту); первый джоб после простоя ждёт ~5 мин — грузится модель.
+            Переключение моментальное; уже отрендеренные wav-файлы переключение не трогает.
           </p>
         </div>
       </header>
@@ -180,7 +183,7 @@ export function ProjectTTSSettings({ projectId, initialEngine, initialVoiceRefPa
 
       {/* Engine radio */}
       <div className="flex gap-3">
-        {(['silero', 'xtts2', 'f5', 'qwen3'] as TTSEngine[]).map((eng) => (
+        {TTS_ENGINES.map((eng) => (
           <button
             key={eng}
             disabled={busy === 'engine'}
@@ -192,7 +195,7 @@ export function ProjectTTSSettings({ projectId, initialEngine, initialVoiceRefPa
                 : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-zinc-500')
             }
           >
-            {eng === 'silero' ? 'Silero V5 ru' : eng === 'xtts2' ? 'XTTS-v2' : eng === 'f5' ? 'F5-TTS Russian' : 'Qwen3-TTS'}
+            {TTS_ENGINE_LABELS[eng]}
           </button>
         ))}
         {busy === 'engine' && <span className="text-xs text-zinc-500 self-center">…</span>}

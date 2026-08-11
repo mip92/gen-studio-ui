@@ -33,6 +33,21 @@ export function HeaderCell({ label, column, filter }: {
   );
 }
 
+/**
+ * Label stacked above a control. Used by the phone-only filter bars: below md
+ * the wide tables are replaced by card lists, which have no header row to hang
+ * a column filter off — so the same dropdowns are surfaced here with their own
+ * labels instead.
+ */
+export function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-zinc-500">
+      {label}
+      <span className="normal-case tracking-normal text-xs">{children}</span>
+    </label>
+  );
+}
+
 // ── Anchored, portalled dropdown panel ───────────────────────────────────────
 // The filter menus live inside the table, which sits in an `overflow-x-auto`
 // scroll container. An absolutely-positioned menu is clipped by that container
@@ -86,10 +101,15 @@ function DropdownPanel({ panelRef, pos, minWidth, children }: {
   children: React.ReactNode;
 }) {
   if (!pos || typeof document === 'undefined') return null;
+  // Clamp to the viewport: the trigger button can sit far right (a scrolled
+  // wide table on a phone), and an unclamped panel would open past the right
+  // edge — a fixed-position portal there is unreachable by any scrolling.
+  const left = Math.max(8, Math.min(pos.left, window.innerWidth - minWidth - 8));
   return createPortal(
     <div
       ref={panelRef}
-      style={{ position: 'fixed', top: pos.top, left: pos.left, minWidth, maxHeight: pos.maxHeight }}
+      style={{ position: 'fixed', top: pos.top, left, minWidth,
+               maxWidth: window.innerWidth - 16, maxHeight: pos.maxHeight }}
       className="z-50 bg-zinc-900 border border-zinc-700 rounded shadow-lg py-1 overflow-y-auto"
     >
       {children}
@@ -114,7 +134,7 @@ export function MultiSelect({ options, value, onChange }: {
     onChange([...set]);
   };
 
-  const label = value.length === 0 ? 'all' : `${value.length} selected`;
+  const label = value.length === 0 ? 'все' : `выбрано: ${value.length}`;
 
   return (
     <div className="relative inline-block">
@@ -138,7 +158,7 @@ export function MultiSelect({ options, value, onChange }: {
               onClick={() => onChange([])}
               className="block w-full text-left px-3 py-1 text-[11px] text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800"
             >
-              clear
+              сбросить
             </button>
           )}
           {options.map((opt) => (
@@ -171,10 +191,10 @@ export function MultiSelectLabeled({ options, value, onChange }: {
   };
 
   const buttonLabel = value.length === 0
-    ? 'all'
+    ? 'все'
     : value.length === 1
       ? (options.find((o) => o.value === value[0])?.label ?? value[0])
-      : `${value.length} selected`;
+      : `выбрано: ${value.length}`;
 
   return (
     <div className="relative inline-block">
@@ -194,7 +214,7 @@ export function MultiSelectLabeled({ options, value, onChange }: {
       {open && (
         <DropdownPanel panelRef={panelRef} pos={pos} minWidth={180}>
           {options.length === 0 && (
-            <div className="px-3 py-1 text-[11px] text-zinc-600 italic">no options</div>
+            <div className="px-3 py-1 text-[11px] text-zinc-600 italic">нет вариантов</div>
           )}
           {value.length > 0 && (
             <button
@@ -202,7 +222,7 @@ export function MultiSelectLabeled({ options, value, onChange }: {
               onClick={() => onChange([])}
               className="block w-full text-left px-3 py-1 text-[11px] text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800"
             >
-              clear
+              сбросить
             </button>
           )}
           {options.map((opt) => (

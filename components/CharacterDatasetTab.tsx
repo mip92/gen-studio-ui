@@ -145,7 +145,7 @@ export function CharacterDatasetTab() {
           {refMode === 'chain' && refProfileId && (
             <div className="mt-3">
               <div className="text-xs text-zinc-500 mb-2">
-                Выбери конкретный кадр (или оставь авто-выбор):
+                Выбери конкретное изображение (или оставь авто-выбор):
                 {refImage && <span className="ml-2 text-emerald-400 font-mono">✓ {refImage}</span>}
               </div>
               {refImageList.length === 0 ? (

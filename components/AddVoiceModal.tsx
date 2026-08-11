@@ -82,7 +82,7 @@ export function AddVoiceModal({ onClose, onCreated }: { onClose: () => void; onC
 
   return (
     <div className="fixed inset-0 bg-black/80 z-40 flex items-center justify-center p-4" onClick={close}>
-      <div className="bg-zinc-900 border border-zinc-700 rounded-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+      <div className="bg-zinc-900 border border-zinc-700 rounded-lg w-full max-w-2xl max-h-[90dvh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-3">
           <h2 className="text-sm font-semibold text-zinc-100">Добавить голос в библиотеку</h2>
@@ -101,10 +101,12 @@ export function AddVoiceModal({ onClose, onCreated }: { onClose: () => void; onC
               {/* From YouTube */}
               <div className="space-y-2">
                 <label className="text-[10px] uppercase tracking-wider text-zinc-500">Ссылка на YouTube</label>
-                <div className="flex gap-2">
+                {/* flex-wrap + min-w-0: input не сжимается ниже ~180px, и в
+                    узкой модалке кнопка «Извлечь аудио» обрезалась краем */}
+                <div className="flex flex-wrap gap-2">
                   <input value={url} onChange={(e) => setUrl(e.target.value)}
                     placeholder="https://youtube.com/watch?v=…"
-                    className="flex-1 bg-zinc-950 border border-zinc-700 rounded px-2 py-2 text-sm font-mono" />
+                    className="flex-1 min-w-0 bg-zinc-950 border border-zinc-700 rounded px-2 py-2 text-sm font-mono" />
                   <button onClick={fromYoutube} disabled={!url.trim() || !!busy}
                     className={`text-sm px-4 py-2 rounded whitespace-nowrap ${
                       url.trim() && !busy ? 'bg-emerald-700 hover:bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'

@@ -64,7 +64,7 @@ export default function LocationsPage({ params }: { params: Promise<{ id: string
   };
 
   const remove = async (loc: Location) => {
-    if (!confirm(`Удалить локацию "${loc.name}"? Шоты привязанные к ней потеряют тег (positive не изменится).`)) return;
+    if (!confirm(`Удалить локацию "${loc.name}"? Кадры, привязанные к ней, потеряют тег (positive не изменится).`)) return;
     setBusy(true);
     try {
       await api.deleteLocation(loc.id);
@@ -84,8 +84,8 @@ export default function LocationsPage({ params }: { params: Promise<{ id: string
           <p className="text-xs text-zinc-500 mt-1 max-w-2xl">
             Каждая локация — переиспользуемое описание места действия (купе, коридор, тамбур, перрон…).
             Рендерер автоматически подставляет <code className="text-zinc-400">description</code> в начало
-            позитивного промпта каждого шота, привязанного к этой локации. Меняешь описание здесь — обновляется
-            у всех шотов с этим тегом.
+            позитивного промпта каждого кадра, привязанного к этой локации. Меняешь описание здесь — обновляется
+            у всех кадров с этим тегом.
           </p>
         </div>
         <button

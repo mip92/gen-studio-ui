@@ -6,7 +6,7 @@ import { useShotCtx } from './ShotPageShell';
 import { ParticipantsEditor, ParticipantDraft } from './ShotDetail';
 
 export function ShotParticipantsTab() {
-  const { shot, setShot, characters, shotId } = useShotCtx();
+  const { shot, setShot, characters, shotId, projectId } = useShotCtx();
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft]     = useState<ParticipantDraft[]>([]);
@@ -67,6 +67,8 @@ export function ShotParticipantsTab() {
         }))}
         characters={characters}
         shotParticipants={shot.participants}
+        isCartoon={(shot.project?.visualStyle ?? 'photoreal_cinematic') !== 'photoreal_cinematic'}
+        projectId={projectId}
         onChange={setDraft}
       />
 

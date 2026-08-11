@@ -243,7 +243,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
           <h1 className="text-xl font-semibold">Настройки проекта</h1>
           <p className="text-xs text-zinc-500 mt-1 max-w-2xl">
             Поля промптов подставляются в воркфлоу при рендере. Меняешь здесь — применяется
-            ко всем шотам, у которых нет своего per-shot override.
+            ко всем кадрам, у которых нет своего per-shot override.
           </p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -320,7 +320,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
 
         <Row
           label="Шагов сэмплера (рендер кадра)"
-          hint="project.settings.sceneSteps — сколько шагов делает KSampler на рендере КАДРА (видео и якорей не касается). Пусто = значение из воркфлоу (на квене 4 — под Lightning-LoRA). Больше шагов = у модели больше места перерисовать сцену, а не вернуть референс, и картинка обычно богаче; платишь временем. Разово переопределяется параметром steps на конкретном рендере. Допустимо 1–60.">
+          hint="project.settings.sceneSteps — сколько шагов делает KSampler на рендере КАДРА (видео и якорей не касается). Пусто = значение из воркфлоу (на квене 4 — под Lightning-LoRA). Больше шагов = у модели больше места перерисовать кадр, а не вернуть референс, и картинка обычно богаче; платишь временем. Разово переопределяется параметром steps на конкретном рендере. Допустимо 1–60.">
           <input
             type="number" min={1} max={60} step={1}
             value={sceneSteps}
@@ -372,7 +372,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
 
         <Row
           label="SDXL Negative (обязательное)"
-          hint="Project.defaultNegative — подставляется в SDXL рендер сцены если у шота нет своего pf.negative. Подтягивает санитайзер (weights ≤ 1.3, без motion blur/plastic skin). Пустую строку API отклонит.">
+          hint="Project.defaultNegative — подставляется в SDXL рендер кадра, если у кадра нет своего pf.negative. Подтягивает санитайзер (weights ≤ 1.3, без motion blur/plastic skin). Пустую строку API отклонит.">
           <textarea value={v('defaultNegative')} rows={4}
             onChange={(e) => onChange('defaultNegative', e.target.value)}
             className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono leading-relaxed" />
@@ -388,7 +388,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
 
         <Row
           label="Wan2.2 Motion Prompt fallback (обязательное)"
-          hint="Project.defaultMotionPrompt — подставляется в node 9 если у VideoRender.motionPrompt пусто и шот не static.">
+          hint="Project.defaultMotionPrompt — подставляется в node 9 если у VideoRender.motionPrompt пусто и кадр не static.">
           <textarea value={v('defaultMotionPrompt')} rows={3}
             onChange={(e) => onChange('defaultMotionPrompt', e.target.value)}
             className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono leading-relaxed" />
@@ -396,7 +396,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
 
         <Row
           label="Wan2.2 Static-shot fallback (обязательное)"
-          hint="Project.defaultStaticMotionPrompt — для шотов с pf.camera.movement начинающимся с 'static'. Должно быть сильное 'freeze frame, no motion' указание.">
+          hint="Project.defaultStaticMotionPrompt — для кадров с pf.camera.movement начинающимся с 'static'. Должно быть сильное 'freeze frame, no motion' указание.">
           <textarea value={v('defaultStaticMotionPrompt')} rows={5}
             onChange={(e) => onChange('defaultStaticMotionPrompt', e.target.value)}
             className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono leading-relaxed" />

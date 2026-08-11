@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation';
 import { api, ScenesResponse, SceneShot, SceneShotParticipant } from '../lib/api';
 import { CreateSceneModal } from './CreateSceneModal';
 import { CreateShotModal } from './CreateShotModal';
-import { SceneShotsTTSModal } from './SceneShotsTTSModal';
 import { useScrollRestore } from '../lib/useScrollRestore';
 
 export function ScenesList({ id }: { id: string }) {
@@ -16,24 +15,14 @@ export function ScenesList({ id }: { id: string }) {
   const [error, setError]                         = useState<string | null>(null);
   const [showCreate, setShowCreate]               = useState(false);
   const [createShotInScene, setCreateShotInScene] = useState<string | null>(null);
-  const [ttsForScene, setTtsForScene]             = useState<string | null>(null);
   const [queue, setQueue] = useState<{ running: string[]; pending: string[] } | null>(null);
   const [enqueuing, setEnqueuing] = useState(false);
-  // Vision-QC after render is OPT-IN (default off); last choice remembered in the browser.
-  const [validateAfter, setValidateAfter] = useState(false);
-  useEffect(() => {
-    try { setValidateAfter(localStorage.getItem('genstudio.validateAfterRender') === '1'); } catch { /* no storage */ }
-  }, []);
-  const toggleValidateAfter = (v: boolean) => {
-    setValidateAfter(v);
-    try { localStorage.setItem('genstudio.validateAfterRender', v ? '1' : '0'); } catch { /* best effort */ }
-  };
 
   const enqueueAll = async () => {
-    if (!confirm(`Поставить на рендер ВСЕ кадры проекта, которые ещё не рендерились и не стоят в очереди?\n\nУже готовые (апрувнутые) и ждущие апрува — НЕ трогаются. Ничего не удаляется, только добавляется.${validateAfter ? '\n\nПосле рендера каждый батч уйдёт на проверку нейронкой.' : ''}`)) return;
+    if (!confirm('Поставить на рендер ВСЕ кадры проекта, которые ещё не рендерились и не стоят в очереди?\n\nУже готовые (апрувнутые) и ждущие апрува — НЕ трогаются. Ничего не удаляется, только добавляется.')) return;
     setEnqueuing(true);
     try {
-      const r = await api.enqueueProjectPending(id, validateAfter);
+      const r = await api.enqueueProjectPending(id);
       alert(`Поставлено в очередь: ${r.enqueued}`);
       refresh();
     } catch (e) {
@@ -61,7 +50,7 @@ export function ScenesList({ id }: { id: string }) {
     <main className="px-4 sm:px-8 py-6">
       <div className="flex justify-between items-center mb-4">
         <div className="flex items-center gap-3">
-          <h2 className="text-sm uppercase tracking-wider text-zinc-500">Сцены и кадры</h2>
+          <h2 className="text-sm uppercase tracking-wider text-zinc-500">Акты и кадры</h2>
           {queue && (queue.running.length > 0 || queue.pending.length > 0) && (
             <span className="text-xs text-amber-300 bg-amber-900/30 border border-amber-800/50 rounded px-2 py-0.5">
               ComfyUI: ⚙ {queue.running.length} · ⏳ {queue.pending.length}
@@ -69,16 +58,6 @@ export function ScenesList({ id }: { id: string }) {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <label className="text-xs text-zinc-400 flex items-center gap-1.5 cursor-pointer select-none"
-            title="После каждого батча ставить проверку vision-моделью (только непроверенные фото)">
-            <input
-              type="checkbox"
-              checked={validateAfter}
-              onChange={(e) => toggleValidateAfter(e.target.checked)}
-              className="accent-indigo-600"
-            />
-            🤖 проверять
-          </label>
           <button
             onClick={enqueueAll}
             disabled={enqueuing}
@@ -91,7 +70,7 @@ export function ScenesList({ id }: { id: string }) {
             onClick={() => setShowCreate(true)}
             className="text-xs bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded"
           >
-            + новая сцена
+            + новый акт
           </button>
         </div>
       </div>
@@ -117,7 +96,7 @@ export function ScenesList({ id }: { id: string }) {
                 <span className="text-xs text-zinc-500">
                   {s.shots.length} кадров · фото: {s.shots.filter((sh) => sh.chosenRender).length} · видео: {s.shots.filter((sh) => sh.chosenVideoId).length}
                 </span>
-                <SceneTTSControls sceneId={s.id} onOpenDetails={() => setTtsForScene(s.id)} />
+                <SceneTTSControls projectId={id} sceneId={s.id} />
                 <button
                   onClick={() => setCreateShotInScene(s.id)}
                   className="text-xs bg-blue-700 hover:bg-blue-600 text-white px-2 py-0.5 rounded"
@@ -152,28 +131,15 @@ export function ScenesList({ id }: { id: string }) {
         />
       )}
 
-      {ttsForScene && (() => {
-        const s = data.scenes.find((sc) => sc.id === ttsForScene);
-        if (!s) return null;
-        return (
-          <SceneShotsTTSModal
-            projectId={id}
-            sceneId={s.id}
-            sceneTitle={s.title ?? s.sceneKey}
-            shots={s.shots}
-            onClose={() => { setTtsForScene(null); refresh(); }}
-          />
-        );
-      })()}
     </main>
   );
 }
 
 /**
- * Per-scene TTS controls — inline progress + bulk-queue button + "details" link
- * that opens the full SceneShotsTTSModal. Polls the per-scene shot-TTS summary
- * every 3s while anything is in flight so the user sees live counts without
- * leaving the scenes page.
+ * Per-act TTS controls — inline progress counters + "детали" link to the
+ * project-wide voiceover tab (/projects/<id>/tts?scene=<sceneId>), pre-filtered
+ * to this act. Polls the act's per-shot TTS summary every 3s while anything is
+ * in flight. (Scene = act in this domain; the numbers are shots.)
  */
 type SceneSum = {
   total:          number;
@@ -187,9 +153,10 @@ type SceneSum = {
   failedJobs:     number;
 };
 
-function SceneTTSControls({ sceneId, onOpenDetails }: { sceneId: string; onOpenDetails: () => void }) {
+function SceneTTSControls({ projectId, sceneId }: { projectId: string; sceneId: string }) {
   const [sum,  setSum]  = useState<SceneSum | null>(null);
   const [err,  setErr]  = useState<string | null>(null);
+  const detailsHref = `/projects/${projectId}/tts?scene=${sceneId}`;
 
   const refresh = useCallback(() => {
     api.sceneShotsTTSSummary(sceneId).then(setSum).catch(() => setSum(null));
@@ -207,9 +174,9 @@ function SceneTTSControls({ sceneId, onOpenDetails }: { sceneId: string; onOpenD
 
   if (!sum) {
     return (
-      <button onClick={onOpenDetails} className="text-xs bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded">
+      <Link href={detailsHref} className="text-xs bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded">
         детали
-      </button>
+      </Link>
     );
   }
 
@@ -237,12 +204,12 @@ function SceneTTSControls({ sceneId, onOpenDetails }: { sceneId: string; onOpenD
         )}
         <span className="text-zinc-600">/ {sum.total}</span>
       </span>
-      <button
-        onClick={onOpenDetails}
+      <Link
+        href={detailsHref}
         className="bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded"
       >
         детали
-      </button>
+      </Link>
       {err && <span className="text-red-400 text-[10px] font-mono truncate max-w-[200px]" title={err}>{err}</span>}
     </div>
   );
@@ -252,7 +219,7 @@ type QueueStatus = 'idle' | 'running' | 'pending';
 
 function queueStatusFor(shot: SceneShot, queue: { running: string[]; pending: string[] } | null): QueueStatus {
   // Source of truth #1: our pipeline queue (covers pending — not yet dispatched —
-  // and running scenes; legacy direct renders won't have this set).
+  // and running shot renders; legacy direct renders won't have this set).
   if (shot.pipelineRender) {
     if (shot.pipelineRender.status === 'running') return 'running';
     if (shot.pipelineRender.status === 'pending') return 'pending';
@@ -367,7 +334,10 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
     <div
       data-scroll-key={shot.id}
       onClick={() => { markBeforeNav(shot.id); router.push(`/projects/${projectId}/shots/${shot.id}`); }}
-      className={`px-5 py-3 flex gap-4 text-sm hover:bg-zinc-800/30 transition items-start cursor-pointer ${
+      // flex-wrap: на телефоне миниатюра + чипы участников + кнопки рендера
+      // (всё flex-shrink-0) шире экрана — без переноса кнопки и стрелка «→»
+      // уезжали за правый край без возможности доскроллить
+      className={`px-5 py-3 flex flex-wrap gap-4 gap-y-2 text-sm hover:bg-zinc-800/30 transition items-start cursor-pointer ${
         queueStatus !== 'idle' || videoStatus || upscaleStatus === 'pending' || upscaleStatus === 'running'
           || interpStatus === 'pending' || interpStatus === 'running'
           ? 'bg-amber-950/20'
@@ -397,6 +367,13 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2 mb-1 flex-wrap">
           <span className="text-zinc-500 font-mono text-xs">{shot.shotCode}</span>
+          {/* Comic panel shape (template-layout plan) — the shot renders at this
+              shape's sizes and lives in a fixed slot of its page template. */}
+          {shot.comicPanelShape && (
+            <span className="text-fuchsia-300 bg-fuchsia-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">
+              {{ wide: '▭ wide', landscape: '▭ 16:9', square: '□ 1:1', tall: '▯ 2:3', narrow: '▯ 9:16', tall_page: '▯ стр.' }[shot.comicPanelShape] ?? shot.comicPanelShape}
+            </span>
+          )}
           {queueStatus === 'running' && (
             <span className="text-blue-300 bg-blue-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⚙ рендерится</span>
           )}

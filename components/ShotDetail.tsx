@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { api, ShotFull, ShotPromptFields, UpdateShotBody, VideoRender, CandidateVerdict } from '../lib/api';
+import { api, ShotFull, ShotPromptFields, UpdateShotBody, VideoRender, ImageQcVerdict } from '../lib/api';
 
 export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: string }) {
   const router = useRouter();
@@ -73,7 +73,7 @@ export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: s
   return (
     <main className="px-4 sm:px-8 py-6">
       <Link href={`/projects/${projectId}/scenes`} className="text-zinc-500 hover:text-zinc-200 text-sm mb-4 inline-block">
-        ← все сцены
+        ← все акты
       </Link>
 
       <header className="mb-6 flex items-baseline justify-between">
@@ -179,6 +179,7 @@ export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: s
           characters={characters}
           shotParticipants={shot.participants}
           isCartoon={(shot.project?.visualStyle ?? 'photoreal_cinematic') !== 'photoreal_cinematic'}
+          projectId={projectId}
           onChange={(parts) => setDraft((d) => ({ ...d, participants: parts }))}
         />
 
@@ -267,16 +268,6 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
   const [steps,        setSteps]        = useState<number | ''>('');
   const [guidance,     setGuidance]     = useState<number | ''>('');
   const [loraStrength, setLoraStrength] = useState<number | ''>('');
-  // Vision-QC after render is strictly OPT-IN (default off). The last choice is
-  // remembered in the browser so the checkbox stays how the user left it.
-  const [validateAfter, setValidateAfter] = useState(false);
-  useEffect(() => {
-    try { setValidateAfter(localStorage.getItem('genstudio.validateAfterRender') === '1'); } catch { /* SSR/no storage */ }
-  }, []);
-  const toggleValidateAfter = (v: boolean) => {
-    setValidateAfter(v);
-    try { localStorage.setItem('genstudio.validateAfterRender', v ? '1' : '0'); } catch { /* best effort */ }
-  };
 
   // Per-participant identity readiness. Cartoon needs promptBase+triggerToken;
   // photoreal needs a trained LoRA. Status carries one of:
@@ -362,7 +353,6 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
       if (steps        !== '') body.steps        = Number(steps);
       if (guidance     !== '') body.guidance     = Number(guidance);
       if (loraStrength !== '') body.loraStrength = Number(loraStrength);
-      if (validateAfter)       body.validate     = true;
       // No visualStyle here on purpose — the pipeline is a per-PROJECT setting
       // (Settings page), not a per-scene choice. The backend resolves the style
       // from the project.
@@ -387,71 +377,39 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
     } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
   };
 
-  // ── Image validation (Ollama vision picks the best candidate) ──────────────
-  const [pendingValId, setPendingValId] = useState<string | null>(null);
-  const [posDraft, setPosDraft]         = useState('');
-  const [negDraft, setNegDraft]         = useState('');
-  const [applyingPrompt, setApplyingPrompt] = useState(false);
-  const handleValidate = async () => {
+  // ── Image QC («Кадры QC»: pose-гейт + факт-чеклист; вердикт на файл) ────────
+  // Spot re-check goes through the unified queue; while it's in flight we poll
+  // the shot so the ✓/⚠/✗ badges refresh when the run lands.
+  const [qcPendingSince, setQcPendingSince] = useState<number | null>(null);
+  const handleRevalidateQc = async () => {
     try {
-      const res = await api.validateShot(shot.id);
-      if (!res.queued) { alert(res.reason ?? 'Все кандидаты уже проверены (или проверка уже в очереди).'); return; }
-      setPendingValId(res.jobId);
-      // Backend cleared the old pick on re-check — refresh so it disappears now.
-      try { onShotChange(await api.getShot(shot.id)); } catch { /* poll will catch up */ }
+      const res = await api.revalidateShotImages(shot.id);
+      if (!res.queued) { alert(res.reason ?? 'Проверка уже в очереди.'); return; }
+      setQcPendingSince(Date.now());
     } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
   };
-  // Poll the shot until the queued validation job reaches a terminal state.
   useEffect(() => {
-    if (!pendingValId) return;
+    if (qcPendingSince === null) return;
     const t = setInterval(async () => {
       try {
         const fresh = await api.getShot(shot.id);
         onShotChange(fresh);
-        const job = fresh.validationJobs?.find((j) => j.id === pendingValId);
-        if (job && (job.status === 'completed' || job.status === 'failed')) setPendingValId(null);
+        const pool = (fresh.renderedImages ?? []).map((r) => r.filename);
+        const done = pool.length > 0 && pool.every((f) => {
+          const v = fresh.imageQcVerdicts?.find((x) => x.filename === f);
+          return v && new Date(v.updatedAt).getTime() >= qcPendingSince;
+        });
+        // The run sits behind whatever the queue is doing — give up polling
+        // after 30 min; badges still refresh on the next page load.
+        if (done || Date.now() - qcPendingSince > 30 * 60_000) setQcPendingSince(null);
       } catch { /* keep polling */ }
-    }, 4000);
+    }, 5000);
     return () => clearInterval(t);
-  }, [pendingValId, shot.id, onShotChange]);
+  }, [qcPendingSince, shot.id, onShotChange]);
 
   const renders = shot.renderedImages ?? [];
-  const latestValidation = shot.validationJobs?.[0];
-  const verdictByFile = new Map<string, CandidateVerdict>();
-  for (const v of latestValidation?.result ?? []) verdictByFile.set(v.filename, v);
-  const validating = pendingValId !== null
-    || latestValidation?.status === 'running' || latestValidation?.status === 'pending';
-  // When the last completed validation picked NOTHING (all candidates failed),
-  // the vision model proposes a STRUCTURED rewrite: positive replaces the
-  // positive, negative tokens append to the negative — each into its own field.
-  const suggestedPositive = latestValidation?.status === 'completed' && !latestValidation.chosenFilename
-    ? (latestValidation.suggestedFields?.positive ?? latestValidation.suggestedPrompt ?? null)
-    : null;
-  const suggestedNegative = latestValidation?.status === 'completed' && !latestValidation.chosenFilename
-    ? (latestValidation.suggestedFields?.negative ?? null)
-    : null;
-  const hasSuggestion = suggestedPositive != null || suggestedNegative != null;
-  useEffect(() => {
-    if (suggestedPositive != null) setPosDraft(suggestedPositive);
-    if (suggestedNegative != null) setNegDraft(suggestedNegative);
-  }, [suggestedPositive, suggestedNegative]);
-  const applyPrompt = async (rerender: boolean) => {
-    const positive = posDraft.trim();
-    const negative = negDraft.trim();
-    if (!positive && !negative) return;
-    setApplyingPrompt(true);
-    try {
-      const updated = await api.applySuggestedPrompt(shot.id, {
-        positive: positive || undefined,
-        negative: negative || undefined,
-        rerender,
-        // The new batch inherits the "validate after render" checkbox.
-        validate: rerender ? validateAfter : undefined,
-      });
-      onShotChange(updated);
-    } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
-    finally { setApplyingPrompt(false); }
-  };
+  const verdictByFile = new Map<string, ImageQcVerdict>();
+  for (const v of shot.imageQcVerdicts ?? []) verdictByFile.set(v.filename, v);
 
   return (
     <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mt-6">
@@ -594,16 +552,6 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
           : renders.length > 0          ? `+ ещё ${batchSize} вариантов в очередь (всего: ${renders.length})`
           : `🎬 в очередь — ${batchSize} вариантов`}
         </button>
-        <label className="text-xs text-zinc-400 flex items-center gap-1.5 cursor-pointer select-none"
-          title="После рендера поставить в очередь проверку vision-моделью (только непроверенные фото)">
-          <input
-            type="checkbox"
-            checked={validateAfter}
-            onChange={(e) => toggleValidateAfter(e.target.checked)}
-            className="accent-indigo-600"
-          />
-          🤖 проверить нейронкой после рендера
-        </label>
         {state.sceneJobId && (state.status === 'queued' || state.status === 'running') && (
           <Link href="/queue" className="text-xs text-zinc-500 hover:text-zinc-300 font-mono">
             job: {state.sceneJobId.slice(0, 8)}… →
@@ -623,71 +571,26 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
             {shot.chosenRender && <span className="text-xs text-emerald-400">✓ выбран: <span className="font-mono">{shot.chosenRender}</span></span>}
             {renders.length > 0 && (
               <button
-                onClick={handleValidate}
-                disabled={validating}
+                onClick={handleRevalidateQc}
+                disabled={qcPendingSince !== null}
                 className="text-xs bg-indigo-700/80 hover:bg-indigo-600 disabled:opacity-50 text-white px-2 py-0.5 rounded"
-                title="Vision-модель (qwen3-vl) проверит ТОЛЬКО непроверенные варианты (старые вердикты сохраняются), судья сравнит всех прошедших и выберет лучший"
+                title="Спот-перепроверка QC этого шота (скелеты/лица + факт-чеклист предмета) — все кандидаты, вердикты перезапишутся; встанет в общую очередь"
               >
-                {validating ? '🤖 проверяю…' : '🤖 проверить непроверенные'}
+                {qcPendingSince !== null ? '🔎 QC в очереди…' : '🔎 перепроверить QC'}
               </button>
-            )}
-            {latestValidation?.status === 'failed' && (
-              <span className="text-xs text-red-400" title={latestValidation.errorMessage ?? ''}>✕ проверка не удалась</span>
-            )}
-            {latestValidation?.judgeReason && latestValidation.chosenFilename && (
-              <span className="text-xs text-indigo-300">⚖ {latestValidation.judgeReason}</span>
             )}
           </div>
 
-          {hasSuggestion && (
-            <div className="mb-3 bg-amber-950/30 border border-amber-800/60 rounded p-3">
-              <div className="text-xs text-amber-300 mb-2">
-                🤖 Ни один вариант не прошёл проверку — ИИ предлагает правки по полям (можно отредактировать):
-              </div>
-              <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Positive (заменит целиком)</div>
-              <textarea
-                value={posDraft}
-                onChange={(e) => setPosDraft(e.target.value)}
-                rows={4}
-                className="w-full bg-zinc-950 border border-zinc-700 rounded p-2 text-xs text-zinc-200 font-mono leading-relaxed"
-              />
-              <div className="text-[10px] uppercase tracking-wider text-zinc-500 mt-2 mb-1">Negative (допишется к текущему, без дублей)</div>
-              <textarea
-                value={negDraft}
-                onChange={(e) => setNegDraft(e.target.value)}
-                rows={2}
-                placeholder="— нечего добавить —"
-                className="w-full bg-zinc-950 border border-zinc-700 rounded p-2 text-xs text-zinc-200 font-mono leading-relaxed"
-              />
-              <div className="flex gap-2 mt-2 items-center">
-                <button
-                  onClick={() => applyPrompt(false)}
-                  disabled={applyingPrompt || (!posDraft.trim() && !negDraft.trim())}
-                  className="text-xs bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3 py-1 rounded"
-                >
-                  ✓ Применить в поля
-                </button>
-                <button
-                  onClick={() => applyPrompt(true)}
-                  disabled={applyingPrompt || (!posDraft.trim() && !negDraft.trim())}
-                  className="text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white px-3 py-1 rounded"
-                  title="Записать поля и поставить ДОБАВОЧНЫЙ рендер — старые фото и вердикты нейронки остаются"
-                >
-                  ✓ Применить и дорендерить
-                </button>
-                {applyingPrompt && <span className="text-xs text-zinc-500">…</span>}
-              </div>
-            </div>
-          )}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
             {renders.map((r, idx) => {
               const chosen = r.filename === shot.chosenRender;
               const verdict = verdictByFile.get(r.filename);
-              const aiPicked = latestValidation?.chosenFilename === r.filename;
-              const scoreColor = verdict == null || verdict.score < 0 ? 'bg-zinc-700 text-zinc-300'
-                : verdict.score >= 75 ? 'bg-emerald-700 text-white'
-                : verdict.score >= 50 ? 'bg-amber-600 text-white'
-                : 'bg-red-700 text-white';
+              const qcChip = verdict == null ? null
+                : verdict.status === 'pass'  ? { label: '✓ QC',   cls: 'bg-emerald-700 text-white' }
+                : verdict.status === 'warn'  ? { label: '⚠ QC',   cls: 'bg-amber-600 text-white' }
+                : verdict.status === 'fail'  ? { label: '✗ брак', cls: 'bg-red-700 text-white' }
+                :                              { label: '? QC',   cls: 'bg-zinc-700 text-zinc-300' };
+              const qcIssues = (verdict?.issues ?? []) as string[];
               return (
                 <div
                   key={r.filename}
@@ -705,19 +608,21 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
                     <div className="bg-black/70 backdrop-blur text-[10px] text-zinc-300 font-mono px-2 py-0.5 rounded">
                       {r.filename}
                     </div>
-                    {verdict && (
+                    {qcChip && (
                       <div className="flex gap-1 items-center">
-                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${scoreColor}`}>
-                          {verdict.score < 0 ? '⚠ err' : `${verdict.score}`}
+                        <span
+                          className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${qcChip.cls}`}
+                          title={qcIssues.join('; ') || undefined}
+                        >
+                          {qcChip.label}
                         </span>
-                        {verdict.score >= 0 && (
-                          <span className={`text-[10px] px-1 py-0.5 rounded ${verdict.matchesPrompt ? 'bg-emerald-900/80 text-emerald-300' : 'bg-red-900/80 text-red-300'}`}>
-                            {verdict.matchesPrompt ? 'по промпту' : 'не по промпту'}
+                        {verdict?.peopleExpected != null && verdict?.peopleFound != null
+                          && verdict.peopleFound !== verdict.peopleExpected && (
+                          <span className="text-[10px] bg-amber-900/80 text-amber-300 px-1 py-0.5 rounded"
+                                title="людей найдено / заявлено в шоте">
+                            👥 {verdict.peopleFound}/{verdict.peopleExpected}
                           </span>
                         )}
-                        {verdict.severe && <span className="text-[10px] bg-red-700 text-white px-1 py-0.5 rounded">⛔ брак</span>}
-                        {aiPicked && <span className="text-[10px] bg-indigo-700 text-white px-1 py-0.5 rounded">🤖 лучший</span>}
-                        {verdict.cached && <span className="text-[10px] bg-zinc-700/80 text-zinc-400 px-1 py-0.5 rounded" title="Вердикт из прошлой проверки — файл не перепроверялся">ранее</span>}
                       </div>
                     )}
                   </div>
@@ -744,14 +649,14 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
                       ✕
                     </button>
                   </div>
-                  {verdict && verdict.issues.length > 0 && (
+                  {qcIssues.length > 0 && (
                     <div className={`absolute left-0 right-0 ${chosen ? 'bottom-6' : 'bottom-0'} bg-black/75 backdrop-blur text-[10px] text-amber-300 px-2 py-1 pointer-events-none`}>
-                      ⚠ {verdict.issues.slice(0, 3).join(' · ')}
+                      ⚠ {qcIssues.slice(0, 3).join(' · ')}
                     </div>
                   )}
                   {chosen && (
                     <div className="absolute bottom-0 left-0 right-0 bg-emerald-700/90 text-white text-xs text-center py-1 font-medium pointer-events-none">
-                      {aiPicked ? '🤖 выбрано ИИ' : 'выбрано для сцены'}
+                      выбрано для кадра
                     </div>
                   )}
                 </div>
@@ -821,7 +726,7 @@ function RenderLightbox({
       <div className="absolute top-0 left-0 right-0 px-4 py-3 flex items-center justify-between bg-gradient-to-b from-black/80 to-transparent">
         <div className="text-zinc-400 text-xs font-mono">
           {index + 1} / {renders.length} · {cur.filename}
-          {isChosen && <span className="ml-3 text-emerald-400">✓ выбран для сцены</span>}
+          {isChosen && <span className="ml-3 text-emerald-400">✓ выбран для кадра</span>}
         </div>
         <div className="flex gap-2">
           {!isChosen ? (
@@ -861,7 +766,7 @@ function RenderLightbox({
       <img
         src={api.shotImageUrl(shotId, cur.filename)}
         alt={cur.filename}
-        className="max-w-[95vw] max-h-[90vh] object-contain"
+        className="max-w-[95vw] max-h-[90dvh] object-contain"
         onClick={(e) => e.stopPropagation()}
       />
 
@@ -890,7 +795,7 @@ export interface ParticipantDraft {
 }
 
 export function ParticipantsEditor({
-  editing, participants, characters, shotParticipants, isCartoon = false, onChange,
+  editing, participants, characters, shotParticipants, isCartoon = false, projectId, onChange,
 }: {
   editing:          boolean;
   participants:     ParticipantDraft[];
@@ -900,6 +805,9 @@ export function ParticipantsEditor({
    *  copy to profile/identity wording and skips the "нет LoRA" amber state
    *  (cartoon profiles render via promptBase + triggerToken, no LoRA needed). */
   isCartoon?:       boolean;
+  /** When given, the read-only rows link to the project-scoped profile page;
+   *  otherwise they fall back to the global /characters/<profileId> route. */
+  projectId?:       string;
   onChange:         (parts: ParticipantDraft[]) => void;
 }) {
   const updateRow = (idx: number, patch: Partial<ParticipantDraft>) => {
@@ -912,7 +820,7 @@ export function ParticipantsEditor({
   return (
     <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mt-6">
       <header className="flex items-center justify-between mb-3">
-        <h3 className="text-xs uppercase tracking-wider text-zinc-500">Participants ({participants.length})</h3>
+        <h3 className="text-xs uppercase tracking-wider text-zinc-500">Участники ({participants.length})</h3>
         {editing && (
           <button
             type="button" onClick={addRow}
@@ -935,21 +843,39 @@ export function ParticipantsEditor({
                 ? charProfiles.find((pp) => pp.promptBase && pp.triggerToken)
                 : charProfiles.find((pp) => pp.loraPath));
             const label = isCartoon ? 'Profile' : 'LoRA';
+            // Deep-link to the EXACT profile this shot renders with (routes are
+            // profile-scoped — there is no /characters/<characterId> page).
+            const profileHref = usedProfile
+              ? (projectId
+                  ? `/projects/${projectId}/characters/${usedProfile.id}/description`
+                  : `/characters/${usedProfile.id}/description`)
+              : null;
             return (
               <li key={p.id} className="flex gap-3 items-baseline">
                 <span className="text-zinc-500 font-mono text-xs w-24 flex-shrink-0">{p.label}</span>
                 <span className="text-zinc-300 flex-1 min-w-0">
                   {p.character ? (
-                    <>
-                      {p.character.code} <span className="text-zinc-500">({p.character.displayName ?? '—'})</span>
-                    </>
+                    profileHref ? (
+                      <Link href={profileHref} className="hover:text-blue-300 hover:underline">
+                        {p.character.code} <span className="text-zinc-500">({p.character.displayName ?? '—'})</span>
+                      </Link>
+                    ) : (
+                      <>
+                        {p.character.code} <span className="text-zinc-500">({p.character.displayName ?? '—'})</span>
+                      </>
+                    )
                   ) : <em className="text-zinc-600">unbound</em>}
                 </span>
                 {usedProfile && (
                   <span className="text-xs font-mono text-zinc-400">
-                    {label}: <span className={profile ? 'text-emerald-400' : 'text-amber-400'}>
+                    {label}:{' '}
+                    <Link
+                      href={profileHref!}
+                      className={`hover:underline ${profile ? 'text-emerald-400 hover:text-emerald-300' : 'text-amber-400 hover:text-amber-300'}`}
+                      title="Открыть профиль персонажа"
+                    >
                       {usedProfile.profileCode}
-                    </span>
+                    </Link>
                     {!profile && <span className="text-zinc-600 ml-1">(авто)</span>}
                   </span>
                 )}

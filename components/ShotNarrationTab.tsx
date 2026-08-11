@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { api, TTSJob, TTSVoice, ProjectFull, ProjectTTSEmotionRef } from '../lib/api';
+import { api, TTSJob, TTSVoice, ProjectFull, ProjectTTSEmotionRef, VoVerdictView, TTSEngine, TTS_ENGINE_LABELS } from '../lib/api';
 import { useShotCtx } from './ShotPageShell';
 
 const SILERO_VOICE_LABELS: Record<TTSVoice, string> = {
@@ -31,6 +31,13 @@ export function ShotNarrationTab() {
   const approvedId  = (shot as { approvedTTSJobId?: string | null }).approvedTTSJobId ?? null;
 
   const [project,        setProject]        = useState<ProjectFull | null>(null);
+  /**
+   * The project's voice and its leading-bleed profile ('pon' | 'sha' | null).
+   * Null profile = this voice does not bleed, so the trim button is not offered:
+   * on a clean voice the detector mistakes a quiet leading preposition for the
+   * artifact and eats the word (the backend refuses too).
+   */
+  const [bleedProfile,   setBleedProfile]   = useState<string | null>(null);
   const [emotionRefs,    setEmotionRefs]    = useState<ProjectTTSEmotionRef[]>([]);
   const [text,           setText]           = useState(initialText);
   const [voice,          setVoice]          = useState<TTSVoice>('baya');  // ж голос дефолтом — narrator is female
@@ -52,6 +59,11 @@ export function ShotNarrationTab() {
         const p = await api.getProject(projectId);
         if (cancelled) return;
         setProject(p);
+        if (p.ttsVoiceoverId) {
+          api.getVoiceover(p.ttsVoiceoverId)
+            .then((v) => { if (!cancelled) setBleedProfile(v.artifactProfile); })
+            .catch(() => { /* no profile known → button stays hidden */ });
+        }
         if ((p.ttsEngine ?? 'silero') !== 'silero') {
           const refs = await api.listProjectEmotionRefs(projectId);
           if (!cancelled) setEmotionRefs(refs);
@@ -80,7 +92,7 @@ export function ShotNarrationTab() {
   // Reset textarea when route nav between shots.
   useEffect(() => { setText(initialText); }, [initialText, shotId]);
 
-  const engine    = (project?.ttsEngine ?? 'silero') as 'silero' | 'xtts2' | 'f5' | 'qwen3';
+  const engine    = (project?.ttsEngine ?? 'silero') as TTSEngine;
   const dirty     = text !== initialText;
   const canSynth  = text.trim().length > 0 && busy === false &&
                     (engine === 'silero' || !!project?.ttsVoiceRefPath);
@@ -184,7 +196,7 @@ export function ShotNarrationTab() {
       <div className="flex items-center gap-2 text-[11px] text-zinc-500">
         <span>Engine:</span>
         <span className={engine !== 'silero' ? 'text-emerald-300' : 'text-zinc-300'}>
-          {engine === 'silero' ? 'Silero V5 ru' : engine === 'xtts2' ? 'XTTS-v2 (voice clone)' : engine === 'qwen3' ? 'Qwen3-TTS (voice clone)' : 'F5-TTS Russian (voice clone)'}
+          {engine === 'silero' ? TTS_ENGINE_LABELS.silero : `${TTS_ENGINE_LABELS[engine]} (voice clone)`}
         </span>
         {engine !== 'silero' && !project?.ttsVoiceRefPath && (
           <span className="text-amber-400">— загрузи voice-reference в настройках проекта</span>
@@ -325,8 +337,10 @@ export function ShotNarrationTab() {
             {jobs && jobs.map((j) => {
               const isApproved = j.id === approvedId;
               return (
+                /* flex-wrap: на телефоне мета + плеер + 3-4 кнопки не влезают в
+                   один ряд, и без переноса «утвердить»/«✕» уезжали за экран. */
                 <div key={j.id} className={
-                  `flex items-center gap-3 p-2 rounded border ${isApproved ? 'border-emerald-500 bg-emerald-950/30 ring-1 ring-emerald-500/50' : 'border-zinc-800'}`
+                  `flex flex-wrap items-center gap-x-3 gap-y-2 p-2 rounded border ${isApproved ? 'border-emerald-500 bg-emerald-950/30 ring-1 ring-emerald-500/50' : 'border-zinc-800'}`
                 }>
                   <span className={
                     j.status === 'completed' ? 'text-emerald-400'
@@ -338,6 +352,7 @@ export function ShotNarrationTab() {
                     {j.status === 'completed' ? '✓' : j.status === 'running' ? '⚙' : j.status === 'pending' ? '⏳' : j.status === 'failed' ? '✕' : '·'}
                   </span>
                   <span className="text-xs font-mono text-zinc-400">{jobMetaLabel(j)}</span>
+                  {j.voVerdict && <VoQcBadge v={j.voVerdict} />}
                   {j.status === 'completed' && (
                     <audio controls preload="none" src={api.ttsFileUrl(j.id)} className="h-7 flex-1 max-w-md" />
                   )}
@@ -359,19 +374,34 @@ export function ShotNarrationTab() {
                         title="Снять выбор">снять</button>
                     </span>
                   )}
-                  {/* «понь»-обрезка доступна ТОЛЬКО на утверждённой озвучке */}
-                  {j.status === 'completed' && isApproved && !j.trimmedArtifact && (
+                  {/* Обрезка призвука: только утверждённый дубль И только голос
+                      с профилем (bleedProfile). Уже обрезанный файл второй раз
+                      не режем — детектор принял бы за призвук первое слово. */}
+                  {j.status === 'completed' && isApproved && !j.trimmedArtifact && bleedProfile && (
                     <button onClick={() => trimArtifact(j.id)} disabled={busy !== false}
-                      title="Обрезать ведущий артефакт «понь» (обратимо)"
+                      title={bleedProfile === 'sha'
+                        ? 'Обрезать ведущий призвук «ща» (обратимо)'
+                        : 'Обрезать ведущий призвук «понь» (обратимо)'}
                       className="text-[11px] bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded disabled:opacity-30">
-                      ✂ понь
+                      ✂ {bleedProfile === 'sha' ? 'ща' : 'понь'}
                     </button>
                   )}
                   {j.status === 'completed' && isApproved && j.trimmedArtifact && (
                     <button onClick={() => revertArtifact(j.id)} disabled={busy !== false}
-                      title="Вернуть оригинал (отменить обрезку «понь»)"
+                      title="Вернуть оригинал (отменить обрезку призвука)"
                       className="text-[11px] bg-amber-800 hover:bg-amber-700 text-white px-2 py-0.5 rounded disabled:opacity-30">
                       ↩ вернуть
+                    </button>
+                  )}
+                  {/* Trim invalidated the verdict — offer a spot re-check (the
+                      incremental run never revisits approved takes). */}
+                  {j.status === 'completed' && isApproved && j.trimmedArtifact && !j.voVerdict && (
+                    <button
+                      onClick={async () => { try { await api.revalidateTTSJob(j.id); setNotice('Перепроверка поставлена в очередь.'); } catch (e) { setErr(asMessage(e)); } }}
+                      disabled={busy !== false}
+                      title="Перепроверить озвучку после обрезки (в очередь)"
+                      className="text-[11px] bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded disabled:opacity-30">
+                      🎙 QC
                     </button>
                   )}
                   <button onClick={() => deleteJob(j.id)}
@@ -391,6 +421,29 @@ export function ShotNarrationTab() {
 
 function asMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** Compact VO-QC verdict badge: pass = можно не слушать; warn/fail/error = в
+ *  ручную прослушку. Tooltip carries the concrete findings + омографы. */
+function VoQcBadge({ v }: { v: VoVerdictView }) {
+  const cls =
+    v.status === 'pass' ? 'text-emerald-400 border-emerald-800'
+    : v.status === 'warn' ? 'text-amber-300 border-amber-800'
+    : 'text-red-300 border-red-800';
+  const icon = v.status === 'pass' ? '✓' : v.status === 'warn' ? '⚠' : v.status === 'fail' ? '✗' : '?';
+  const parts = [
+    ...(v.issues ?? []),
+    ...(v.riskyStressWords?.length ? [`омографы (проверь ударение): ${v.riskyStressWords.join(', ')}`] : []),
+    ...(v.textSnapshotStale ? ['текст шота изменился после рендера'] : []),
+  ];
+  return (
+    <span
+      title={parts.length ? parts.join('\n') : 'проверка пройдена'}
+      className={`text-[10px] font-mono border rounded px-1 py-px cursor-help ${cls}`}
+    >
+      QC {icon}{typeof v.score === 'number' ? ` ${v.score}` : ''}
+    </span>
+  );
 }
 
 /** Compact engine-aware one-liner: silero shows voice+sr; voice-clone engines

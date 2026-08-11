@@ -105,7 +105,9 @@ export function VideoDetail({
 
   return (
     <main className="px-4 sm:px-8 py-6 max-w-5xl mx-auto">
-      <div className="mb-4 flex items-baseline gap-3">
+      {/* flex-wrap: заголовок + id + бейдж + кнопка не влезают в 375px одной
+          строкой — без переноса кнопку удаления выжимало за экран */}
+      <div className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-2">
         <h1 className="text-lg font-semibold text-zinc-200">Видео-рендер</h1>
         <span className="font-mono text-xs text-zinc-500">{video.id.slice(0, 8)}</span>
         <StatusBadge status={video.status} />

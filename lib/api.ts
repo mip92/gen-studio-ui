@@ -47,7 +47,22 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 
 export interface DashboardResponse {
   project: { id: string; slug: string; name: string };
+  /** Which identity asset this project's visual style actually consumes, from
+   *  the `visual_styles` registry. Absent on backends predating 2026-08-10 —
+   *  callers must tolerate undefined and fall back to LoRA wording. */
+  identity?: ProjectIdentity;
   profiles: ProfileSummary[];
+}
+
+/** Identity stack of a project's visual style.
+ *  `kind: 'lora'`   → per-character LoRA is trained and required (photoreal).
+ *  `kind: 'anchor'` → identity comes from an approved anchor portrait; these
+ *  projects never get a `loraPath`, so LoRA counters are meaningless for them. */
+export interface ProjectIdentity {
+  visualStyle:   string;
+  identityStack: string;
+  loraPipeline:  string;
+  kind:          'lora' | 'anchor';
 }
 
 export interface ProfileSummary {
@@ -61,6 +76,9 @@ export interface ProfileSummary {
   triggerToken:  string | null;
   datasetCount:  number;
   loraReady:     boolean;
+  /** Anchor portrait present on disk (probed across every attached project, so
+   *  cameo anchors count). Absent on backends predating 2026-08-10. */
+  anchorReady?:  boolean;
   loraPath:      string | null;
   loraSizeMB:    number | null;
   phase:         'idle' | 'queued' | 'generating' | 'has_dataset' | 'training' | 'ready';
@@ -196,6 +214,9 @@ export interface Prop {
   name:        string;
   description: string;
   anchorPath?: string | null;
+  /** When the USER approved the installed anchor. null = the render installed it
+   *  on its own and nobody has looked yet — shots using this prop won't render. */
+  anchorApprovedAt?: string | null;
   createdAt?:  string;
   updatedAt?:  string;
 }
@@ -240,14 +261,14 @@ export interface ShotFull {
   renderedImages:      RenderedImage[] | null;
   chosenRender:        string | null;
   chosenVideoId:       string | null;
-  /** FK to a Location row. SceneRenderService prepends location.description into positive. */
+  /** FK to a Location row. SceneRenderService (the SHOT image renderer, name is
+   *  historical) prepends location.description into the shot's positive. */
   locationId:          string | null;
   /** 'animated' (default) → renders a Wan clip; 'static' → still only, video disabled. */
   renderMode:          string | null;
   participants:        ShotParticipant[];
-  /** Image-validation verdicts (newest first). validationJobs[0] is the latest
-   *  vision-model pass that scored the candidates and auto-picked chosenRender. */
-  validationJobs?:     ImageValidationJob[];
+  /** Image-QC verdicts, one per candidate file (✓/⚠/✗ badges on the picker). */
+  imageQcVerdicts?:    ImageQcVerdict[];
   scene?: {
     id:              string;
     sceneKey:        string;
@@ -262,37 +283,22 @@ export interface ShotFull {
   project?: { id: string; slug: string; name: string; visualStyle?: string };
 }
 
-/** One candidate's verdict from the Ollama vision model. */
-export interface CandidateVerdict {
-  filename:      string;
-  score:         number;    // 0-100 (prompt match + technical quality); -1 = scoring error
-  matchesPrompt: boolean;
-  severe?:       boolean;   // unusable: anatomy horror / wrong-or-missing subject / intruder
-  issues:        string[];  // concrete defects the model saw
-  error?:        string;
-  /** Verdict carried over from an earlier validation run (file was not re-scored). */
-  cached?:       boolean;
-}
-
-/** Structured suggestion — each part targets its own promptFields key. */
-export interface SuggestedFields {
-  positive: string | null;  // full rewritten positive prompt
-  negative: string | null;  // defect tokens to APPEND to the negative
-}
-
-export interface ImageValidationJob {
-  id:              string;
-  status:          string;   // pending | running | completed | failed
-  result:          CandidateVerdict[] | null;
-  chosenFilename:  string | null;
-  /** LEGACY flat positive-only suggestion — new jobs fill suggestedFields. */
-  suggestedPrompt: string | null;
-  /** When no candidate passed: structured {positive, negative} suggestion. */
-  suggestedFields: SuggestedFields | null;
-  /** Comparative judge's one-line reason for picking chosenFilename. */
-  judgeReason:     string | null;
-  errorMessage:    string | null;
-  completedAt:     string | null;
+/** Image-QC verdict for ONE candidate file (see ImageQcService).
+ *  pass = глазами не смотреть; всё остальное — в ворклист «Кадры QC». */
+export interface ImageQcVerdict {
+  filename:        string;
+  status:          'pass' | 'warn' | 'fail' | 'error';
+  issues:          string[] | null;
+  poseFlags:       string[] | null;
+  factFlags:       string[] | null;
+  factAnswers:     {
+    objectSeen: string | null; isPartOf: string | null;
+    locationInFrame: string | null; matchesExpected: boolean; reason: string | null;
+  } | null;
+  peopleExpected:  number | null;
+  peopleFound:     number | null;
+  backgroundFaces: number | null;
+  updatedAt:       string;
 }
 
 /** One anchor-portrait candidate's verdict (character-portrait analogue of CandidateVerdict). */
@@ -405,6 +411,10 @@ export interface ProfileStyleReadiness {
   profileId:        string;
   profileCode:      string;
   characterCode:    string;
+  /** When the USER approved the installed anchor portrait. null = the validator
+   *  installed its own pick and nobody has reviewed it — shots with this
+   *  character refuse to render, and derived age-states stay blocked. */
+  anchorApprovedAt: string | null;
   attachedProjects: Array<{ slug: string; visualStyle: string }>;
   styles: Record<string, {
     ready:         boolean;
@@ -434,6 +444,73 @@ export interface AnchorRenderJob {
   completedAt?:   string | null;
 }
 
+/** Anchor inheritance: base-profile link of a profile + selectable siblings. */
+export interface BaseProfileInfo {
+  profileId:     string;
+  profileCode:   string;
+  /** null = independent t2i anchor; uuid = anchor renders as a Qwen edit of that profile's anchor. */
+  baseProfileId: string | null;
+  baseProfileCode: string | null;
+  /** false = the donor anchor is not installed yet, so a render is blocked. */
+  baseAnchorReady: boolean;
+  options: Array<{
+    id:           string;
+    profileCode:  string;
+    ageLabel:     string | null;
+    anchorExists: boolean;
+  }>;
+}
+
+/** Where a state's sort age came from — 'code' and 'unknown' are guesses. */
+export type ProfileAgeSource = 'ageLabel' | 'ageLabelRange' | 'code' | 'unknown';
+
+/** One state of a character inside its anchor-inheritance chain. */
+export interface ProfileChainState {
+  profileId:       string;
+  profileCode:     string;
+  ageLabel:        string | null;
+  age:             number | null;
+  ageSource:       ProfileAgeSource;
+  baseProfileId:   string | null;
+  baseProfileCode: string | null;
+  anchorExists:    boolean;
+  shotCount:       number;
+  loraReady:       boolean;
+  /** What the link WOULD be if the chain were rebuilt from ageLabel right now. */
+  suggestedBaseProfileId:   string | null;
+  suggestedBaseProfileCode: string | null;
+  canRenderAnchor: boolean;
+  blockedReason:   string | null;
+}
+
+/** A character's states in story-time order (GET /profiles/:id/chain). */
+export interface ProfileChain {
+  characterId:      string;
+  characterCode:    string;
+  displayName:      string | null;
+  currentProfileId: string | null;
+  /** false = states are still unlinked and would render as unrelated faces. */
+  chainLinked: boolean;
+  states:      ProfileChainState[];
+  warnings:    string[];
+}
+
+/** Result of linking a character's chain (dry run or applied). */
+export interface ChainLinkResult {
+  characterId:   string;
+  characterCode: string;
+  dryRun:        boolean;
+  overwrite:     boolean;
+  order:         string[];
+  changes: Array<{
+    profileId:   string;
+    profileCode: string;
+    from:        string;
+    to:          string;
+  }>;
+  warnings: string[];
+}
+
 /** Full project row including the required prompt-content fields. */
 export interface ProjectFull extends ProjectListItem {
   scriptText:                string | null;
@@ -459,8 +536,19 @@ export interface ProjectFull extends ProjectListItem {
   updatedAt?:                string;
 }
 
-export type TTSEngine = 'silero' | 'xtts2' | 'f5' | 'qwen3';
-export const TTS_ENGINES: readonly TTSEngine[] = ['silero', 'xtts2', 'f5', 'qwen3'];
+export type TTSEngine = 'silero' | 'xtts2' | 'f5' | 'qwen3' | 'fish_s2';
+export const TTS_ENGINES: readonly TTSEngine[] = ['silero', 'xtts2', 'f5', 'qwen3', 'fish_s2'];
+/** Display names — single source for every engine label in the UI.
+ *  Must cover each TTSEngine (Record enforces it at compile time). */
+export const TTS_ENGINE_LABELS: Record<TTSEngine, string> = {
+  silero:  'Silero V5 ru',
+  xtts2:   'XTTS-v2',
+  f5:      'F5-TTS Russian',
+  qwen3:   'Qwen3-TTS',
+  fish_s2: 'Fish S2 Pro',
+};
+/** Engines that clone a project voice reference (everything except silero). */
+export const isVoiceCloneEngine = (e: TTSEngine): boolean => e !== 'silero';
 
 export interface ProjectTTSEmotionRef {
   id:        string;
@@ -493,6 +581,14 @@ export interface Voiceover {
   /** Trim window (ms into the source) that produced the current clip; null if unknown. */
   trimStartMs:   number | null;
   trimEndMs:     number | null;
+  /**
+   * Which leading-bleed profile this voice needs ('pon' | 'sha'), or null for a
+   * voice that does not bleed — and null is the norm. Setting it OPTS THE VOICE
+   * IN to the «понь»/«ща» trimming; without it the trim endpoints refuse, because
+   * on a clean voice the detector would mistake a quiet leading preposition for
+   * the artifact and cut the word off.
+   */
+  artifactProfile: string | null;
   /** How many projects currently reference this voice. */
   assignedCount: number;
   /** The projects that reference this voice. */
@@ -557,6 +653,8 @@ export interface SceneShot {
   beat:                 string | null;
   location:             string | null;
   cameraFraming:        string | null;
+  /** Comic panel shape from the template-layout plan ("wide"|"landscape"|"square"|"tall"), null on legacy shots. */
+  comicPanelShape:      string | null;
   participants:         SceneShotParticipant[];
   rendersCount:         number;
   chosenRender:         string | null;
@@ -611,7 +709,8 @@ export interface SceneSummary {
   sceneKey:        string;
   title:           string | null;
   sortOrder:       number;
-  /** Scene-level voiceover script — used by the TTS narration modal. */
+  /** Act-level voiceover script (legacy whole-act narration). The per-shot TTS
+   *  modal does NOT read this — it works on Shot.narrationText. */
   narrationText:    string | null;
   /** id of the TTSJob the user approved as the canonical narration, or null. */
   approvedTTSJobId: string | null;
@@ -624,7 +723,7 @@ export interface SceneSummary {
 /** `video_post` is the combined one-pass upscale->RIFE job. It replaced the old
  *  `video_upscale` + `video_interp` pair, which were two queue jobs for what is
  *  a single ComfyUI workflow. */
-export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_post' | 'tts' | 'bgm' | 'anchor' | 'validation' | 'anchor_validation' | 'caption' | 'thumbnail' | 'thumbnail_ideas' | 'prop_anchor';
+export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_post' | 'tts' | 'bgm' | 'anchor' | 'validation' | 'anchor_validation' | 'caption' | 'thumbnail' | 'thumbnail_ideas' | 'prop_anchor' | 'vo_validation' | 'image_qc' | 'video_qc';
 
 /** Caption drawn by scripts/render_caption.py — every field is a real parameter
  *  of the overlay, not a wish addressed to a diffusion model. */
@@ -651,11 +750,21 @@ export interface ThumbnailIdeaInput {
   /** Why those faces and that age, in the model's words. */
   refReason?:        string;
   batchSize?:        number;
+  /** Sampling tier — omitted means the backend default. */
+  quality?:          ThumbQuality;
   /** Keep the anchor's pixel channel (likeness) — default true. */
   referenceLatents?: boolean;
   /** Caption the model proposed alongside the art. */
   captionSpec?:      CaptionSpec;
 }
+
+/**
+ * Sampling tier for a cover render. Cost per frame is steps × (cfg > 1 ? 2 : 1):
+ *   scene    — 4 passes, the regime every ordinary shot renders at
+ *   balanced — 28 passes
+ *   full     — 52 passes; a batch of five ran 36 minutes on 2026-08-10
+ */
+export type ThumbQuality = 'scene' | 'balanced' | 'full';
 
 /** One round of "let the model invent covers from the screenplay". */
 export interface ThumbnailIdeaJob {
@@ -678,6 +787,7 @@ export interface ThumbnailJob {
   prompt:          string;
   negative:        string | null;
   batchSize:       number;
+  quality:         ThumbQuality | null;
   candidates:      string[] | null;
   chosenFilename:  string | null;
   refProfileCodes: string[];
@@ -704,7 +814,7 @@ export interface QueueRow {
   status:        string;
   /** What is being worked on ("SH014B FHD+FPS", "act_03"). */
   label:         string;
-  /** Where it sits - scene key, character code, or music block. */
+  /** Where it sits - act key (Scene.sceneKey), character code, or music block. */
   context:       string | null;
   projectSlug:   string | null;
   /** Canonical project UUID; prefer over slug for hrefs. */
@@ -712,6 +822,10 @@ export interface QueueRow {
   /** Shot UUID for shot-anchored jobs (scene/video/video_post/shot-TTS); null otherwise. */
   shotId:        string | null;
   profileCode:   string | null;
+  /** Music block slug for bgm rows; null otherwise (absent on older backends). */
+  blockSlug?:    string | null;
+  /** MusicSegment UUID for bgm rows; null otherwise (absent on older backends). */
+  segmentId?:    string | null;
   /** Batching group (workflow/model identity) - jobs sharing it run back-to-back. */
   groupKey:      string;
   rank:          number;
@@ -789,9 +903,81 @@ export interface LibraryCharacter {
   }>;
 }
 
+// ── Releases (релизный календарь) — releases.controller.ts ──────────────────
+
+export interface ReleaseItem {
+  id: string;
+  slug: string;
+  name: string;
+  youtubeUrl: string | null;
+  /** ISO UTC instant: факт/расписание с YouTube у залитых, план у остальных. */
+  releaseAt: string | null;
+  /** Залито на YouTube (возможно, отложенная публикация); дата залочена — её владелец сверка. */
+  uploaded: boolean;
+  /** Реально вышло (залито и дата наступила). Отложка станет published сама. */
+  published: boolean;
+  /** Экспорт-гейт CapCut (ExportsService.checkReadiness) — «готов» = кнопка
+   *  экспорта доступна. null у опубликованных (гейт не считается). */
+  exportReady: boolean | null;
+  totalShots: number;
+  /** Кадры без клипа/апскейла/интерпа (или стилла у static). */
+  missingClips: number;
+  /** Акты без одобренной основной музыки. */
+  missingMusic: number;
+  /** Пустые акты. */
+  missingScenes: number;
+}
+
+export interface ReleaseBackfillReport {
+  updated: { slug: string; videoId: string; publishedAt: string; previous: string | null; scheduled: boolean }[];
+  skipped: { slug: string; reason: string }[];
+  errors: string[];
+  dryRun: boolean;
+}
+
+/** Лёгкая карточка релиза для подсказок (экспорт/заливка). */
+export interface ReleaseSlot {
+  slug: string;
+  releaseAt: string | null;
+  uploaded: boolean;
+  published: boolean;
+}
+
 export const api = {
   listProjects: () =>
     http<ProjectListItem[]>(`/projects`),
+
+  // ── Releases (релизный календарь) ──────────────────────────────────────────
+
+  /** Все проекты с датой релиза и готовностью (видео/озвучка). */
+  listReleases: () =>
+    http<ReleaseItem[]>(`/releases`),
+
+  /** Дата релиза одного проекта — для подсказок в экспорте/заливке. */
+  getReleaseSlot: (idOrSlug: string) =>
+    http<ReleaseSlot>(`/releases/${idOrSlug}`),
+
+  /** Поставить (ISO instant с зоной) или снять (null) плановую дату.
+   *  409 PUBLISHED_LOCKED у вышедших, 409 SLOT_TAKEN при занятом дне. */
+  setReleaseDate: (idOrSlug: string, releaseAt: string | null) =>
+    http<{ id: string; slug: string; releaseAt: string | null }>(`/releases/${idOrSlug}`, {
+      method: 'PATCH',
+      body:   JSON.stringify({ releaseAt }),
+    }),
+
+  /** Разложить проекты (в заданном порядке) по свободным слотам вт/чт 13:00. */
+  autoPlanReleases: (order: string[], opts?: { startFrom?: string; days?: number[]; hour?: number }) =>
+    http<{ assigned: { slug: string; releaseAt: string }[] }>(`/releases/auto-plan`, {
+      method: 'POST',
+      body:   JSON.stringify({ order, ...opts }),
+    }),
+
+  /** Сверить даты вышедших с фактом YouTube. dryRun = превью без записи. */
+  backfillReleases: (dryRun: boolean) =>
+    http<ReleaseBackfillReport>(`/releases/backfill-published`, {
+      method: 'POST',
+      body:   JSON.stringify({ dryRun }),
+    }),
 
   // ── Visual styles registry + per-profile readiness ─────────────────────────
 
@@ -802,6 +988,10 @@ export const api = {
   /** Per-style readiness for one character profile. */
   profileStyleReadiness: (profileId: string) =>
     http<ProfileStyleReadiness>(`/profiles/${profileId}/style-readiness`),
+
+  /** Sign off on the installed anchor portrait — see ProfileStyleReadiness.anchorApprovedAt. */
+  approveAnchor: (profileId: string) =>
+    http<{ approvedAt: string }>(`/profiles/${profileId}/anchor/approve`, { method: 'POST' }),
 
   /**
    * Enqueue anchor portrait render via the gen-studio queue. Returns the new
@@ -815,6 +1005,35 @@ export const api = {
   /** Recent anchor-render jobs for a profile (newest first, 50 max). */
   listAnchorJobs: (profileId: string) =>
     http<AnchorRenderJob[]>(`/profiles/${profileId}/anchor-jobs`),
+
+  /** Anchor inheritance: current base-profile link + selectable siblings. */
+  getBaseProfile: (profileId: string) =>
+    http<BaseProfileInfo>(`/profiles/${profileId}/base-profile`),
+
+  /** Set (uuid) or clear (null) the base-profile link for anchor inheritance. */
+  setBaseProfile: (profileId: string, baseProfileId: string | null) =>
+    http<BaseProfileInfo>(`/profiles/${profileId}/base-profile`, {
+      method: 'PATCH',
+      body:   JSON.stringify({ baseProfileId }),
+    }),
+
+  /** All states of this profile's character, in story-time order. */
+  profileChain: (profileId: string) =>
+    http<ProfileChain>(`/profiles/${profileId}/chain`),
+
+  /**
+   * Link this profile's character into an age-ordered chain. `dryRun` returns the
+   * plan without writing; `overwrite` rewrites links that are already set.
+   * Links only — nothing is rendered or invalidated.
+   */
+  linkProfileChain: (
+    profileId: string,
+    opts: { dryRun?: boolean; overwrite?: boolean } = {},
+  ) =>
+    http<ChainLinkResult>(`/profiles/${profileId}/link-chain`, {
+      method: 'POST',
+      body:   JSON.stringify({ dryRun: opts.dryRun === true, overwrite: opts.overwrite === true }),
+    }),
 
   /** Probe whether an anchor PNG exists for this profile. */
   getAnchor: (profileId: string) =>
@@ -954,10 +1173,11 @@ export const api = {
   listLibraryCharacters: () =>
     http<LibraryCharacter[]>(`/library/characters`),
 
-  /** Paginated library page for the infinite-scroll grid. */
-  listLibraryCharactersPage: (skip = 0, take = 24) =>
+  /** Paginated library page for the infinite-scroll grid. Optional `q`
+   *  filters by code / displayName — powers the attach-to-project autocomplete. */
+  listLibraryCharactersPage: (skip = 0, take = 24, q?: string) =>
     http<{ rows: LibraryCharacter[]; total: number }>(
-      `/library/characters/page?skip=${skip}&take=${take}`,
+      `/library/characters/page?skip=${skip}&take=${take}${q ? `&q=${encodeURIComponent(q)}` : ''}`,
     ),
 
   attachCharacter: (projectIdOrSlug: string, characterId: string) =>
@@ -1035,13 +1255,16 @@ export const api = {
       { method: 'POST', body: JSON.stringify(body) },
     ),
 
-  // Project characters list (used by shot editor for participant dropdown)
+  // Project characters list (used by shot editor for participant dropdown and
+  // the project cast page). projectLinks carry each attached project's
+  // visualStyle so cards can pick the right preview source (anchor vs dataset).
   listCharacters: (projectIdOrSlug: string) =>
     http<Array<{
       id:          string;
       code:        string;
       displayName: string | null;
       profiles:    Array<{ id: string; profileCode: string; loraPath: string | null; ageLabel: string | null; promptBase: string | null; triggerToken: string | null }>;
+      projectLinks: LibraryCharacter['projectLinks'];
     }>>(`/projects/${projectIdOrSlug}/characters`),
 
   characterUsage: (projectIdOrSlug: string, characterId: string) =>
@@ -1074,7 +1297,7 @@ export const api = {
       body:   JSON.stringify(body),
     }),
 
-  // Enqueue scene render via the pipeline (preferred — coordinates with training/dataset queues)
+  // Enqueue a shot image render via the pipeline (ledger type 'scene' — historical name)
   enqueueShotRender: (
     shotId: string,
     body: {
@@ -1088,8 +1311,6 @@ export const api = {
       /** Per-generation pipeline/visual-style override. Locked once the shot
        *  has any render (backend rejects a mismatching style). */
       visualStyle?:  string;
-      /** Queue a vision-QC pass after the batch lands (checkbox; default off). */
-      validate?:     boolean;
     } = {},
   ) =>
     http<{ id: string; shotId: string; status: string; queuedAt: string }>(
@@ -1099,10 +1320,10 @@ export const api = {
 
   // Bulk-enqueue every not-yet-rendered, not-queued shot in a project (one click).
   // Additive only — never wipes; skips rendered/approved/awaiting-approval/already-queued.
-  enqueueProjectPending: (projectId: string, validate = false) =>
+  enqueueProjectPending: (projectId: string) =>
     http<{ enqueued: number }>(
       `/generation/shots/project/${projectId}/enqueue-pending`,
-      { method: 'POST', body: JSON.stringify({ validate }) },
+      { method: 'POST', body: JSON.stringify({}) },
     ),
 
   // ComfyUI live queue — list of running + pending prompt_ids
@@ -1214,10 +1435,10 @@ export const api = {
       method: 'DELETE',
     }),
 
-  enqueueThumbnailIdeas: (projectId: string, ideas: ThumbnailIdeaInput[]) =>
+  enqueueThumbnailIdeas: (projectId: string, ideas: ThumbnailIdeaInput[], quality?: ThumbQuality) =>
     http<ThumbnailJob[]>(`/projects/${projectId}/thumbnail/ideas`, {
       method: 'POST',
-      body:   JSON.stringify({ ideas }),
+      body:   JSON.stringify({ ideas: quality ? ideas.map((i) => ({ ...i, quality })) : ideas }),
     }),
 
   /** Promote one candidate to the cover and draw the caption on it. No GPU —
@@ -1231,11 +1452,12 @@ export const api = {
       body:   JSON.stringify(body),
     }),
 
-  /** Render more frames for an idea, appended to the ones it already has. */
-  addMoreThumbnails: (projectId: string, jobId: string, count = 5) =>
+  /** Render more frames for an idea, appended to the ones it already has.
+   *  `quality` omitted = keep the tier the concept already rendered at. */
+  addMoreThumbnails: (projectId: string, jobId: string, count = 5, quality?: ThumbQuality) =>
     http<ThumbnailJob>(`/projects/${projectId}/thumbnail/jobs/${jobId}/more`, {
       method: 'POST',
-      body:   JSON.stringify({ count }),
+      body:   JSON.stringify(quality ? { count, quality } : { count }),
     }),
 
   /** Stop a queued/rendering idea — keeps the row and whatever it produced. */
@@ -1321,6 +1543,9 @@ export const api = {
     return res.json() as Promise<{ propId: string; anchorPath: string; sizeBytes: number }>;
   },
 
+  approvePropAnchor: (propId: string) =>
+    http<Prop>(`/props/${propId}/anchor/approve`, { method: 'POST' }),
+
   deletePropAnchor: (propId: string) =>
     http<Prop>(`/props/${propId}/anchor`, { method: 'DELETE' }),
 
@@ -1401,23 +1626,6 @@ export const api = {
     http<ShotFull>(`/shots/${shotId}/chosen-video`, {
       method: 'PATCH',
       body:   JSON.stringify({ videoId }),
-    }),
-
-  /** Queue a vision-model validation. INCREMENTAL: only never-scored candidates
-   *  are sent to the model; earlier verdicts are reused. No-op when everything
-   *  is already scored (queued:false + reason). */
-  validateShot: (shotId: string) =>
-    http<{ queued: boolean; jobId: string | null; reason: string | null }>(`/shots/${shotId}/validate`, {
-      method: 'POST',
-    }),
-
-  /** Approve the vision model's structured suggestion: positive replaces
-   *  promptFields.positive, negative tokens append to promptFields.negative.
-   *  rerender queues an ADDITIVE batch (old candidates + verdicts survive). */
-  applySuggestedPrompt: (shotId: string, fields: { positive?: string; negative?: string; rerender?: boolean; validate?: boolean }) =>
-    http<ShotFull>(`/shots/${shotId}/apply-suggested-prompt`, {
-      method: 'POST',
-      body:   JSON.stringify(fields),
     }),
 
   createShot: (projectIdOrSlug: string, body: CreateShotBody) =>
@@ -1671,6 +1879,87 @@ export const api = {
   listShotTTSJobs: (shotId: string) =>
     http<TTSJob[]>(`/tts/shots/${shotId}/jobs`),
 
+  // ── VO validation (audio QC of rendered narration) ────────────────────────
+
+  voValidationReadiness: (projectId: string) =>
+    http<VoValidationReadiness>(`/projects/${projectId}/vo-validation/readiness`),
+
+  voValidationGate: (projectId: string) =>
+    http<{ gateEnabled: boolean; hasCompletedRun: boolean; blocksApprove: boolean }>(
+      `/projects/${projectId}/vo-validation/gate`),
+
+  setVoValidationGate: (projectId: string, enabled: boolean) =>
+    http<{ id: string; voValidationGateEnabled: boolean }>(`/projects/${projectId}/vo-validation/gate`, {
+      method: 'PATCH',
+      body:   JSON.stringify({ enabled }),
+    }),
+
+  runVoValidation: (projectId: string) =>
+    http<{ queued: boolean; runId?: string; mode?: string; totalJobs?: number; reason?: string }>(
+      `/projects/${projectId}/vo-validation/runs`, { method: 'POST' }),
+
+  listVoValidationRuns: (projectId: string) =>
+    http<VoValidationRun[]>(`/projects/${projectId}/vo-validation/runs`),
+
+  latestVoValidationRun: (projectId: string) =>
+    http<VoValidationRun | null>(`/projects/${projectId}/vo-validation/runs/latest`),
+
+  voValidationReport: (projectId: string) =>
+    http<VoValidationReportRow[]>(`/projects/${projectId}/vo-validation/report`),
+
+  /** Spot re-check of ONE take (после ✂ обрезки призвука у утверждённого). */
+  revalidateTTSJob: (jobId: string) =>
+    http<VoValidationRun>(`/tts/jobs/${jobId}/revalidate`, { method: 'POST' }),
+
+  // ── Image QC («Кадры QC» — pose-гейт + Qwen факт-чеклист) ─────────────────
+
+  imageQcReadiness: (projectId: string) =>
+    http<ImageQcReadiness>(`/projects/${projectId}/image-qc/readiness`),
+
+  runImageQc: (projectId: string) =>
+    http<{ queued: boolean; runId?: string; mode?: string; totalImages?: number; reason?: string }>(
+      `/projects/${projectId}/image-qc/runs`, { method: 'POST' }),
+
+  listImageQcRuns: (projectId: string) =>
+    http<ImageQcRun[]>(`/projects/${projectId}/image-qc/runs`),
+
+  latestImageQcRun: (projectId: string) =>
+    http<ImageQcRun | null>(`/projects/${projectId}/image-qc/runs/latest`),
+
+  imageQcReport: (projectId: string) =>
+    http<ImageQcReportRow[]>(`/projects/${projectId}/image-qc/report`),
+
+  /** Spot re-check of ONE shot — все его кандидаты, вердикты перезаписываются. */
+  revalidateShotImages: (shotId: string) =>
+    http<{ queued: boolean; runId?: string; reason?: string }>(
+      `/shots/${shotId}/image-qc/revalidate`, { method: 'POST' }),
+
+  // ── Video QC («Видео QC» — сканер клипов + аниме-пришелец) ────────────────
+
+  videoQcReadiness: (projectId: string) =>
+    http<VideoQcReadiness>(`/projects/${projectId}/video-qc/readiness`),
+
+  runVideoQc: (projectId: string) =>
+    http<{ queued: boolean; runId?: string; mode?: string; totalClips?: number; reason?: string }>(
+      `/projects/${projectId}/video-qc/runs`, { method: 'POST' }),
+
+  listVideoQcRuns: (projectId: string) =>
+    http<VideoQcRun[]>(`/projects/${projectId}/video-qc/runs`),
+
+  latestVideoQcRun: (projectId: string) =>
+    http<VideoQcRun | null>(`/projects/${projectId}/video-qc/runs/latest`),
+
+  videoQcReport: (projectId: string) =>
+    http<VideoQcReportRow[]>(`/projects/${projectId}/video-qc/report`),
+
+  videoQcShotVerdicts: (shotId: string) =>
+    http<VideoQcShotVerdict[]>(`/shots/${shotId}/video-qc/verdicts`),
+
+  /** Spot re-check of ONE shot — все его клипы, вердикты перезаписываются. */
+  revalidateShotVideos: (shotId: string) =>
+    http<{ queued: boolean; runId?: string; reason?: string }>(
+      `/shots/${shotId}/video-qc/revalidate`, { method: 'POST' }),
+
   setShotNarrationText: (shotId: string, text: string) =>
     http<{ id: string; narrationText: string | null }>(`/tts/shots/${shotId}/narration`, {
       method: 'PATCH',
@@ -1852,6 +2141,56 @@ export const api = {
       `/projects/${idOrSlug}/export/comic/status${name ? `?name=${encodeURIComponent(name)}` : ''}`,
     ),
 
+  /** The registry of comic page templates (single source of truth lives in
+   *  gen-studio/scripts/comic_page_templates.json — this reads it via the API). */
+  comicPageTemplates: () =>
+    http<Array<{
+      id: string; name: string;
+      slots: Array<{ slot: number; order: number; shape: string;
+                     rect: { x: number; y: number; w: number; h: number }; panelFrac?: number }>;
+    }>>(`/comic/page-templates`),
+
+  /** URL of a template's gallery preview PNG (streamed by the backend). */
+  comicTemplatePreviewUrl: (id: string) => `${API_BASE}/comic/page-templates/${encodeURIComponent(id)}/preview`,
+
+  /** Page-by-page layout plan (the «Вёрстка» tab). Template mode: comic_pages
+   *  with per-slot shot assignments; legacy: virtual one-frame-per-shot pages. */
+  comicPlan: (projectId: string) =>
+    http<
+      | { templateMode: false; pages: Array<{
+          pageIndex: number; spreadIndex: number; side: 'single' | 'left' | 'right'; virtual: true;
+          templateId: string; templateName: string | null;
+          slots: Array<{ slot: number; order: number; shape: string;
+                          rect: { x: number; y: number; w: number; h: number };
+                          shot: { id: string; shotCode: string; chosenRender: string | null } }>;
+        }> }
+      | { templateMode: true; pages: Array<{
+          id: string; pageIndex: number; templateId: string; templateName: string | null;
+          slots: Array<{ slot: number; order: number; shape: string;
+                          rect: { x: number; y: number; w: number; h: number };
+                          shot: { id: string; shotCode: string; chosenRender: string | null } | null }>;
+        }> }
+    >(`/comic/plan/${projectId}`),
+
+  /** Append a comic plan page (the FIRST page switches the project into template mode). */
+  comicAddPage: (projectId: string, templateId: string) =>
+    http<{ id: string; pageIndex: number; templateId: string }>(`/comic/plan/${projectId}/pages`, {
+      method: 'POST', body: JSON.stringify({ templateId }),
+    }),
+
+  /** Delete a comic plan page (unassigns its shots, closes the index gap). */
+  comicDeletePage: (projectId: string, pageId: string) =>
+    http<{ deleted: string }>(`/comic/plan/${projectId}/pages/${pageId}`, { method: 'DELETE' }),
+
+  /** Comic template-layout plan readiness. Legacy projects (no plan seeded):
+   *  {templateMode:false, ready:true} — the indicator simply says "uniform". */
+  comicPlanReadiness: (projectId: string) =>
+    http<{
+      templateMode: boolean; ready: boolean; pages: number;
+      errors: Array<{ page?: number; slot?: number; shotCode?: string; message: string }>;
+      warnings: Array<{ page?: number; slot?: number; shotCode?: string; message: string }>;
+    }>(`/comic/plan-readiness/${projectId}`),
+
   // ── YouTube-Shorts export ───────────────────────────────────────────────────
   /** The project's curated shorts plan (which shots go into each teaser reel). */
   shortsPlan: (idOrSlug: string) =>
@@ -2010,6 +2349,10 @@ export const api = {
   /** Per-asset: upload ONE item as Unlisted. */
   uploadLaunchItem: (idOrSlug: string, key: string) =>
     http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/upload-item/${encodeURIComponent(key)}`, { method: 'POST' }),
+  /** Per-asset: put ONE item on transcription by hand. Needed for shorts, whose
+   *  subtitles are optional and therefore not queued automatically. */
+  transcribeLaunchItem: (idOrSlug: string, key: string) =>
+    http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/transcribe-item/${encodeURIComponent(key)}`, { method: 'POST' }),
   /** Confirm the cover was set by hand in Studio (the only path for a cover over
    *  the API's 2MB cap — we don't re-encode the artwork). On trust. */
   confirmLaunchThumbnailManual: (idOrSlug: string, key: string) =>
@@ -2128,9 +2471,16 @@ export const api = {
     return res.json() as Promise<Voiceover>;
   },
 
-  /** Edit a voiceover's label / slug / source link. sourceUrl='' clears it. */
-  renameVoiceover: (id: string, body: { name?: string; slug?: string; sourceUrl?: string | null }) =>
-    http<Voiceover>(`/voiceovers/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  /** Edit a voiceover's label / slug / source link / bleed profile. Empty string
+   *  clears sourceUrl; artifactProfile=null means "this voice does not bleed". */
+  renameVoiceover: (
+    id: string,
+    body: { name?: string; slug?: string; sourceUrl?: string | null; artifactProfile?: string | null },
+  ) => http<Voiceover>(`/voiceovers/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  /** The «понь»/«ща» profiles a voice can be assigned (for the picker). */
+  listArtifactProfiles: () =>
+    http<{ key: string; label: string; hint: string }[]>(`/voiceovers/artifact-profiles`),
 
   /** Set the EXACT list of projects assigned to this voice (bidirectional assign). */
   setVoiceoverProjects: (id: string, projectIds: string[]) =>
@@ -2278,6 +2628,16 @@ export const api = {
 
   deleteSegment: (segmentId: string) =>
     http<{ deleted: true; id: string }>(`/bgm/segments/${segmentId}`, { method: 'DELETE' }),
+
+  /** Move a tile one step up/down within its act's placement order (mains then
+   *  spares — the order the CapCut export lays). The spare flag follows the
+   *  position: a spare promoted into the mains zone becomes main and the
+   *  displaced tile becomes spare. Takes/approvals travel with the tile. */
+  moveSegment: (segmentId: string, direction: 'up' | 'down') =>
+    http<NarrativeBlock>(`/bgm/segments/${segmentId}/move`, {
+      method: 'POST',
+      body:   JSON.stringify({ direction }),
+    }),
 
   approveBgmJob: (segmentId: string, jobId: string) =>
     http<MusicSegment>(`/bgm/segments/${segmentId}/approve/${jobId}`, { method: 'POST' }),
@@ -2460,6 +2820,8 @@ export interface LaunchView {
   items:           LaunchItemView[];
   linkedConfirmed: boolean;
   allTranscribed:  boolean;
+  /** Subtitles ready on everything that needs them — the main video only. */
+  subtitlesReady:  boolean;
   allUploaded:     boolean;
   hasShorts:       boolean;
   step:            number;            // 1 files · 2 subs · 3 upload · 4 link · 5 schedule
@@ -2515,6 +2877,162 @@ export interface TTSJob {
   /** Shot-job listings only: true when the leading "понь" artifact has been
    *  trimmed (a pre-trim backup exists) — i.e. the trim is revertable. */
   trimmedArtifact?: boolean;
+  /** VO-QC verdict for this take's wav. Null/absent = never validated (or the
+   *  verdict was invalidated by a trim). pass = можно не слушать. */
+  voVerdict?: VoVerdictView | null;
+}
+
+/** Trimmed VO-QC verdict projection attached to TTSJob list rows. */
+export interface VoVerdictView {
+  status: 'pass' | 'warn' | 'fail' | 'error';
+  score:  number | null;
+  issues: string[];
+  /** Омографы в тексте — контекст для ручной прослушки, статус не меняют. */
+  riskyStressWords: string[];
+  /** Текст кадра изменился после рендера этого дубля. */
+  textSnapshotStale: boolean;
+  /** Диагностика для tooltip'а — за что именно сняты баллы (даже на pass). */
+  wer?:           number | null;
+  missingWords?:  string[];
+  extraWords?:    string[];
+  repeatedWords?: string[];
+  garbledWords?:  Array<{ expected: string; heard: string }>;
+  prosodyFlags?:  string[];
+  techFlags?:     string[];
+  transcript?:    string | null;
+}
+
+export interface VoValidationRun {
+  id:             string;
+  projectId:      string;
+  status:         'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  mode:           'full' | 'incremental' | 'spot';
+  totalJobs:      number;
+  processedJobs:  number;
+  summary:        { pass: number; warn: number; fail: number; error: number; skippedMissingFile: number } | null;
+  errorMessage:   string | null;
+  queuedAt:       string;
+  startedAt:      string | null;
+  completedAt:    string | null;
+}
+
+export interface VoValidationReportRow {
+  ttsJobId:  string;
+  status:    'warn' | 'fail' | 'error';
+  score:     number | null;
+  issues:    string[];
+  riskyStressWords: string[];
+  transcript: string | null;
+  wer:        number | null;
+  textSnapshotStale: boolean;
+  shotId:    string | null;
+  shotCode:  string | null;
+  sceneKey:  string | null;
+  approved:  boolean;
+  text:      string | null;
+}
+
+export interface VoValidationReadiness {
+  ready:            boolean;
+  totalWithText:    number;
+  withCompleted:    number;
+  missingShotCodes: string[];
+  activeRunId:      string | null;
+  gateEnabled:      boolean;
+  hasCompletedRun:  boolean;
+}
+
+export interface ImageQcRun {
+  id:              string;
+  projectId:       string;
+  status:          'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  mode:            'full' | 'incremental' | 'spot';
+  totalImages:     number;
+  processedImages: number;
+  summary:         { pass: number; warn: number; fail: number; error: number; skippedMissingFile: number } | null;
+  errorMessage:    string | null;
+  queuedAt:        string;
+  startedAt:       string | null;
+  completedAt:     string | null;
+}
+
+export interface ImageQcReportRow {
+  shotId:          string;
+  shotCode:        string | null;
+  sceneKey:        string | null;
+  filename:        string;
+  /** Этот кандидат сейчас выбран как канонический кадр шота. */
+  isChosen:        boolean;
+  status:          'warn' | 'fail' | 'error';
+  issues:          string[];
+  poseFlags:       string[];
+  factFlags:       string[];
+  factAnswers:     ImageQcVerdict['factAnswers'];
+  peopleExpected:  number | null;
+  peopleFound:     number | null;
+  backgroundFaces: number | null;
+}
+
+export interface ImageQcReadiness {
+  ready:            boolean;
+  totalShots:       number;
+  withRenders:      number;
+  totalImages:      number;
+  dueImages:        number;
+  missingShotCodes: string[];
+  activeRunId:      string | null;
+  hasCompletedRun:  boolean;
+  modelsInstalled:  boolean;
+}
+
+export interface VideoQcRun {
+  id:             string;
+  projectId:      string;
+  status:         'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  mode:           'full' | 'incremental' | 'spot';
+  totalClips:     number;
+  processedClips: number;
+  summary:        { pass: number; warn: number; fail: number; error: number; skippedMissingFile: number } | null;
+  errorMessage:   string | null;
+  queuedAt:       string;
+  startedAt:      string | null;
+  completedAt:    string | null;
+}
+
+export interface VideoQcReportRow {
+  videoRenderId: string;
+  shotId:        string | null;
+  shotCode:      string | null;
+  sceneKey:      string | null;
+  filename:      string | null;
+  /** Этот клип сейчас выбран финальным для кадра. */
+  isChosen:      boolean;
+  status:        'warn' | 'fail' | 'error';
+  flags:         string[];
+  issues:        string[];
+  metrics:       Record<string, unknown> | null;
+  suspicious:    Array<{ timeSec: number; reason: string }>;
+  vlmAnswers:    unknown;
+}
+
+export interface VideoQcShotVerdict {
+  videoRenderId: string;
+  status:        'pass' | 'warn' | 'fail' | 'error';
+  flags:         string[] | null;
+  issues:        string[] | null;
+  updatedAt:     string;
+}
+
+export interface VideoQcReadiness {
+  ready:            boolean;
+  totalAnimated:    number;
+  withVideo:        number;
+  totalClips:       number;
+  dueClips:         number;
+  missingShotCodes: string[];
+  activeRunId:      string | null;
+  hasCompletedRun:  boolean;
+  modelsInstalled:  boolean;
 }
 
 export interface VideoRender {
@@ -2611,6 +3129,9 @@ export type ActionGateKey =
   | 'start_dataset'
   | 'start_training'
   | 'generate_anchor'
+  | 'approve_anchor'
+  | 'generate_prop_anchor'
+  | 'approve_prop_anchor'
   | 'render_scene'
   | 'approve_render'
   | 'create_video'
@@ -2619,6 +3140,7 @@ export type ActionGateKey =
   | 'interpolate_video'
   | 'render_tts'
   | 'approve_tts'
+  | 'render_bgm'
   | 'approve_bgm';
 
 export interface ActionItem {
@@ -2627,6 +3149,8 @@ export interface ActionItem {
   project: { id: string; slug: string; name: string };
   character?: { id: string; code: string; displayName: string | null };
   profile?:   { id: string; code: string };
+  /** Prop-anchored gates (generate_prop_anchor). Objects are their own entity. */
+  prop?:      { id: string; code: string; name: string };
   scene?:     { id: string; sceneKey: string; title: string | null };
   shot?:      { id: string; code: string };
   /** Segment-anchored gates (BGM approval, gate 10). */

@@ -28,6 +28,9 @@ export function VoiceoverDetail({ id }: { id: string }) {
   const [name, setName]   = useState('');
   const [slug, setSlug]   = useState('');
   const [url, setUrl]     = useState('');
+  /** '' = этот голос не даёт призвука в начале (норма, обрезка выключена). */
+  const [bleed, setBleed] = useState('');
+  const [bleedOptions, setBleedOptions] = useState<{ key: string; label: string; hint: string }[]>([]);
 
   // Project assignment selection (set of projectIds assigned to THIS voice).
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -46,6 +49,7 @@ export function VoiceoverDetail({ id }: { id: string }) {
     setName(v.name);
     setSlug(v.slug);
     setUrl(v.sourceUrl ?? '');
+    setBleed(v.artifactProfile ?? '');
     setSelected(new Set(v.projects.map((p) => p.id)));
     setProjects(projs);
     const owner = new Map<string, { id: string; name: string }>();
@@ -60,9 +64,18 @@ export function VoiceoverDetail({ id }: { id: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  useEffect(() => {
+    api.listArtifactProfiles().then(setBleedOptions).catch(() => setBleedOptions([]));
+  }, []);
+
   const metaDirty = useMemo(
-    () => !!voice && (name.trim() !== voice.name || slug.trim() !== voice.slug || url.trim() !== (voice.sourceUrl ?? '')),
-    [voice, name, slug, url],
+    () => !!voice && (
+      name.trim() !== voice.name
+      || slug.trim() !== voice.slug
+      || url.trim() !== (voice.sourceUrl ?? '')
+      || bleed !== (voice.artifactProfile ?? '')
+    ),
+    [voice, name, slug, url, bleed],
   );
 
   const assignDirty = useMemo(() => {
@@ -80,6 +93,7 @@ export function VoiceoverDetail({ id }: { id: string }) {
         name: name.trim(),
         slug: slug.trim(),
         sourceUrl: url.trim(), // '' clears the link
+        artifactProfile: bleed || null, // '' = голос не бликует, обрезка выключена
       });
       setVoice((prev) => (prev ? { ...prev, ...updated } : updated));
       await load();
@@ -185,6 +199,33 @@ export function VoiceoverDetail({ id }: { id: string }) {
                       className="text-blue-400 hover:text-blue-300 text-xs underline mt-1 inline-block break-all">
                       ↗ открыть текущий источник
                     </a>
+                  )}
+                </div>
+                <div className="sm:col-span-2">
+                  <Field label="Призвук в начале рендера">
+                    <select value={bleed} onChange={(e) => setBleed(e.target.value)}
+                      className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm w-full">
+                      <option value="">нет — обрезка выключена (обычный случай)</option>
+                      {bleedOptions.map((o) => (
+                        <option key={o.key} value={o.key}>{o.label}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <p className="text-[11px] text-zinc-500 mt-1.5 leading-snug">
+                    {bleed
+                      ? bleedOptions.find((o) => o.key === bleed)?.hint
+                      : 'F5 подмешивает короткий призвук в начало каждого рендера только у некоторых '
+                        + 'голосов. Замер по 14 озвучкам на голос: «Кошатница» 14/14, «агента Смита» '
+                        + '13/14, остальные одиннадцать голосов 0/14. Включать профиль стоит только '
+                        + 'если призвук слышен: на чистом голосе детектор принимает за призвук тихий '
+                        + 'предлог в начале фразы и срезает слово.'}
+                  </p>
+                  {voice.artifactProfile && (
+                    <p className="text-[11px] text-amber-300/80 mt-1.5 leading-snug">
+                      Кнопка «✂ обрезать призвук» на вкладке озвучки кадра доступна только для голосов
+                      с профилем — и только на утверждённом дубле. Резать один и тот же файл дважды
+                      нельзя: после первого реза детектор принимает за призвук уже первое слово.
+                    </p>
                   )}
                 </div>
               </div>

@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api, ScenesResponse, DashboardResponse, ProjectFull } from '../lib/api';
 
@@ -34,18 +35,37 @@ export function ProjectOverview({ id }: { id: string }) {
   if (error)         return <Pad><Err msg={error} /></Pad>;
   if (!scenes || !dashboard) return <Pad><p className="text-zinc-500">Loading…</p></Pad>;
 
+  const slug       = dashboard.project.slug;
   const totalShots = scenes.scenes.reduce((sum, s) => sum + s.shots.length, 0);
-  const ready      = dashboard.profiles.filter((p) => p.loraReady).length;
   const total      = dashboard.profiles.length;
+
+  // Which identity asset this film actually uses. Anchor-driven styles
+  // (realcomic_qwen, graphic_novel_*) never get a loraPath, so counting LoRAs
+  // there showed a permanent, meaningless «LoRA готовы 0 / N» — the overview must
+  // report only what the project uses (user 2026-08-10). Older backends don't
+  // send `identity`; falling back to 'lora' reproduces the previous behaviour.
+  const usesLora = (dashboard.identity?.kind ?? 'lora') === 'lora';
+  const ready    = dashboard.profiles.filter((p) => (usesLora ? p.loraReady : p.anchorReady)).length;
+  // Click-through lands where the missing ones get produced; with nothing missing
+  // that gate list is empty, so point at the cast instead.
+  const identityHref = ready < total
+    ? `/actions?project=${slug}&gate=${usesLora ? 'start_training' : 'generate_anchor'}`
+    : `/projects/${id}/characters`;
 
   return (
     <main className="px-4 sm:px-8 py-6">
       <div className="flex items-start justify-between mb-6 gap-4">
         <section className="grid grid-cols-2 md:grid-cols-4 gap-3 flex-1">
-          <Stat label="Сцены"      value={String(scenes.scenes.length)} />
-          <Stat label="Кадры"      value={String(totalShots)} />
-          <Stat label="Персонажи"  value={String(total)} />
-          <Stat label="LoRA готовы" value={`${ready} / ${total}`} highlight={ready > 0} />
+          <Stat label="Акты"      value={String(scenes.scenes.length)} href={`/projects/${id}/scenes`} />
+          <Stat label="Кадры"     value={String(totalShots)}           href={`/projects/${id}/scenes`} />
+          <Stat label="Персонажи" value={String(total)}                href={`/projects/${id}/characters`} />
+          <Stat
+            label={usesLora ? 'LoRA готовы' : 'Якоря готовы'}
+            value={`${ready} / ${total}`}
+            highlight={ready > 0}
+            href={identityHref}
+            hint={usesLora ? undefined : 'личность держит утверждённый якорь — LoRA этот стиль не тренирует'}
+          />
         </section>
       </div>
 
@@ -62,7 +82,7 @@ export function ProjectOverview({ id }: { id: string }) {
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
             <Stat label="Всего машинного времени" value={fmtHours(stats.spent.totalSeconds)}
-                  hint="сумма фактического времени всех попыток, включая удалённые кадры и сцены" />
+                  hint="сумма фактического времени всех попыток, включая удалённые кадры и видео" />
             <Stat label="В финальной версии" value={fmtHours(stats.spent.usefulSeconds)} highlight />
             <Stat label="Впустую" value={fmtHours(stats.spent.wastedSeconds)}
                   hint={stats.spent.wastePercent !== null ? `${stats.spent.wastePercent}% брака` : undefined} />
@@ -74,7 +94,8 @@ export function ProjectOverview({ id }: { id: string }) {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
               {stats.byReason.map((r) => (
                 <Stat key={r.reason} label={reasonLabel(r.reason)} value={fmtHours(r.seconds)}
-                      hint={`${r.count} шт.`} />
+                      hint={`${r.count} шт.`}
+                      href={reasonQueueHref(slug, r.reason)} />
               ))}
             </div>
           )}
@@ -95,8 +116,15 @@ export function ProjectOverview({ id }: { id: string }) {
                 </thead>
                 <tbody className="divide-y divide-zinc-800">
                   {stats.byType.map((t) => (
-                    <tr key={t.type}>
-                      <td className="px-3 py-1.5 font-mono text-xs text-zinc-300">{stageLabel(t.type)}</td>
+                    <tr key={t.type} className="hover:bg-zinc-950/40">
+                      <td className="px-3 py-1.5 font-mono text-xs text-zinc-300">
+                        {/* Every attempt of this stage for this film, in the queue
+                            ledger — where the failures and re-renders are visible. */}
+                        <Link href={`/queue/all?project=${slug}&type=${t.type}`}
+                              className="hover:text-white underline-offset-2 hover:underline">
+                          {stageLabel(t.type)}
+                        </Link>
+                      </td>
                       <td className="px-3 py-1.5 text-right text-xs text-zinc-400">{t.attempts}</td>
                       <td className="px-3 py-1.5 text-right text-xs text-zinc-300">{fmtHours(t.totalSeconds)}</td>
                       <td className="px-3 py-1.5 text-right text-xs text-emerald-400">{fmtHours(t.usefulSeconds)}</td>
@@ -136,21 +164,26 @@ export function ProjectOverview({ id }: { id: string }) {
             <Stat label="С учётом всей очереди" value={fmtHours(stats.forecast.realisticSeconds)}
                   hint={stats.forecast.calendar ? `≈ ${stats.forecast.calendar.realisticDays} дн. при текущем темпе` : undefined} />
             <Stat label="Уже в очереди" value={String(stats.forecast.breakdown.queuedOwnJobs)}
-                  hint={`${fmtHours(stats.forecast.breakdown.queuedOwnSeconds)} своих задач`} />
+                  hint={`${fmtHours(stats.forecast.breakdown.queuedOwnSeconds)} своих задач`}
+                  href={`/queue/active?project=${slug}`} />
             <Stat label="Впереди чужих задач" value={String(stats.forecast.breakdown.jobsAheadOfIt)}
-                  hint={`${fmtHours(stats.forecast.breakdown.queueAheadSeconds)} до старта этого проекта`} />
+                  hint={`${fmtHours(stats.forecast.breakdown.queueAheadSeconds)} до старта этого проекта`}
+                  href="/queue/active?status=pending" />
           </div>
 
           <div className="bg-zinc-900 border border-zinc-800 rounded p-3 mb-3">
             <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
               Ещё даже не поставлено в очередь — {fmtHours(stats.forecast.breakdown.notQueuedSeconds)}
             </div>
+            {/* Each stage links to the /actions gate that starts it, pre-filtered
+                to this film — that list IS the work these numbers count. */}
             <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-zinc-400 font-mono">
               {Object.entries(stats.forecast.breakdown.notQueuedStages).map(([stage, n]) => (
-                <span key={stage}>{stageLabel(stage)}: <span className="text-zinc-200">{n}</span></span>
+                <StageChip key={stage} slug={slug} stage={stage} label={stageLabel(stage)} count={n} />
               ))}
               {stats.forecast.breakdown.notQueuedBgmSegments > 0 && (
-                <span>музыка: <span className="text-zinc-200">{stats.forecast.breakdown.notQueuedBgmSegments}</span></span>
+                <StageChip slug={slug} stage="bgm" label="музыка"
+                           count={stats.forecast.breakdown.notQueuedBgmSegments} />
               )}
             </div>
           </div>
@@ -182,20 +215,70 @@ function fmtShort(seconds: number): string {
 }
 
 function stageLabel(type: string): string {
+  // Держать в синке с TYPE_LABELS в QueueTable.tsx — это те же jobType.
+  // «кадр (SDXL)» врал для qwen/flux-проектов (user 2026-08-07, station).
   const map: Record<string, string> = {
-    scene:             'кадр (SDXL)',
+    scene:             'кадр img',
     video:             'видео (i2v)',
     video_post:        'FHD + FPS',
     tts:               'озвучка',
     bgm:               'музыка',
     anchor:            'якорь',
+    prop_anchor:       'якорь предм.',
     validation:        'вижн-проверка',
     anchor_validation: 'проверка якоря',
     dataset:           'датасет',
     training:          'LoRA',
     caption:           'субтитры',
+    thumbnail:         'обложка',
+    thumbnail_ideas:   'идеи обложки',
+    vo_validation:     'озвучка qc',
+    image_qc:          'кадр qc',
   };
   return map[type] ?? type;
+}
+
+/**
+ * The /actions gate that starts a not-yet-queued stage, so the forecast's
+ * "ещё не поставлено в очередь" chips lead straight to the work they count.
+ * Keys are the stage ids from ProjectStatsService.remainingStages.
+ */
+const STAGE_GATE: Record<string, string> = {
+  scene:      'render_scene',
+  video:      'create_video',
+  // Upscale and FPS are one job now, and `upscale_video` is the gate that offers
+  // it; `interpolate_video` only appears for clips already upscaled by the old
+  // two-step pipeline.
+  video_post: 'upscale_video',
+  tts:        'render_tts',
+  bgm:        'render_bgm',
+};
+
+function StageChip({ slug, stage, label, count }: {
+  slug: string; stage: string; label: string; count: number;
+}) {
+  const gate = STAGE_GATE[stage];
+  const body = <>{label}: <span className="text-zinc-200">{count}</span></>;
+  if (!gate) return <span>{body}</span>;
+  return (
+    <Link href={`/actions?project=${slug}&gate=${gate}`}
+          className="hover:text-white underline-offset-2 hover:underline">
+      {body}
+    </Link>
+  );
+}
+
+/**
+ * Queue link for a waste reason, or undefined when the ledger can't be filtered
+ * by it. Only `failed` and `cancelled` are queue STATUSES; superseded / rejected
+ * / deleted / orphaned / unknown live in `outcomeReason`, which
+ * GET /pipeline/queue does not accept as a filter — those stay plain text rather
+ * than link to a list that would silently ignore the filter.
+ */
+function reasonQueueHref(slug: string, reason: string): string | undefined {
+  if (reason === 'failed')    return `/queue/all?project=${slug}&status=failed`;
+  if (reason === 'cancelled') return `/queue/all?project=${slug}&status=cancelled`;
+  return undefined;
 }
 
 function reasonLabel(reason: string): string {
@@ -312,20 +395,31 @@ function PublishCard({
   );
 }
 
+/** A number on the overview. With `href` the whole card becomes a link into the
+ *  table that lists what the number counts, pre-filtered to this project. */
 function Stat({
-  label, value, highlight, hint,
+  label, value, highlight, hint, href,
 }: {
   label:      string;
   value:      string;
   highlight?: boolean;
   hint?:      string;
+  href?:      string;
 }) {
-  return (
-    <div className={`bg-zinc-900 border border-zinc-800 rounded-lg p-4 ${highlight ? 'border-emerald-700/60' : ''}`}>
+  const body = (
+    <>
       <div className="text-zinc-500 text-xs uppercase tracking-wider">{label}</div>
       <div className="text-2xl font-semibold mt-1">{value}</div>
       {hint && <div className="text-[10px] text-zinc-600 mt-1 leading-snug">{hint}</div>}
-    </div>
+    </>
+  );
+  const cls = `bg-zinc-900 border rounded-lg p-4 ${highlight ? 'border-emerald-700/60' : 'border-zinc-800'}`;
+
+  if (!href) return <div className={cls}>{body}</div>;
+  return (
+    <Link href={href} className={`${cls} block hover:bg-zinc-800/60 hover:border-zinc-600 transition-colors`}>
+      {body}
+    </Link>
   );
 }
 

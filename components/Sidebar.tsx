@@ -19,13 +19,18 @@ import { ProjectListItem, isProjectArchived } from '../lib/api';
  *   - Главное: Overview, Projects (collapsible list of active projects),
  *     Персонажи, Озвучка, Действия, Архив.
  *   - Очередь.
- *   - current project (only on /projects/[id]/...): Overview, Состав, Сцены, Музыка.
+ *   - current project (only on /projects/[id]/...): Overview, Состав, Акты, Музыка.
  *
  * Active route is highlighted by comparing usePathname() against each link.
  */
 export function Sidebar({ projects }: { projects: ProjectListItem[] }) {
   return (
-    <aside className="hidden md:flex md:flex-col w-56 shrink-0 border-r border-zinc-800 bg-zinc-950 sticky top-0 h-screen overflow-y-auto">
+    // Desktop only. The document scrolls now, so the aside is genuinely sticky:
+    // it pins to the top and keeps its own scrollbar when the link list is
+    // longer than the screen. h-dvh, not h-screen — 100vh is the LARGE viewport,
+    // which on a tablet with browser UI visible runs 60–115px taller than what
+    // you can see and clips the bottom links out of reach.
+    <aside className="hidden md:flex md:flex-col w-56 shrink-0 border-r border-zinc-800 bg-zinc-950 sticky top-0 h-dvh overflow-y-auto">
       <SidebarNavContent projects={projects} />
     </aside>
   );
@@ -61,7 +66,6 @@ export function SidebarNavContent({
     <>
       <Link href="/" onClick={onNavigate} className="px-4 pt-4 pb-3 block">
         <div className="text-sm font-semibold text-zinc-100">Gen Studio</div>
-        <div className="text-[10px] text-zinc-500 uppercase tracking-wider">LoRA · scenes · video</div>
       </Link>
 
       <nav className="px-2 pb-4 flex-1 space-y-4">
@@ -118,6 +122,7 @@ export function SidebarNavContent({
           <NavLink href="/characters" label="Персонажи" active={pathname.startsWith('/characters')} onNavigate={onNavigate} />
           <NavLink href="/voices"     label="Озвучка"   active={pathname.startsWith('/voices')} onNavigate={onNavigate} />
           <NavLink href="/actions"    label="Действия"  active={pathname.startsWith('/actions')} onNavigate={onNavigate} />
+          <NavLink href="/releases"   label="Релизы"    active={pathname.startsWith('/releases')} onNavigate={onNavigate} />
           <NavLink href="/projects/archived" label="Архив" active={pathname.startsWith('/projects/archived')} onNavigate={onNavigate} />
         </Section>
 
@@ -131,8 +136,12 @@ export function SidebarNavContent({
           <Section title={project?.name ?? 'Проект'}>
             <NavLink href={`/projects/${projectId}`}            label="Overview"  active={pathname === `/projects/${projectId}`} onNavigate={onNavigate} />
             <NavLink href={`/projects/${projectId}/characters`} label="Состав"    active={pathname.startsWith(`/projects/${projectId}/characters`)} onNavigate={onNavigate} />
-            <NavLink href={`/projects/${projectId}/scenes`}     label="Сцены"     active={pathname.startsWith(`/projects/${projectId}/scenes`) || pathname.startsWith(`/projects/${projectId}/shots`)} onNavigate={onNavigate} />
+            <NavLink href={`/projects/${projectId}/scenes`}     label="Акты"      active={pathname.startsWith(`/projects/${projectId}/scenes`) || pathname.startsWith(`/projects/${projectId}/shots`)} onNavigate={onNavigate} />
+            <NavLink href={`/projects/${projectId}/tts`}        label="Озвучка"   active={pathname.startsWith(`/projects/${projectId}/tts`)} onNavigate={onNavigate} />
             <NavLink href={`/projects/${projectId}/bgm`}        label="Музыка"    active={pathname.startsWith(`/projects/${projectId}/bgm`)} onNavigate={onNavigate} />
+            <NavLink href={`/projects/${projectId}/vo-validation`} label="Озвучка QC" active={pathname.startsWith(`/projects/${projectId}/vo-validation`)} onNavigate={onNavigate} />
+            <NavLink href={`/projects/${projectId}/image-qc`}   label="Кадры QC"  active={pathname.startsWith(`/projects/${projectId}/image-qc`)} onNavigate={onNavigate} />
+            <NavLink href={`/projects/${projectId}/video-qc`}   label="Видео QC"  active={pathname.startsWith(`/projects/${projectId}/video-qc`)} onNavigate={onNavigate} />
           </Section>
         )}
       </nav>

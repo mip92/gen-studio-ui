@@ -13,7 +13,15 @@ const GATE_LABELS: Record<ActionGateKey, { num: number; ru: string }> = {
   // Cartoon projects use only this gate for character setup. Slots into the
   // same "phase 1" zone as the photoreal upload/dataset gates above.
   generate_anchor:       { num: 1,  ru: 'Сгенерировать anchor (cartoon)' },
-  render_scene:          { num: 4,  ru: 'Сгенерировать сцену' },
+  // Props sit in the same phase-1 setup zone as character anchors: an object
+  // without its own anchor is re-invented by the renderer in every shot.
+  generate_prop_anchor:  { num: 1,  ru: 'Сгенерировать якорь предмета' },
+  // The approve gates are the point at which a HUMAN first sees an anchor: both
+  // pipelines install a candidate automatically when the render lands. Nothing
+  // that depends on the anchor renders until these are answered.
+  approve_anchor:        { num: 1,  ru: 'Утвердить якорь персонажа' },
+  approve_prop_anchor:   { num: 1,  ru: 'Утвердить якорь предмета' },
+  render_scene:          { num: 4,  ru: 'Сгенерировать кадр' },
   approve_render:        { num: 5,  ru: 'Утвердить рендер' },
   create_video:          { num: 6,  ru: 'Создать видео' },
   approve_video:         { num: 7,  ru: 'Утвердить видео' },
@@ -21,13 +29,17 @@ const GATE_LABELS: Record<ActionGateKey, { num: number; ru: string }> = {
   interpolate_video:     { num: 9,  ru: 'Увеличить FPS (обязательно)' },
   render_tts:            { num: 10, ru: 'Озвучить — нет голоса' },
   approve_tts:           { num: 11, ru: 'Утвердить закадровый голос' },
-  approve_bgm:           { num: 12, ru: 'Утвердить фоновую музыку' },
+  render_bgm:            { num: 12, ru: 'Отрендерить музыку — плитка пустая' },
+  approve_bgm:           { num: 13, ru: 'Утвердить фоновую музыку' },
 };
 
 // Gate order on the page — characters first (anchor for cartoon OR 1-3 for
 // photoreal), shots second (4-9), BGM last (10).
 const GATE_ORDER: ActionGateKey[] = [
   'generate_anchor',
+  'approve_anchor',
+  'generate_prop_anchor',
+  'approve_prop_anchor',
   'upload_dataset_images',
   'start_dataset',
   'start_training',
@@ -39,10 +51,25 @@ const GATE_ORDER: ActionGateKey[] = [
   'interpolate_video',
   'render_tts',
   'approve_tts',
+  'render_bgm',
   'approve_bgm',
 ];
 
-const PAGE_SIZE = 100;
+const DEFAULT_PAGE_SIZE = 100;
+const PAGE_SIZES = [50, 100, 200, 500];
+
+/** Sortable dimensions. Both are the ones the page already groups by, so sorting
+ *  reorders the sections rather than shuffling rows inside them:
+ *   - project → alphabetically by film name
+ *   - gate    → by pipeline stage, so «что раньше по конвейеру» comes first
+ *  Filtering and pagination stay client-side: GET /actions recomputes every gate
+ *  for every project on each call (per-profile counts plus existsSync probes in
+ *  the loop), so a server-side page would pay the full cost anyway. */
+type ActionsSortField = 'project' | 'gate';
+const SORT_LABELS: Record<ActionsSortField, string> = {
+  project: 'Проект',
+  gate:    'Гейт',
+};
 
 // useSearchParams() requires a Suspense boundary in a statically-rendered
 // client page (Next 16) — wrap the inner component so the production build
@@ -64,6 +91,12 @@ function ActionsInner() {
   const projectSlug = searchParams.get('project') ?? '';
   const gateFilter  = (searchParams.get('gate') as ActionGateKey | '') || '';
   const page        = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
+  const sortField: ActionsSortField =
+    searchParams.get('sort') === 'gate' ? 'gate' : 'project';
+  const sortDesc  = searchParams.get('order') === 'desc';
+  const pageSize  = PAGE_SIZES.includes(Number(searchParams.get('pageSize')))
+    ? Number(searchParams.get('pageSize'))
+    : DEFAULT_PAGE_SIZE;
 
   const [items, setItems]         = useState<ActionItem[] | null>(null);
   const [projects, setProjects]   = useState<ProjectListItem[]>([]);
@@ -143,22 +176,29 @@ function ActionsInner() {
   }, [items]);
 
   // Filter by gate (client-side), then flatten to a stable order so page
-  // boundaries are deterministic: by project name, then canonical gate order.
+  // boundaries are deterministic. The chosen field leads; the other one breaks
+  // ties, which keeps the grouping below intact either way.
   const ordered = useMemo(() => {
     const base = gateFilter ? (items ?? []).filter((i) => i.gateKey === gateFilter) : (items ?? []);
+    const byProject = (a: ActionItem, b: ActionItem) => a.project.name.localeCompare(b.project.name);
+    const byGate    = (a: ActionItem, b: ActionItem) =>
+      GATE_ORDER.indexOf(a.gateKey) - GATE_ORDER.indexOf(b.gateKey);
+    const dir = sortDesc ? -1 : 1;
     return [...base].sort((a, b) => {
-      const pn = a.project.name.localeCompare(b.project.name);
-      if (pn !== 0) return pn;
-      return GATE_ORDER.indexOf(a.gateKey) - GATE_ORDER.indexOf(b.gateKey);
+      const primary = sortField === 'gate' ? byGate(a, b) : byProject(a, b);
+      if (primary !== 0) return primary * dir;
+      // Tie-break is never reversed: within one film the pipeline order is the
+      // useful reading order regardless of which way the primary sort points.
+      return sortField === 'gate' ? byProject(a, b) : byGate(a, b);
     });
-  }, [items, gateFilter]);
+  }, [items, gateFilter, sortField, sortDesc]);
 
   const total     = ordered.length;
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const safePage  = Math.min(page, pageCount);
   const pageItems = useMemo(
-    () => ordered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
-    [ordered, safePage],
+    () => ordered.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [ordered, safePage, pageSize],
   );
 
   // Group the current page's items by project, then by gate (canonical order).
@@ -174,7 +214,10 @@ function ActionsInner() {
       list.push(item);
       entry.gates.set(item.gateKey, list);
     }
-    return Array.from(byProject.values()).sort((a, b) => a.project.name.localeCompare(b.project.name));
+    // Insertion order, deliberately un-re-sorted: `pageItems` is already in the
+    // order the user asked for, so both levels of grouping inherit it. Sorting
+    // projects by name here again would silently ignore ?sort/?order.
+    return Array.from(byProject.values());
   }, [pageItems]);
 
   const handleRun = async (item: ActionItem, key: string) => {
@@ -239,6 +282,40 @@ function ActionsInner() {
                   <option key={p.id} value={p.slug}>{p.name}</option>
                 ))}
             </select>
+
+            <label className="text-xs uppercase tracking-wider text-zinc-500">Сорт.:</label>
+            <select
+              value={sortField}
+              onChange={(e) => setParams({
+                // 'project' is the default — omit it so the URL stays short.
+                sort: e.target.value === 'project' ? null : e.target.value,
+                page: null,
+              })}
+              className="bg-zinc-900 border border-zinc-800 text-zinc-200 text-sm rounded px-2 py-1"
+            >
+              {(Object.keys(SORT_LABELS) as ActionsSortField[]).map((f) => (
+                <option key={f} value={f}>{SORT_LABELS[f]}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => setParams({ order: sortDesc ? null : 'desc', page: null })}
+              className="px-2 py-1 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 text-xs"
+              title={sortDesc ? 'По убыванию — нажми для возрастания' : 'По возрастанию — нажми для убывания'}
+            >
+              {sortDesc ? '↓' : '↑'}
+            </button>
+
+            <label className="text-xs uppercase tracking-wider text-zinc-500">На стр.:</label>
+            <select
+              value={pageSize}
+              onChange={(e) => setParams({
+                pageSize: Number(e.target.value) === DEFAULT_PAGE_SIZE ? null : e.target.value,
+                page: null,
+              })}
+              className="bg-zinc-900 border border-zinc-800 text-zinc-200 text-sm rounded px-2 py-1"
+            >
+              {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
           </>
         }
         below={pageCount > 1 ? <Pager safePage={safePage} pageCount={pageCount} total={total} onGo={goToPage} /> : undefined}
@@ -275,7 +352,8 @@ function ActionsInner() {
               <span className="ml-3 text-xs text-zinc-500">{project.slug}</span>
             </div>
 
-            {GATE_ORDER.filter((k) => gates.has(k)).map((gateKey) => {
+            {/* Insertion order again — see the note on `grouped`. */}
+            {Array.from(gates.keys()).map((gateKey) => {
               const list  = gates.get(gateKey)!;
               const label = GATE_LABELS[gateKey];
               return (
@@ -287,7 +365,10 @@ function ActionsInner() {
                   </div>
                   <ul className="divide-y divide-zinc-800">
                     {list.map((item) => {
-                      const key = `${item.gateKey}-${item.profile?.id ?? item.shot?.id ?? item.segment?.id ?? item.scene?.id}`;
+                      // Must cover every entity a gate can be anchored to —
+                      // this key is also the per-row busy flag, so two rows
+                      // sharing one would spin together and mis-report.
+                      const key = `${item.gateKey}-${item.profile?.id ?? item.prop?.id ?? item.shot?.id ?? item.segment?.id ?? item.scene?.id}`;
                       return (
                         <li key={key} className="px-4 py-2.5 flex items-center gap-3 text-sm">
                           <span className="flex-1 min-w-0 truncate text-zinc-200">
@@ -357,8 +438,8 @@ function Pager({ safePage, pageCount, total, onGo }: {
 }
 
 /** Render the human-readable target label for a row, depending on whether the
- *  gate is character-scoped (1-3), shot-scoped (4-9), segment-scoped (10 BGM),
- *  or the rarer scene-only case (gate 9 legacy scene-VO). */
+ *  gate is character-scoped, shot-scoped, segment-scoped (BGM tile), or the
+ *  rarer act-only case (legacy act-level VO on a Scene row). */
 function Target({ item }: { item: ActionItem }) {
   if (item.character && item.profile) {
     const name = item.character.displayName || item.character.code;
@@ -366,6 +447,14 @@ function Target({ item }: { item: ActionItem }) {
       <>
         <span className="font-medium">{name}</span>
         <span className="text-zinc-500"> · {item.profile.code}</span>
+      </>
+    );
+  }
+  if (item.prop) {
+    return (
+      <>
+        <span className="font-medium">{item.prop.name}</span>
+        <span className="text-zinc-500"> · предмет {item.prop.code}</span>
       </>
     );
   }
@@ -382,7 +471,7 @@ function Target({ item }: { item: ActionItem }) {
     const blockLabel = item.segment.block.title || item.segment.block.slug;
     return (
       <>
-        <span className="font-medium">{blockLabel} · сегмент {item.segment.sortOrder + 1}</span>
+        <span className="font-medium">{blockLabel} · плитка {item.segment.sortOrder + 1}</span>
         <span className="text-zinc-500"> · {item.segment.durationSec}s</span>
       </>
     );
@@ -391,7 +480,7 @@ function Target({ item }: { item: ActionItem }) {
     return (
       <>
         <span className="font-medium">{item.scene.title || item.scene.sceneKey}</span>
-        <span className="text-zinc-500"> · сцена</span>
+        <span className="text-zinc-500"> · акт</span>
       </>
     );
   }

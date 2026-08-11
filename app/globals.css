@@ -22,6 +22,57 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* App-shell scrolling: the DOCUMENT scrolls. Nothing here may clamp html/body
+   height or hide their overflow — that is exactly what stranded the bottom of
+   long pages (the queue pager) off-screen on iOS. Horizontal document scroll is
+   still suppressed so a too-wide child can't make the whole page pan sideways;
+   wide content (tables) scrolls inside its own overflow-x-auto box.
+   Note: only overflow-X is hidden, so vertical scrolling and position:sticky
+   both keep working. */
+html {
+  overflow-x: hidden;
+}
+
+/* Kill the legacy 300ms tap delay and double-tap-to-zoom on buttons and links
+   (a fast second tap on a pager used to zoom the page instead). Pinch-zoom and
+   panning are untouched — scoped to interactive elements, NOT to html, so the
+   page as a whole stays fully zoomable. */
+button,
+a,
+[role='button'],
+label,
+summary {
+  touch-action: manipulation;
+}
+
+/* Mobile Safari/Chrome auto-zoom into a focused form control whose font-size is
+   under 16px — every select/input here is text-sm/text-xs, so tapping a filter
+   left the page zoomed in. A ≥16px control font kills the auto-zoom at the
+   source (this, not a maximum-scale lock, is the fix that works everywhere).
+   Coarse pointers only, so desktop keeps the compact controls.
+   Buttons and links get a 40px minimum hit area on touch for the same reason:
+   the pagers and row actions are text-xs, i.e. ~20px tall, which is half of
+   what a fingertip can reliably hit.
+   (These rules are unlayered, so they win over Tailwind's layered text-* and
+   p-* utilities regardless of specificity.) */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  /* min-height only — never `display`: plenty of buttons here are positioned
+     (the drawer backdrop is `absolute inset-0`, the tab-strip chevrons are
+     `top-0 bottom-0`) or are flex columns, and rewriting their display would
+     break the layout instead of the hit area. Native buttons already centre
+     their own content vertically, so a taller box needs nothing else. */
+  button,
+  [role='button'] {
+    min-height: 40px;
+  }
+}
+
 /* MUI-style scrollable tabs: hide the native scrollbar while keeping
    the horizontal scroll behaviour. `ScrollableTabs` overlays its own
    left/right chevron buttons that appear only when the row overflows. */
@@ -32,3 +83,32 @@ body {
 .no-scrollbar::-webkit-scrollbar {
   display: none;               /* Chromium / Safari */
 }
+
+/* ── Релизный календарь (FullCalendar) — тёмная тема под zinc-палитру.
+   FullCalendar v6 стилизуется CSS-переменными; событийные классы
+   rel-published / rel-ready / rel-pending назначает ReleaseCalendar. ── */
+.release-calendar {
+  --fc-border-color: rgb(39 39 42);            /* zinc-800 */
+  --fc-page-bg-color: transparent;
+  --fc-neutral-bg-color: rgb(24 24 27);        /* zinc-900 */
+  --fc-today-bg-color: rgb(37 99 235 / 0.08);  /* blue-600/8 */
+  --fc-event-border-color: transparent;
+  font-size: 12px;
+}
+.release-calendar .fc-toolbar-title { font-size: 0.95rem; color: rgb(244 244 245); text-transform: capitalize; }
+.release-calendar .fc-col-header-cell-cushion,
+.release-calendar .fc-daygrid-day-number { color: rgb(161 161 170); text-decoration: none; }
+.release-calendar .fc-day-other .fc-daygrid-day-number { color: rgb(82 82 91); }
+.release-calendar .fc-button {
+  background: rgb(39 39 42); border: 1px solid rgb(63 63 70); color: rgb(212 212 216);
+  font-size: 11px; padding: 2px 8px; box-shadow: none !important;
+}
+.release-calendar .fc-button:hover { background: rgb(63 63 70); }
+.release-calendar .fc-button-primary:not(:disabled).fc-button-active { background: rgb(37 99 235); border-color: rgb(37 99 235); color: #fff; }
+.release-calendar .fc-event { cursor: pointer; border-radius: 4px; padding: 1px 4px; font-size: 11px; }
+.release-calendar .fc-event.rel-published { background: rgb(127 29 29 / 0.55); color: rgb(252 165 165); border: 1px solid rgb(153 27 27); }
+.release-calendar .fc-event.rel-ready     { background: rgb(6 78 59 / 0.6);   color: rgb(110 231 183); border: 1px solid rgb(6 95 70); }
+.release-calendar .fc-event.rel-pending   { background: rgb(120 53 15 / 0.5); color: rgb(252 211 77);  border: 1px solid rgb(146 64 14); }
+.release-calendar .fc-daygrid-day.fc-day-tue,
+.release-calendar .fc-daygrid-day.fc-day-thu { background: rgb(255 255 255 / 0.015); }
+.release-calendar .fc-event.rel-scheduled { background: rgb(30 58 138 / 0.5); color: rgb(147 197 253); border: 1px solid rgb(30 64 175); }

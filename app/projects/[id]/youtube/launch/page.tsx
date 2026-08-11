@@ -36,7 +36,10 @@ export default function LaunchPage({ params }: { params: Promise<{ id: string }>
 
   const main   = view.items.find((i) => i.kind === 'main');
   const shorts = view.items.filter((i) => i.kind === 'short');
-  const ready  = !!main && view.allUploaded && view.allTranscribed;   // everything Unlisted + subtitled
+  // Subtitles gate on the MAIN video only — a short goes out without an .srt
+  // (there is no room for a second text layer in 9:16, and Shorts get YouTube's
+  // own auto-captions anyway).
+  const ready  = !!main && view.allUploaded && view.subtitlesReady;
   const canPublish = ready && (!view.hasShorts || view.linkedConfirmed);
 
   return (
@@ -125,14 +128,18 @@ function AssetRow({ label, href, item, state, hint }: {
   const st = item
     ? (item.uploaded ? (item.thumbnailMissing ? '✓ залито · ⚠ без обложки' : '✓ залито (Unlisted)')
         : item.uploadError ? `✗ ${item.uploadError}` : item.uploadJobId ? '⏳ заливаю…'
-        : item.transcribeStatus === 'completed' ? 'субтитры ✓ — залей' : item.transcribeStatus ? '⏳ субтитры…' : '—')
+        : item.transcribeStatus === 'completed' ? 'субтитры ✓ — залей' : item.transcribeStatus ? '⏳ субтитры…'
+        // A short has no subtitle step to wait for, so «—» would read as "not ready".
+        : item.kind === 'short' ? 'готов к заливке (субтитры не нужны)' : '—')
     : (state ?? '—');
   const color = item?.uploadError ? 'text-red-400'
     : item?.uploaded ? (item.thumbnailMissing ? 'text-amber-400' : 'text-emerald-400') : 'text-zinc-400';
   return (
-    <div className="flex items-center justify-between border border-zinc-800 rounded px-3 py-2 mb-1.5 text-sm">
+    // flex-wrap + break-words: uploadError — произвольная строка YouTube API;
+    // с shrink-0 она не переносилась и обрезалась краем экрана на телефоне
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border border-zinc-800 rounded px-3 py-2 mb-1.5 text-sm">
       <a href={href} className="text-zinc-300 hover:text-blue-300 truncate">{label}</a>
-      <span className={`shrink-0 text-xs ${color}`}>{st}{hint && !item && <span className="text-zinc-600"> · {hint}</span>}</span>
+      <span className={`text-xs break-words min-w-0 ${color}`}>{st}{hint && !item && <span className="text-zinc-600"> · {hint}</span>}</span>
     </div>
   );
 }

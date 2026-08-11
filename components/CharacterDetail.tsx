@@ -208,7 +208,7 @@ export function CharacterDetail({
           {refMode === 'chain' && refProfileId && (
             <div className="mt-3">
               <div className="text-xs text-zinc-500 mb-2">
-                Выбери конкретный кадр (или оставь авто-выбор):
+                Выбери конкретное изображение (или оставь авто-выбор):
                 {refImage && <span className="ml-2 text-emerald-400 font-mono">✓ {refImage}</span>}
               </div>
               {refImageList.length === 0 ? (
@@ -471,8 +471,8 @@ export function TrainingProgress({
       {/* Captioning / preparing phases — no step info, just spinner-state */}
       {progress && progress.step === null && isActive && (
         <div className="text-xs text-zinc-400">
-          {phase === 'captioning' && 'Florence-2 пишет подписи к каждому кадру датасета. Это ~1–3 минуты на 60 картинок при первом запуске (модель ~1 ГБ скачивается с HF).'}
-          {phase === 'preparing' && 'Копируем кадры из ComfyUI/output в kohya-папку.'}
+          {phase === 'captioning' && 'Florence-2 пишет подписи к каждому изображению датасета. Это ~1–3 минуты на 60 картинок при первом запуске (модель ~1 ГБ скачивается с HF).'}
+          {phase === 'preparing' && 'Копируем изображения из ComfyUI/output в kohya-папку.'}
           {phase === 'training' && 'kohya грузит модель и кэширует латенты, скоро пойдут шаги…'}
           {phase === 'pending'  && 'Ждём свободного слота.'}
           {progress.elapsedMs != null && <span className="ml-2">({Math.round(progress.elapsedMs / 1000)} сек)</span>}
@@ -745,7 +745,7 @@ export function Lightbox({
       <img
         src={api.imageUrl(profileId, cur.filename)}
         alt={cur.filename}
-        className="max-w-[95vw] max-h-[90vh] object-contain"
+        className="max-w-[95vw] max-h-[90dvh] object-contain"
         onClick={(e) => e.stopPropagation()}
       />
 
@@ -776,12 +776,12 @@ const FIELDS: Array<{
   type:    'text' | 'number' | 'multiline';
   hint?:   string;
 }> = [
-  { key: 'promptBase',    label: 'Описание (positive prompt)', type: 'multiline', hint: 'Подставляется в каждый кадр датасета' },
+  { key: 'promptBase',    label: 'Описание (positive prompt)', type: 'multiline', hint: 'Подставляется в каждое изображение датасета' },
   { key: 'negative',      label: 'Negative prompt',            type: 'multiline' },
   { key: 'promptAngles',  label: 'Angles prompts',             type: 'multiline', hint: 'Список ракурсов через перевод строки' },
   { key: 'promptVariety', label: 'Variety prompts',            type: 'multiline', hint: 'Вариативность одежды/фона/света' },
   { key: 'ageLabel',      label: 'Возраст',                    type: 'text' },
-  { key: 'targetImages',  label: 'Target images',              type: 'number',    hint: 'Сколько кадров за один прогон' },
+  { key: 'targetImages',  label: 'Target images',              type: 'number',    hint: 'Сколько изображений за один прогон' },
   { key: 'triggerToken',  label: 'Trigger token',              type: 'text',      hint: 'Уникальное «слово» для LoRA' },
 ];
 

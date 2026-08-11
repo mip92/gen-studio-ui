@@ -36,7 +36,7 @@ export function DeleteCharacterModal({
     <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-zinc-900 border border-red-900/50 rounded-lg max-w-lg w-full p-6 space-y-4"
+        className="bg-zinc-900 border border-red-900/50 rounded-lg max-w-lg w-full p-6 space-y-4 max-h-[85dvh] overflow-y-auto"
       >
         <header className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-red-400">Удалить персонажа</h2>
@@ -54,7 +54,7 @@ export function DeleteCharacterModal({
             <div className="bg-zinc-950 border border-zinc-800 rounded p-4 space-y-2 text-xs">
               <UsageRow label="Профили (LoRA, датасеты)" value={usage.profileCount} />
               <UsageRow label="Кадры с этим персонажем" value={usage.shotCount} />
-              <UsageRow label="Сцены затронуты"           value={usage.sceneCount} />
+              <UsageRow label="Акты затронуты"            value={usage.sceneCount} />
               <UsageRow label="Записи участия в кадрах"   value={usage.participantCount} />
             </div>
 

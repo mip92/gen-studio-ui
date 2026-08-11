@@ -15,7 +15,7 @@ import {
 import { api, type Voiceover } from '../../lib/api';
 import { PageHeader } from '../../components/PageHeader';
 import { AddVoiceModal } from '../../components/AddVoiceModal';
-import { HeaderCell, MultiSelect, MultiSelectLabeled } from '../../components/table/TableControls';
+import { FilterField, HeaderCell, MultiSelect, MultiSelectLabeled } from '../../components/table/TableControls';
 
 /**
  * Озвучка — the shared voice library ("voice actors"). Same table stack as the
@@ -225,17 +225,102 @@ export default function VoicesPage() {
         {voices && (
           <>
             {/* Name search + result count */}
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <input
                 value={globalFilter}
                 onChange={(e) => setGlobalFilter(e.target.value)}
                 placeholder="поиск по имени / slug…"
-                className="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm w-64"
+                className="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm w-full sm:w-64"
               />
               <span className="text-xs text-zinc-500">{visibleRows.length} из {rows.length}</span>
             </div>
 
-            <div className="bg-zinc-900 border border-zinc-800 rounded overflow-x-auto">
+            {/* Phone-only filter/sort bar — the card list below has no column
+                headers to hang the Проекты / Источник / Формат dropdowns off. */}
+            <div className="md:hidden bg-zinc-900 border border-zinc-800 rounded p-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+              <FilterField label="Проекты">
+                <MultiSelectLabeled
+                  options={projectOptions}
+                  value={(table.getColumn('projects')?.getFilterValue() as string[] | undefined) ?? []}
+                  onChange={(v) => table.getColumn('projects')?.setFilterValue(v.length ? v : undefined)}
+                />
+              </FilterField>
+              <FilterField label="Источник">
+                <MultiSelectLabeled
+                  options={[{ value: 'has', label: 'со ссылкой' }, { value: 'none', label: 'без ссылки' }]}
+                  value={(table.getColumn('source')?.getFilterValue() as string[] | undefined) ?? []}
+                  onChange={(v) => table.getColumn('source')?.setFilterValue(v.length ? v : undefined)}
+                />
+              </FilterField>
+              <FilterField label="Формат">
+                <MultiSelect
+                  options={extOptions}
+                  value={(table.getColumn('ext')?.getFilterValue() as string[] | undefined) ?? []}
+                  onChange={(v) => table.getColumn('ext')?.setFilterValue(v.length ? v : undefined)}
+                />
+              </FilterField>
+              <FilterField label="Сорт.">
+                <select
+                  value={`${sorting[0]?.id ?? 'name'}:${sorting[0]?.desc ? 'desc' : 'asc'}`}
+                  onChange={(e) => {
+                    const [id, dir] = e.target.value.split(':');
+                    setSorting([{ id, desc: dir === 'desc' }]);
+                  }}
+                  className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-zinc-200"
+                >
+                  <option value="name:asc">Голос А→Я</option>
+                  <option value="name:desc">Голос Я→А</option>
+                  <option value="projects:desc">Больше проектов</option>
+                  <option value="projects:asc">Меньше проектов</option>
+                  <option value="bytes:desc">Крупные файлы</option>
+                  <option value="bytes:asc">Мелкие файлы</option>
+                </select>
+              </FilterField>
+            </div>
+
+            {/* Phone layout: one card per voice. The table is 840px of six
+                columns — below md it would be a horizontal-scrolling puzzle. */}
+            <div className="md:hidden space-y-2">
+              {visibleRows.length === 0 && (
+                <p className="text-center text-zinc-600 italic py-6">— нет голосов по этим фильтрам —</p>
+              )}
+              {visibleRows.map((r) => {
+                const v = r.original;
+                return (
+                  <article key={v.id} className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 space-y-2">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <Link href={`/voices/${v.id}`} className="font-medium text-zinc-100 hover:text-blue-400 break-words">
+                        {v.name}
+                      </Link>
+                      <span className="text-[11px] font-mono text-zinc-600 shrink-0 uppercase">
+                        {v.ext.replace('.', '')} · {formatBytes(v.bytes)}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-zinc-600 font-mono break-all">{v.slug}</div>
+                    <audio key={v.checksum} controls preload="none"
+                           src={`${api.voiceoverRawUrl(v.id)}?v=${v.checksum}`} className="h-8 w-full" />
+                    {v.projects.length === 0
+                      ? <div className="text-zinc-600 italic text-xs">не назначен</div>
+                      : (
+                        <div className="flex flex-wrap gap-1">
+                          {v.projects.map((p) => (
+                            <Link key={p.id} href={`/projects/${p.id}`}
+                                  className="px-2 py-0.5 text-[11px] rounded bg-zinc-800 border border-zinc-700 text-zinc-300">
+                              {p.name}
+                            </Link>
+                          ))}
+                        </div>
+                      )}
+                    {v.sourceUrl && (
+                      <a href={v.sourceUrl} target="_blank" rel="noopener noreferrer"
+                         className="text-blue-400 text-xs underline break-all">↗ источник</a>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+
+            <div className="hidden md:block bg-zinc-900 border border-zinc-800 rounded overflow-x-auto">
               <table className="w-full min-w-[840px] text-sm">
                 <thead className="bg-zinc-950 text-zinc-400 text-xs uppercase tracking-wider align-top">
                   {table.getHeaderGroups().map((hg) => (

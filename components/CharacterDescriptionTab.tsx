@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCharacterCtx } from './CharacterPageShell';
 import { Stat, ProfileDescription } from './CharacterDetail';
+import { ProfileChainPanel } from './ProfileChainPanel';
 
 export function CharacterDescriptionTab() {
   const { profileId, profile, profileFull, setProfileFull, refresh } = useCharacterCtx();
@@ -35,6 +36,10 @@ export function CharacterDescriptionTab() {
           </div>
         </Link>
       </section>
+
+      {/* The character's states + anchor inheritance. Self-hides when there is
+          only one profile. */}
+      <ProfileChainPanel profileId={profileId} />
 
       {profileFull && (
         <ProfileDescription

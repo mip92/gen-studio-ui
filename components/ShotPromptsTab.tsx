@@ -108,14 +108,14 @@ export function ShotPromptsTab() {
 
       {error && <div className="mb-4 bg-red-900/40 border border-red-700 rounded p-3 text-red-200 font-mono text-xs">{error}</div>}
 
-      {/* Scene narration — the slice of script.md this shot's scene covers. Shown
-          as read-only context so the artist sees what the narrator says over
-          this scene without leaving the shot prompts page. */}
+      {/* Act narration — the slice of script.md this shot's act (Scene row)
+          covers. Shown as read-only context so the artist sees what the
+          narrator says over this act without leaving the shot prompts page. */}
       {shot.scene?.narrationText && (
         <section className="mb-6 bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
           <header className="px-4 py-2 border-b border-zinc-800 flex items-baseline justify-between flex-wrap gap-2">
             <div className="text-xs uppercase tracking-wider text-zinc-500">
-              📖 Сценарий сцены
+              📖 Сценарий акта
               <span className="ml-2 normal-case tracking-normal text-zinc-400">
                 {shot.scene.title ?? shot.scene.sceneKey}
               </span>
@@ -138,15 +138,17 @@ export function ShotPromptsTab() {
       {shot.chosenRender && (
         <div className="mb-6 bg-zinc-900 border border-zinc-800 rounded-lg p-4">
           <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">Выбранный кадр (chosenRender)</div>
-          <div className="flex gap-4 items-start">
+          {/* stack below sm: the image (replaced element, won't shrink past its
+              intrinsic min) and the filename fought for width on a phone */}
+          <div className="flex flex-col sm:flex-row gap-4 items-start">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={api.shotImageUrl(shot.id, shot.chosenRender)}
               alt={shot.chosenRender}
-              className="max-w-md w-full bg-black rounded border border-zinc-700"
+              className="max-w-md w-full min-w-0 bg-black rounded border border-zinc-700"
               loading="lazy"
             />
-            <div className="text-xs text-zinc-500 font-mono break-all">{shot.chosenRender}</div>
+            <div className="text-xs text-zinc-500 font-mono break-all min-w-0">{shot.chosenRender}</div>
           </div>
         </div>
       )}

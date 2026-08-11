@@ -12,11 +12,12 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { api, NarrativeBlock, MusicSegment, AudioRenderJob } from '../lib/api';
 
 /** Valid ACE-Step meta values, fetched from the backend (which mirrors the
  *  ComfyUI node's combo options). Null until the fetch lands. */
-type MetaOptions = {
+export type MetaOptions = {
   bpm:            { min: number; max: number };
   keyscales:      string[];
   timesignatures: string[];
@@ -77,13 +78,13 @@ export function BgmList({ projectId }: { projectId: string }) {
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-sm uppercase tracking-wider text-zinc-500">Фоновая музыка · ACE-Step</h2>
         <div className="text-xs text-zinc-500">
-          {blocks.length} блоков
+          {blocks.length} актов
         </div>
       </div>
 
       {blocks.length === 0 && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 text-center text-zinc-500">
-          Блоков ещё нет.
+          Актов ещё нет.
         </div>
       )}
 
@@ -204,7 +205,22 @@ function MetaFields({
 
 // ─── Block card ─────────────────────────────────────────────────────────────
 
-function BlockCard({ block, opts, onChanged }: { block: NarrativeBlock; opts: MetaOptions | null; onChanged: () => void }) {
+export function BlockCard({
+  block,
+  opts,
+  onChanged,
+  linkTitle = true,
+  highlightSegmentId = null,
+}: {
+  block: NarrativeBlock;
+  opts: MetaOptions | null;
+  onChanged: () => void;
+  /** List page links each track's title to its detail page; the detail page
+   *  itself passes false (a link to the page you are on is just noise). */
+  linkTitle?: boolean;
+  /** Segment to visually mark — set from the #seg-<id> hash the queue links with. */
+  highlightSegmentId?: string | null;
+}) {
   const segments  = block.segments ?? [];
   const mains     = segments.filter((s) => !s.spare);
   const spares    = segments.filter((s) =>  s.spare);
@@ -263,7 +279,16 @@ function BlockCard({ block, opts, onChanged }: { block: NarrativeBlock; opts: Me
       <header className="px-5 py-3 border-b border-zinc-800 flex items-baseline justify-between gap-4">
         <h3 className="font-medium">
           <span className="text-zinc-500 text-xs font-mono mr-2">#{block.sortOrder}</span>
-          {block.title ?? block.slug}
+          {linkTitle ? (
+            <Link
+              href={`/projects/${block.projectId}/bgm/${block.slug}`}
+              className="underline-offset-2 hover:underline hover:text-white"
+            >
+              {block.title ?? block.slug}
+            </Link>
+          ) : (
+            block.title ?? block.slug
+          )}
           <span className="text-zinc-500 text-xs font-mono ml-2">({block.slug})</span>
         </h3>
         <div className="flex items-center gap-3 text-xs">
@@ -344,16 +369,21 @@ function BlockCard({ block, opts, onChanged }: { block: NarrativeBlock; opts: Me
           {tiled && <span className="text-[10px] text-emerald-400">акт покрыт</span>}
         </div>
 
-        {/* Segments */}
+        {/* Segments — rendered in the exporter's placement order: main tiles
+            by sortOrder, then spares. The ↑/↓ move swaps neighbours in THIS
+            list, so what the user sees is exactly what the export will play. */}
         {segments.length > 0 && (
           <div className="border-t border-zinc-800 pt-3 space-y-2">
-            {segments.map((seg) => (
+            {[...mains, ...spares].map((seg, i, ordered) => (
               <SegmentRow
                 key={seg.id}
                 segment={seg}
                 block={block}
                 opts={opts}
                 onChanged={onChanged}
+                canUp={i > 0}
+                canDown={i < ordered.length - 1}
+                highlighted={seg.id === highlightSegmentId}
               />
             ))}
           </div>
@@ -370,12 +400,20 @@ function SegmentRow({
   block,
   opts,
   onChanged,
+  canUp,
+  canDown,
+  highlighted = false,
 }: {
   segment:   MusicSegment;
   /** Parent act — supplies the inherited caption and the inherited metas. */
   block:     NarrativeBlock;
   opts:      MetaOptions | null;
   onChanged: () => void;
+  /** Position in the act's combined main+spare order (first/last can't move). */
+  canUp:     boolean;
+  canDown:   boolean;
+  /** The tile a queue deep-link points at — marked so it's findable at a glance. */
+  highlighted?: boolean;
 }) {
   const blockMoodPrompt = block.moodPrompt;
   const jobs = segment.jobs ?? [];
@@ -470,7 +508,7 @@ function SegmentRow({
   };
 
   const deleteSeg = async () => {
-    if (!confirm('Удалить сегмент целиком (со всеми версиями)?')) return;
+    if (!confirm('Удалить плитку целиком (со всеми версиями)?')) return;
     setBusy(true);
     try {
       await api.deleteSegment(segment.id);
@@ -479,12 +517,46 @@ function SegmentRow({
     finally { setBusy(false); }
   };
 
+  /** Swap with the neighbour in the act's placement order. The spare badge
+   *  follows the POSITION, not the tile — promoting a spare take into the
+   *  mains zone makes it main and demotes the tile it displaces. */
+  const move = async (direction: 'up' | 'down') => {
+    setBusy(true);
+    try {
+      await api.moveSegment(segment.id, direction);
+      onChanged();
+    } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
   const effectivePrompt = (segment.prompt ?? blockMoodPrompt ?? '').trim();
 
   return (
-    <div className="bg-zinc-950 border border-zinc-800 rounded p-3">
+    <div
+      id={`seg-${segment.id}`}
+      className={`bg-zinc-950 border rounded p-3 ${
+        highlighted ? 'border-emerald-600 ring-1 ring-emerald-600/40' : 'border-zinc-800'}`}
+    >
       <div className="flex items-center justify-between text-xs">
         <div className="flex items-center gap-2">
+          <span className="flex flex-col -my-1">
+            <button
+              onClick={() => move('up')}
+              disabled={busy || !canUp}
+              className="text-[10px] leading-3 text-zinc-500 hover:text-zinc-200 disabled:text-zinc-800"
+              title="Поднять плитку в акте. Запасная, поднятая в зону основных, становится основной (вытесненная — запасной); тейки и апрув едут вместе с плиткой."
+            >
+              ▲
+            </button>
+            <button
+              onClick={() => move('down')}
+              disabled={busy || !canDown}
+              className="text-[10px] leading-3 text-zinc-500 hover:text-zinc-200 disabled:text-zinc-800"
+              title="Опустить плитку в акте"
+            >
+              ▼
+            </button>
+          </span>
           <span className="text-zinc-500 font-mono">#{segment.sortOrder}</span>
           <span className="text-zinc-300">{segment.durationSec}s</span>
           {segment.spare && (
@@ -534,7 +606,7 @@ function SegmentRow({
             onClick={deleteSeg}
             disabled={busy}
             className="text-xs text-zinc-400 hover:text-red-400 disabled:text-zinc-700 px-1"
-            title="Удалить сегмент"
+            title="Удалить плитку"
           >
             ✕
           </button>

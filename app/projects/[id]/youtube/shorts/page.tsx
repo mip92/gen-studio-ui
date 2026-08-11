@@ -232,7 +232,7 @@ function ShortModal({
     <div className="fixed inset-0 bg-black/80 z-40 flex items-center justify-center p-4" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-zinc-900 border border-zinc-700 rounded-lg max-w-xl w-full max-h-[90vh] overflow-y-auto p-5"
+        className="bg-zinc-900 border border-zinc-700 rounded-lg max-w-xl w-full max-h-[90dvh] overflow-y-auto p-5"
       >
         <header className="flex items-start justify-between gap-3 mb-3">
           <div>

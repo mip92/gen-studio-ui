@@ -100,9 +100,17 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
   const S_SUBS   = isChunked ? 5 : 4;
   const S_UPLOAD = isChunked ? 6 : 5;
 
+  /**
+   * Subtitles are OPTIONAL on a short (user, 2026-08-11). The step stays — the
+   * operator can still put a short on transcription and have the .srt attached at
+   * upload — it simply must not hold the upload hostage: a 9:16 frame already
+   * carries a burned-in caption band, and nothing is auto-transcribed for shorts
+   * any more, so waiting for a job that was never queued would block forever.
+   */
+  const subsOptional = !isMain;
   // Prep steps are local; the last two are driven by this item's launch status.
   const transcribed = myItem?.transcribeStatus === 'completed';
-  const maxStep = !myItem ? S_FILE : transcribed ? S_UPLOAD : S_SUBS;
+  const maxStep = !myItem ? S_FILE : (transcribed || subsOptional) ? S_UPLOAD : S_SUBS;
   // Fresh asset → start at step 1 (params) and walk the prep steps in order.
   // Once prepared (files in), jump to the live status step (subtitles/upload).
   useEffect(() => { if (myItem) setActiveStep(maxStep); }, [maxStep, Boolean(myItem)]);
@@ -236,6 +244,8 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
   };
   const doPrepare = () => act(() => api.prepareLaunchItem(id, { key: itemKey, kind, slug, videoPath: videoPath.trim(), thumbPath: thumbPath.trim() }));
   const doUpload  = () => act(() => api.uploadLaunchItem(id, itemKey));
+  // Only reachable for a short: the main video is queued automatically at prepare.
+  const doTranscribe = () => act(() => api.transcribeLaunchItem(id, itemKey));
   const doFixThumb    = () => act(() => api.retryLaunchThumbnail(id, itemKey));
   const doThumbManual = () => act(() => api.confirmLaunchThumbnailManual(id, itemKey));
 
@@ -410,7 +420,7 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
             <div className="mt-3 bg-fuchsia-950/40 border border-fuchsia-700 rounded p-3 text-xs">
               <p className="text-fuchsia-200">
                 ✓ {exported.draftName ? `«${exported.draftName}»` : 'draft'}
-                {exported.spreads ? ` — ${exported.spreads} разворотов` : exported.sceneCount ? ` — ${exported.sceneCount} сцен, ${exported.shotCount} кадров` : ''}
+                {exported.spreads ? ` — ${exported.spreads} разворотов` : exported.sceneCount ? ` — ${exported.sceneCount} актов, ${exported.shotCount} кадров` : ''}
                 {isComic ? ' — черновик в списке CapCut' : ''}
               </p>
               {exported.draftPath && (
@@ -506,11 +516,28 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
         </Section>
       )}
 
-      {/* 4 — субтитры */}
+      {/* 4 — субтитры (для шорта необязательны) */}
       {shownStep === S_SUBS && (
-        <Section n={S_SUBS} title="Субтитры">
-          <p className="text-xs text-zinc-500 mb-3">Транскрибирую mp4 (faster-whisper, GPU, в очереди рендера). Дальше нельзя, пока не готово.</p>
-          <StatusRow label="Субтитры" state={myItem?.transcribeStatus ?? null} done="✓ готовы" running="⏳ транскрибирую…" pending="в очереди…" />
+        <Section n={S_SUBS} title={subsOptional ? 'Субтитры (необязательно)' : 'Субтитры'}>
+          <p className="text-xs text-zinc-500 mb-3">
+            {subsOptional
+              ? 'Для шорта не обязательны: в вертикали уже есть вжатая полоса, а ютуб показывает свои автосубтитры. Можно сразу к заливке — или поставить транскрипцию, и если успеет, .srt прицепится при загрузке.'
+              : 'Транскрибирую mp4 (faster-whisper, GPU, в очереди рендера). Дальше нельзя, пока не готово.'}
+          </p>
+          <StatusRow label="Субтитры" state={myItem?.transcribeStatus ?? null} done="✓ готовы" running="⏳ транскрибирую…"
+            pending={subsOptional ? 'в очереди…' : 'в очереди…'} />
+          {subsOptional && isCurrent && !myItem?.transcribeStatus && (
+            <div className="mt-2 flex gap-2">
+              <button onClick={doTranscribe} disabled={busy}
+                      className="text-sm bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-white px-3 py-1.5 rounded">
+                {busy ? '…' : 'Поставить субтитры на генерацию'}
+              </button>
+              <button onClick={() => setActiveStep(S_UPLOAD)}
+                      className="text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded">
+                Пропустить →
+              </button>
+            </div>
+          )}
         </Section>
       )}
 

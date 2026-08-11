@@ -56,7 +56,7 @@ export function CreateCharacterModal({
       <form
         onSubmit={submit}
         onClick={(e) => e.stopPropagation()}
-        className="bg-zinc-900 border border-zinc-700 rounded-lg max-w-xl w-full p-6 space-y-4"
+        className="bg-zinc-900 border border-zinc-700 rounded-lg max-w-xl w-full p-6 space-y-4 max-h-[85dvh] overflow-y-auto"
       >
         <header className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Новый персонаж</h2>

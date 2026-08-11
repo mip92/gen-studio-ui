@@ -28,7 +28,7 @@ const POLL_MS = 3000;
 export function PropAnchorPanel({ prop, onChanged }: { prop: Prop; onChanged: () => void }) {
   const [jobs,     setJobs]     = useState<PropAnchorJob[] | null>(null);
   const [cands,    setCands]    = useState<PropAnchorCandidates | null>(null);
-  const [busy,     setBusy]     = useState<'enqueue' | 'upload' | 'delete' | 'select' | null>(null);
+  const [busy,     setBusy]     = useState<'enqueue' | 'upload' | 'delete' | 'select' | 'approve' | null>(null);
   const [error,    setError]    = useState<string | null>(null);
   const [pipeline, setPipeline] = useState<PropAnchorPipeline | ''>('');
   const [anchorBust, setAnchorBust] = useState(Date.now());
@@ -113,6 +113,8 @@ export function PropAnchorPanel({ prop, onChanged }: { prop: Prop; onChanged: ()
       onUpload={(f) => void wrap('upload', () => api.uploadPropAnchor(prop.id, f), true)()}
       onDelete={handleDelete}
       onSelect={(f) => void wrap('select', () => api.selectPropAnchorCandidate(prop.id, f), true)()}
+      approvedAt={prop.anchorApprovedAt ?? null}
+      onApprove={() => void wrap('approve', () => api.approvePropAnchor(prop.id), true)()}
       generateIdleLabel="Сгенерировать по описанию (очередь)"
       generateRegenLabel="Перерендерить по описанию (очередь)"
       controls={

@@ -69,7 +69,7 @@ export default function PropsPage({ params }: { params: Promise<{ id: string }> 
   };
 
   const remove = async (p: Prop) => {
-    if (!confirm(`Удалить предмет "${p.name}"? Шоты, привязанные к нему, потеряют тег.`)) return;
+    if (!confirm(`Удалить предмет "${p.name}"? Кадры, привязанные к нему, потеряют тег.`)) return;
     setBusy(true);
     try {
       await api.deleteProp(p.id);

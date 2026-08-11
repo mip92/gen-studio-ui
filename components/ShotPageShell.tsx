@@ -27,8 +27,8 @@ export function useShotCtx(): ShotCtx {
 
 const TABS = [
   { slug: 'prompts',      label: 'Промпты' },
-  { slug: 'participants', label: 'Participants' },
-  { slug: 'render',       label: 'Сцена' },
+  { slug: 'participants', label: 'Участники' },
+  { slug: 'render',       label: 'Рендер' },
   { slug: 'videos',       label: 'Видео' },
   { slug: 'narration',    label: 'Озвучка' },
 ] as const;
@@ -139,16 +139,19 @@ function RenderModeToggle() {
   const base = 'px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50';
   return (
     <div className="flex items-center gap-2 shrink-0">
-      <span className="text-[10px] uppercase tracking-wider text-zinc-500">Режим</span>
+      {/* On a phone this toggle sits in the sticky header next to the shot-code
+          title; at full width (~280px) it starved the title into overlapping.
+          Below sm the word labels collapse to the emoji alone. */}
+      <span className="hidden sm:inline text-[10px] uppercase tracking-wider text-zinc-500">Режим</span>
       <div className="inline-flex rounded-md border border-zinc-700 overflow-hidden" role="group"
            title="Переопределяет режим рендера для этого кадра, независимо от акта">
         <button type="button" disabled={busy} onClick={() => set('animated')}
                 className={`${base} ${!isStatic ? 'bg-blue-600 text-white' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'}`}>
-          🎬 С видео
+          🎬<span className="hidden sm:inline"> С видео</span>
         </button>
         <button type="button" disabled={busy} onClick={() => set('static')}
                 className={`${base} border-l border-zinc-700 ${isStatic ? 'bg-amber-600 text-white' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'}`}>
-          🖼 Статичный
+          🖼<span className="hidden sm:inline"> Статичный</span>
         </button>
       </div>
     </div>

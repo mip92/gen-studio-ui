@@ -21,6 +21,16 @@ export function MobileNav({ projects }: { projects: ProjectListItem[] }) {
   // A followed link changes the path → close the drawer.
   useEffect(() => { setOpen(false); }, [pathname]);
 
+  // Freeze the page behind the open drawer. The document is the scroller now,
+  // so without this a drag started on the backdrop scrolls the page underneath
+  // and you close the menu onto somewhere you didn't mean to be.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, [open]);
+
   return (
     <>
       <div className="md:hidden flex items-center gap-3 h-12 shrink-0 px-4 border-b border-zinc-800 bg-zinc-950">

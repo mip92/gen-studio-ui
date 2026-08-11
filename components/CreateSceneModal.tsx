@@ -41,10 +41,10 @@ export function CreateSceneModal({
       <form
         onSubmit={submit}
         onClick={(e) => e.stopPropagation()}
-        className="bg-zinc-900 border border-zinc-700 rounded-lg max-w-lg w-full p-6 space-y-4"
+        className="bg-zinc-900 border border-zinc-700 rounded-lg max-w-lg w-full p-6 space-y-4 max-h-[85dvh] overflow-y-auto"
       >
         <header className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Новая сцена</h2>
+          <h2 className="text-lg font-semibold">Новый акт</h2>
           <button type="button" onClick={onClose} className="text-zinc-500 hover:text-zinc-200">✕</button>
         </header>
 
@@ -56,7 +56,7 @@ export function CreateSceneModal({
           />
         </Field>
 
-        <Field label="Title" hint="Человеко-читаемое название сцены">
+        <Field label="Title" hint="Человеко-читаемое название акта">
           <input
             type="text" value={title} onChange={(e) => setTitle(e.target.value)}
             placeholder="напр. Финал: героя выписывают из больницы"

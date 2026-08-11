@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, AnchorCandidatesResponse, AnchorRenderJob, AnchorValidationJob, ProfileStyleReadiness } from '../lib/api';
+import { api, AnchorCandidatesResponse, AnchorRenderJob, AnchorValidationJob, BaseProfileInfo, ProfileStyleReadiness } from '../lib/api';
 import { AnchorPanelView } from './AnchorPanelView';
 
 /**
@@ -29,8 +29,9 @@ export function CharacterAnchorPanel({ profileId }: { profileId: string }) {
   const [jobs,         setJobs]         = useState<AnchorRenderJob[] | null>(null);
   const [valJobs,      setValJobs]      = useState<AnchorValidationJob[] | null>(null);
   const [cands,        setCands]        = useState<AnchorCandidatesResponse | null>(null);
+  const [baseInfo,     setBaseInfo]     = useState<BaseProfileInfo | null>(null);
   const [suggestDraft, setSuggestDraft] = useState<string | null>(null);
-  const [busy,         setBusy]         = useState<'enqueue' | 'upload' | 'delete' | 'validate' | 'apply' | 'select' | null>(null);
+  const [busy,         setBusy]         = useState<'enqueue' | 'upload' | 'delete' | 'validate' | 'apply' | 'select' | 'base' | 'approve' | null>(null);
   const [error,        setError]        = useState<string | null>(null);
   /** Lightbox: 'anchor' = installed anchor.png, otherwise a candidate filename. */
   const [lightbox,     setLightbox]     = useState<'anchor' | string | null>(null);
@@ -51,18 +52,20 @@ export function CharacterAnchorPanel({ profileId }: { profileId: string }) {
 
   const loadAll = useCallback(async () => {
     try {
-      const [r, j, v, c] = await Promise.all([
+      const [r, j, v, c, b] = await Promise.all([
         api.profileStyleReadiness(profileId),
         api.listAnchorJobs(profileId),
         api.listAnchorValidationJobs(profileId),
         // 400 for unattached (library-only) profiles — a missing gallery must
         // not poison the whole panel.
         api.listAnchorCandidates(profileId).catch(() => null),
+        api.getBaseProfile(profileId).catch(() => null),
       ]);
       setReadiness(r);
       setJobs(j);
       setValJobs(v);
       setCands(c);
+      setBaseInfo(b);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -159,6 +162,18 @@ export function CharacterAnchorPanel({ profileId }: { profileId: string }) {
     setSuggestDraft(null);
   })();
 
+  /** Sign off on the anchor the validator installed. Also what releases the
+   *  inheritance chain — a derived state is a Qwen edit of THIS portrait. */
+  const handleApprove = () => wrap('approve', async () => {
+    await api.approveAnchor(profileId);
+  })();
+
+  /** Anchor inheritance: pick which sibling profile this one derives from. */
+  const handleSetBase = (baseProfileId: string | null) => wrap('base', async () => {
+    const b = await api.setBaseProfile(profileId, baseProfileId);
+    setBaseInfo(b);
+  })();
+
   const candidates = cands?.candidates ?? [];
 
   return (
@@ -166,9 +181,9 @@ export function CharacterAnchorPanel({ profileId }: { profileId: string }) {
       title="Anchor portrait (cartoon identity)"
       hint={
         <>
-          Identity лочится через IP-Adapter на одном portrait-anchor. Рендер делает несколько кандидатов,
-          нейронка проверяет каждый (анти-аниме QC) и ставит лучший — но финальный выбор за тобой: любой
-          кандидат из галереи можно сделать якорем.
+          Identity лочится на одном portrait-anchor. Рендер ДОБАВЛЯЕТ кандидатов в пул (старые не стираются),
+          нейронка проверяет только новые (анти-аниме QC) и ставит лучший только если якорь ещё не установлен —
+          финальный выбор всегда за тобой: любой кандидат из галереи можно сделать якорем.
         </>
       }
       aspect="portrait"
@@ -185,8 +200,18 @@ export function CharacterAnchorPanel({ profileId }: { profileId: string }) {
       onUpload={(f) => void handleUpload(f)}
       onDelete={() => void handleDelete()}
       onSelect={(f) => void handleSelect(f)}
+      approvedAt={readiness?.anchorApprovedAt ?? null}
+      onApprove={() => void handleApprove()}
       generateIdleLabel="Generate via prompt (queue)"
       generateRegenLabel="Regenerate via prompt (queue)"
+      // A profile that inherits its face has no donor until the base anchor is
+      // installed — the API rejects such an enqueue, so don't offer the click.
+      renderBlockedReason={
+        baseInfo && baseInfo.baseProfileId !== null && !baseInfo.baseAnchorReady
+          ? `Наследует лицо от ${baseInfo.baseProfileCode ?? 'базового профиля'} — сначала утвердите его якорь, `
+            + 'этот встанет в очередь автоматически'
+          : null
+      }
       validation={{
         active:         valActive,
         chosenFilename: cands?.validation?.chosenFilename ?? null,
@@ -195,6 +220,33 @@ export function CharacterAnchorPanel({ profileId }: { profileId: string }) {
       }}
       footer={
         <>
+          {baseInfo && baseInfo.options.length > 0 && (
+            <div className="mt-3 bg-zinc-950 border border-zinc-800 rounded p-2 text-xs">
+              <div className="text-zinc-500 mb-1">
+                Наследование лица: рендерить якорь как «тот же человек» от якоря другого профиля
+                (старение/изменение состояния вместо генерации с нуля)
+              </div>
+              <select
+                className="w-full bg-zinc-900 border border-zinc-800 rounded p-1.5 text-zinc-200 text-xs"
+                disabled={busy !== null}
+                value={baseInfo.baseProfileId ?? ''}
+                onChange={(e) => void handleSetBase(e.target.value === '' ? null : e.target.value)}
+              >
+                <option value="">— независимый рендер (text-to-image) —</option>
+                {baseInfo.options.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    от {o.profileCode}{o.ageLabel ? ` (${o.ageLabel})` : ''}{o.anchorExists ? ' — якорь готов' : ' — якоря ещё нет'}
+                  </option>
+                ))}
+              </select>
+              {baseInfo.baseProfileId !== null && (
+                <div className="text-zinc-600 mt-1">
+                  Рендер этого якоря встанет в очередь автоматически в момент апрува якоря базового профиля
+                  (выбор кандидата или загрузка файла). Автоматики внутри очереди нет.
+                </div>
+              )}
+            </div>
+          )}
           {!valActive && suggested && cands?.validation && !cands.validation.chosenFilename && (
             <div className="mt-3 bg-zinc-950 border border-zinc-800 rounded p-2 text-xs">
               <div className="text-zinc-500 mb-1">Предложенный promptBase (правь и применяй):</div>
@@ -229,6 +281,9 @@ export function CharacterAnchorPanel({ profileId }: { profileId: string }) {
               <summary className="cursor-pointer text-zinc-500 hover:text-zinc-300">
                 Per-style readiness ({Object.keys(readiness.styles).length} styles)
               </summary>
+              {/* overflow-x-auto: 4 колонки диагностики шире телефона, а
+                  колонка страницы горизонтальный оверфлоу режет без скролла */}
+              <div className="overflow-x-auto">
               <table className="mt-2 w-full font-mono text-[11px]">
                 <thead className="text-zinc-500">
                   <tr>
@@ -253,6 +308,7 @@ export function CharacterAnchorPanel({ profileId }: { profileId: string }) {
                   ))}
                 </tbody>
               </table>
+              </div>
             </details>
           )}
         </>

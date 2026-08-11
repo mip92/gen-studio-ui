@@ -7,9 +7,15 @@ import { ScrollableTabs, ScrollableTab } from './ScrollableTabs';
  * The single page-header used by every top-level view and shell in the app —
  * overview, projects, actions, queue, voices, and the project / shot /
  * character shells. One component so the breadcrumb row, title, right-hand
- * controls, optional tab strip and sticky/blur/border behaviour are identical
- * everywhere. Full-width by design (no max-width cap) to match the full-width
- * page bodies; the outer page column owns horizontal overflow.
+ * controls and optional tab strip are identical everywhere. Full-width by
+ * design (no max-width cap) to match the full-width page bodies; the outer page
+ * column owns horizontal overflow.
+ *
+ * NOT sticky — it scrolls away with the page. On a small phone this header runs
+ * 120–170px (crumbs + title + actions + tab strip), which is a quarter of the
+ * screen permanently spent on chrome; and pinning it was only ever needed
+ * because the app used to scroll inside a fixed-height shell. Scroll up to get
+ * it back.
  *
  * Anatomy (top → bottom):
  *   Breadcrumbs
@@ -35,12 +41,15 @@ export function PageHeader({ crumbs, title, subtitle, actions, tabs, below }: Pa
   // border-b + -mb-px that overlaps the header border), so drop the header's
   // own bottom padding. Without tabs, pad the bottom instead.
   return (
-    <header className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800 text-zinc-100">
+    <header className="bg-zinc-950 border-b border-zinc-800 text-zinc-100">
       <div className={`px-4 sm:px-8 pt-3 ${tabs ? 'pb-0' : 'pb-3'}`}>
         <Breadcrumbs items={crumbs} />
         <div className="flex items-start justify-between gap-4 mt-1">
           <div className="min-w-0">
-            <h1 className="text-xl font-semibold text-zinc-100">{title}</h1>
+            {/* truncate: on a phone the actions block (shrink-0) can leave the
+                title far less than its text width — without truncate the h1
+                spills out and overlaps the actions. */}
+            <h1 className="text-xl font-semibold text-zinc-100 truncate">{title}</h1>
             {subtitle != null && <div className="text-xs text-zinc-500 mt-1">{subtitle}</div>}
           </div>
           {actions != null && (

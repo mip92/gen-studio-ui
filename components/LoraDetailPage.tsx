@@ -79,7 +79,9 @@ export function LoraDetailPage({
 
   return (
     <main className="px-4 sm:px-8 py-6">
-      <header className="mb-6 flex items-baseline justify-between gap-4">
+      {/* flex-wrap: имя варианта + «сделать дефолтной»/«удалить» шире 375px —
+          на телефоне кнопки переезжают на свою строку вместо обрезки */}
+      <header className="mb-6 flex flex-wrap items-baseline justify-between gap-4 gap-y-2">
         {/* Character code / profileCode subtitle is already in the sticky shell
             header (h1) — don't duplicate. Only the variant label remains here. */}
         <div>

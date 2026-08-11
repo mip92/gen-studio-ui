@@ -78,9 +78,29 @@ export interface AnchorPanelViewProps {
   onUpload:   (file: File) => void;
   onDelete:   () => void;
   onSelect:   (filename: string) => void;
+  /**
+   * Approval. The render pipelines install a candidate BY THEMSELVES the moment
+   * a batch finishes — the vision validator's pick for characters, the first
+   * file for props — so an installed anchor is not evidence anyone reviewed it.
+   * This is where that review happens: nothing depending on the anchor renders
+   * until `approvedAt` is set. Picking a candidate or uploading a file approves
+   * implicitly (the user demonstrably chose that image), so the button only
+   * matters for the machine's own pick.
+   */
+  approvedAt?: string | null;
+  onApprove?:  () => void;
 
   generateIdleLabel:  string;
   generateRegenLabel: string;
+
+  /**
+   * Why a render is impossible right now — set it and the generate button is
+   * disabled with this text underneath. Live case: a profile that inherits its
+   * face cannot render before the base profile's anchor is approved (it IS the
+   * donor image), and the API rejects such an enqueue anyway. Better to show the
+   * reason than to let the click fail.
+   */
+  renderBlockedReason?: string | null;
 
   /** Characters only: the vision-QC status row. Omit to hide it entirely. */
   validation?: {
@@ -115,6 +135,7 @@ export function AnchorPanelView(p: AnchorPanelViewProps) {
   }, [lightbox]);
 
   const hasAnchor  = p.anchorUrl !== null;
+  const approved   = hasAnchor && !!p.approvedAt;
   const previewCls = p.aspect === 'portrait' ? 'w-40 h-56' : 'w-56 h-40';
   const tileCls    = p.aspect === 'portrait' ? 'aspect-[3/4]' : 'aspect-video';
   const fitCls     = p.aspect === 'portrait' ? 'object-cover' : 'object-contain';
@@ -126,18 +147,41 @@ export function AnchorPanelView(p: AnchorPanelViewProps) {
         <h2 className="text-sm uppercase tracking-wider text-zinc-500">{p.title}</h2>
         <span
           className={`text-xs px-2 py-0.5 rounded font-mono ${
-            hasAnchor
-              ? 'bg-emerald-900/40 text-emerald-300 border border-emerald-800'
-              : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+            !hasAnchor
+              ? 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+              : approved
+                ? 'bg-emerald-900/40 text-emerald-300 border border-emerald-800'
+                : 'bg-amber-900/40 text-amber-300 border border-amber-800'
           }`}
         >
-          {hasAnchor ? 'anchor ready' : 'no anchor yet'}
+          {!hasAnchor ? 'якоря нет' : approved ? 'якорь утверждён' : 'ждёт апрува'}
         </span>
       </div>
 
       <p className="text-xs text-zinc-500 mb-3">{p.hint}</p>
 
-      <div className="flex gap-4">
+      {/* The anchor exists but only the machine has seen it. Say so loudly —
+          this is the state that used to be invisible, and everything that
+          depends on the anchor is blocked while it lasts. */}
+      {hasAnchor && !approved && p.onApprove && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded border border-amber-900/60 bg-amber-950/30 px-3 py-2">
+          <span className="text-xs text-amber-200">
+            Якорь поставлен автоматически — пока ты его не утвердишь, кадры с ним не рендерятся.
+          </span>
+          <button
+            type="button"
+            onClick={p.onApprove}
+            disabled={busy}
+            className="text-xs px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white disabled:opacity-50"
+          >
+            {p.busy === 'approve' ? '…' : '✓ Утвердить якорь'}
+          </button>
+        </div>
+      )}
+
+      {/* stack below sm: превью якоря 224px + колонка кнопок не делят 375px —
+          кнопкам оставалось ~30px ширины */}
+      <div className="flex flex-col sm:flex-row gap-4">
         {/* Installed anchor preview */}
         <div className="flex-shrink-0">
           <button
@@ -169,9 +213,9 @@ export function AnchorPanelView(p: AnchorPanelViewProps) {
           <button
             type="button"
             onClick={p.onGenerate}
-            disabled={busy || !!p.activeJob}
+            disabled={busy || !!p.activeJob || !!p.renderBlockedReason}
             className="bg-purple-700 hover:bg-purple-600 disabled:bg-zinc-700 disabled:text-zinc-500 text-white px-4 py-2 rounded text-sm"
-            title={p.activeJob ? 'Задание уже в очереди' : ''}
+            title={p.renderBlockedReason ?? (p.activeJob ? 'Задание уже в очереди' : '')}
           >
             {p.activeJob
               ? `В очереди (${STATUS_LABEL[p.activeJob.status]})`
@@ -179,6 +223,11 @@ export function AnchorPanelView(p: AnchorPanelViewProps) {
                 ? 'Ставлю в очередь…'
                 : hasAnchor ? p.generateRegenLabel : p.generateIdleLabel}
           </button>
+          {p.renderBlockedReason && (
+            <div className="text-[11px] text-amber-300/90 bg-amber-950/30 border border-amber-900/60 rounded px-2 py-1">
+              {p.renderBlockedReason}
+            </div>
+          )}
 
           <label className="bg-zinc-800 hover:bg-zinc-700 text-zinc-100 px-4 py-2 rounded text-sm text-center cursor-pointer block">
             {p.busy === 'upload' ? 'Загружаю…' : hasAnchor ? 'Заменить файлом (PNG/JPG)' : 'Загрузить файлом (PNG/JPG)'}
@@ -389,7 +438,7 @@ export function AnchorPanelView(p: AnchorPanelViewProps) {
           <img
             src={lightbox === 'anchor' ? p.anchorUrl! : p.candidateUrl(lightbox)}
             alt="anchor"
-            className="max-w-[95vw] max-h-[90vh] object-contain"
+            className="max-w-[95vw] max-h-[90dvh] object-contain"
             onClick={(e) => e.stopPropagation()}
           />
         </div>

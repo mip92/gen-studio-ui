@@ -93,7 +93,11 @@ export function ScrollableTabs({
       <div
         ref={scrollerRef}
         role="tablist"
-        className="flex overflow-x-auto no-scrollbar"
+        // overflow-y-hidden is load-bearing: with only overflow-x-auto the CSS
+        // spec computes overflow-y to auto too, and the tabs' border-b-2 -mb-px
+        // make the content a couple px taller than the row — on touch that made
+        // the strip vertically flingable with a rubber-band snap-back.
+        className="flex overflow-x-auto overflow-y-hidden no-scrollbar"
       >
         {tabs.map((t) =>
           t.disabled ? (

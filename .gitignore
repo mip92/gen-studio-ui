@@ -44,3 +44,6 @@ next-env.d.ts
 frontend_stdout.log
 frontend_stderr.log
 serve_frontend.log
+
+# leftover agent worktrees
+.claude/worktrees/

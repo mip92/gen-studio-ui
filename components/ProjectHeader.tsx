@@ -7,7 +7,9 @@ import { PageHeader } from './PageHeader';
 const TABS = [
   { key: '',           label: 'Overview' },
   { key: 'characters', label: 'Состав' },
-  { key: 'scenes',     label: 'Сцены' },
+  { key: 'scenes',     label: 'Акты' },
+  { key: 'tts',        label: 'Озвучка' },
+  { key: 'comic',      label: 'Вёрстка' },
   { key: 'thumbnail',  label: 'Обложка' },
   { key: 'locations',  label: 'Локации' },
   { key: 'props',      label: 'Предметы' },
