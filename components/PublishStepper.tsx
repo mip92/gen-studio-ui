@@ -525,17 +525,26 @@ export function PublishStepper({ id, kind, slug, title: assetTitle }: {
               : 'Транскрибирую mp4 (faster-whisper, GPU, в очереди рендера). Дальше нельзя, пока не готово.'}
           </p>
           <StatusRow label="Субтитры" state={myItem?.transcribeStatus ?? null} done="✓ готовы" running="⏳ транскрибирую…"
-            pending={subsOptional ? 'в очереди…' : 'в очереди…'} />
-          {subsOptional && isCurrent && !myItem?.transcribeStatus && (
+            pending="в очереди…" absent="не запрошены" />
+          {/* NOT gated on isCurrent: for a short the subtitles step is never the
+              max step any more (the upload is), so an isCurrent check would hide
+              this button in the exact state it exists for. */}
+          {(!myItem?.transcribeStatus || myItem.transcribeStatus === 'failed') && (
             <div className="mt-2 flex gap-2">
               <button onClick={doTranscribe} disabled={busy}
                       className="text-sm bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-white px-3 py-1.5 rounded">
-                {busy ? '…' : 'Поставить субтитры на генерацию'}
+                {busy ? '…'
+                  : myItem?.transcribeStatus === 'failed' ? 'Повторить транскрипцию'
+                  // Already on YouTube → the job also inserts the track, so say so.
+                  : myItem?.uploaded ? 'Сделать субтитры и прицепить к залитому'
+                  : 'Поставить субтитры на генерацию'}
               </button>
-              <button onClick={() => setActiveStep(S_UPLOAD)}
-                      className="text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded">
-                Пропустить →
-              </button>
+              {subsOptional && (
+                <button onClick={() => setActiveStep(S_UPLOAD)}
+                        className="text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded">
+                  Пропустить →
+                </button>
+              )}
             </div>
           )}
         </Section>
@@ -687,11 +696,18 @@ function PathRow({ label, value, picking, onPick, onChange, required }: {
     </div>
   );
 }
-function StatusRow({ label, state, done, running, pending, error }: {
-  label: string; state: string | null; done: string; running: string; pending: string; error?: string | null;
+function StatusRow({ label, state, done, running, pending, absent, error }: {
+  label: string; state: string | null; done: string; running: string; pending: string;
+  /** Text for state === null, i.e. NO job exists. Defaults to `pending` so the
+   *  existing call sites keep their wording; pass it wherever "нет джоба" and
+   *  "стоит в очереди" are different facts for the operator. Showing «в очереди…»
+   *  for a job that was never created is exactly the inconsistency this fixes. */
+  absent?: string;
+  error?: string | null;
 }) {
   const color = state === 'completed' ? 'text-emerald-400' : state === 'failed' ? 'text-red-400' : 'text-zinc-400';
-  const text  = state === 'completed' ? done : state === 'failed' ? `✗ ${error ?? 'ошибка'}` : state === 'running' ? running : pending;
+  const text  = state === 'completed' ? done : state === 'failed' ? `✗ ${error ?? 'ошибка'}`
+              : state === 'running' ? running : state === null ? (absent ?? pending) : pending;
   return <div className="flex items-center justify-between border border-zinc-800 rounded px-3 py-2 text-sm"><span className="text-zinc-300">{label}</span><span className={`text-xs ${color}`}>{text}</span></div>;
 }
 function lim(n: number, max: number) { return `${n}/${max}${n > max ? ' ⚠' : ''}`; }
