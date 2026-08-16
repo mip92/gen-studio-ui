@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { api, ScenesResponse, SceneShot, SceneShotParticipant } from '../lib/api';
+import { api, ScenesResponse, SceneShot, SceneShotParticipant, VideoFlow } from '../lib/api';
 import { CreateSceneModal } from './CreateSceneModal';
 import { CreateShotModal } from './CreateShotModal';
 import { useScrollRestore } from '../lib/useScrollRestore';
@@ -97,6 +97,7 @@ export function ScenesList({ id }: { id: string }) {
                   {s.shots.length} кадров · фото: {s.shots.filter((sh) => sh.chosenRender).length} · видео: {s.shots.filter((sh) => sh.chosenVideoId).length}
                 </span>
                 <SceneTTSControls projectId={id} sceneId={s.id} />
+                <SceneFlowSelect projectId={id} scene={s} onSaved={refresh} />
                 <button
                   onClick={() => setCreateShotInScene(s.id)}
                   className="text-xs bg-blue-700 hover:bg-blue-600 text-white px-2 py-0.5 rounded"
@@ -152,6 +153,85 @@ type SceneSum = {
   runningJobs:    number;
   failedJobs:     number;
 };
+
+/**
+ * Act-level i2v flow override. «Из проекта» writes null — the act then follows
+ * whatever the project is set to, instead of freezing today's project value into
+ * every act the moment someone touches one of them.
+ */
+function SceneFlowSelect({
+  projectId, scene, onSaved,
+}: {
+  projectId: string;
+  scene: { id: string; defaultVideoFlow?: VideoFlow | null };
+  onSaved: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const value = scene.defaultVideoFlow ?? '';
+
+  const change = async (raw: string) => {
+    setBusy(true);
+    try {
+      await api.updateScene(projectId, scene.id, {
+        defaultVideoFlow: raw === '' ? null : (raw as VideoFlow),
+      });
+      onSaved();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <select
+      value={value}
+      disabled={busy}
+      onChange={(e) => void change(e.target.value)}
+      title="Сколько опорных кадров получает Wan на кадрах этого акта. «2 кадра» требует последний кадр на каждом кадре акта."
+      className="text-xs bg-zinc-950 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-300 disabled:opacity-50"
+    >
+      <option value="">флоу: из проекта</option>
+      <option value="i2v">флоу: 1 кадр</option>
+      <option value="flf2v">флоу: 2 кадра</option>
+    </select>
+  );
+}
+
+/**
+ * End-frame stage badge for one shot row.
+ *
+ * Renders NOTHING on a one-frame shot — the overwhelming majority of the corpus
+ * — so the act list of an untouched project looks exactly as it did. On a
+ * two-frame shot it shows which of the four states the end frame is in, and
+ * links straight to the tab that fixes it.
+ */
+function EndFrameBadge({ projectId, shot }: { projectId: string; shot: SceneShot }) {
+  if (shot.videoFlow !== 'flf2v') return null;
+  const ef = shot.endFrame;
+  const href = `/projects/${projectId}/shots/${shot.id}/end-frame`;
+
+  const [label, cls, title] =
+    !ef?.hasPrompt
+      ? ['2к: нет описания', 'text-zinc-400 bg-zinc-800/60',
+         'Кадр идёт на двух кадрах, но не сказано, что меняется к концу. Без этого он отрендерится как обычный i2v.']
+      : ef.approved
+        ? ['2к ✓', 'text-emerald-300 bg-emerald-900/40',
+           'Последний кадр утверждён — клип поедет на двух опорных кадрах']
+        : ef.chosen
+          ? ['2к: не утверждён', 'text-amber-300 bg-amber-900/40',
+             'Кандидат выбран, но не утверждён — до утверждения клип рендерится по одному кадру']
+          : ef.candidates > 0
+            ? [`2к: ${ef.candidates} вар.`, 'text-amber-300 bg-amber-900/40',
+               'Есть отрендеренные кандидаты, ни один не выбран']
+            : ['2к: нет кадра', 'text-rose-300 bg-rose-900/40',
+               'Описание есть, последний кадр ещё не отрендерен'];
+
+  return (
+    <Link href={href} onClick={(e) => e.stopPropagation()} title={title}
+          className={`${cls} text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded hover:brightness-125`}>
+      {label}
+    </Link>
+  );
+}
 
 function SceneTTSControls({ projectId, sceneId }: { projectId: string; sceneId: string }) {
   const [sum,  setSum]  = useState<SceneSum | null>(null);
@@ -386,6 +466,11 @@ function ShotRow({ projectId, shot, queueStatus, onEnqueued, markBeforeNav }: {
           {!shot.chosenRender && shot.rendersCount > 0 && (
             <span className="text-amber-400 text-[10px] uppercase tracking-wider">{shot.rendersCount} draft</span>
           )}
+          {/* End-frame stage — sits between photo and video because on the
+              two-frame flow that is exactly where it happens: the clip needs it
+              as its second input. Shown ONLY on flf2v shots, so nothing changes
+              visually on a one-frame project. */}
+          <EndFrameBadge projectId={projectId} shot={shot} />
           {/* Video badges — mirror photo flow. */}
           {videoStatus === 'running' && (
             <span className="text-blue-300 bg-blue-900/40 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded">⚙ видео</span>

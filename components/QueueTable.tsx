@@ -29,13 +29,13 @@ import { FilterField, HeaderCell, MultiSelectLabeled } from './table/TableContro
 
 const POLL_MS = 3000;
 
-const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'video', 'video_post', 'tts', 'bgm', 'anchor', 'validation', 'anchor_validation', 'caption', 'thumbnail', 'thumbnail_ideas', 'prop_anchor', 'vo_validation', 'image_qc', 'video_qc'];
+const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'end_frame', 'video', 'video_post', 'tts', 'bgm', 'anchor', 'validation', 'anchor_validation', 'caption', 'thumbnail', 'thumbnail_ideas', 'prop_anchor', 'vo_validation', 'image_qc', 'video_qc'];
 // Historical ledger value 'scene' actually means "render one shot's still image"
 // (SceneRenderJob predates the act/shot vocabulary). The API values stay as is;
 // the UI shows Russian labels (user 2026-08-07: «давай на русском все») — and
 // 'scene' is shown as «кадр img» so the badge doesn't lie about the entity.
 const TYPE_LABELS: Partial<Record<QueueJobType, string>> = {
-  training: 'тренировка', dataset: 'датасет', scene: 'кадр img', video: 'видео',
+  training: 'тренировка', dataset: 'датасет', scene: 'кадр img', end_frame: 'посл. кадр', video: 'видео',
   video_post: 'fhd+fps', tts: 'озвучка', bgm: 'музыка', anchor: 'якорь',
   validation: 'валидация', anchor_validation: 'якорь qc', caption: 'капшн',
   thumbnail: 'обложка', thumbnail_ideas: 'идеи обложки', prop_anchor: 'якорь предм.',
@@ -325,16 +325,17 @@ function QueueTableInner({
   };
 
   /**
-   * The per-row controls — reorder, whole-project priority, cancel — rendered
-   * once and used by BOTH layouts: the desktop table's «Действия» column and
-   * the phone card list. Sharing them is the point: the card list is the only
-   * way to work the queue on a phone, so it must never end up with fewer
-   * buttons than the table.
+   * The per-row controls — reorder, whole-project priority, cancel — for the
+   * «Действия» column.
+   *
+   * Все кнопки живут в ОДНОЙ строке (см. flex-nowrap в ячейке): подписи
+   * короткие и с whitespace-nowrap, чтобы «⤒ в начало» не разваливалось на два
+   * этажа и не растягивало ряд.
    */
   const rowActions = (r: QueueRow) => {
     const isPending  = r.status === 'pending';
     const canCancel  = !TERMINAL_STATUSES.has(r.status);
-    const step = 'text-zinc-400 hover:text-zinc-200 border border-zinc-700 rounded px-2.5 py-1 disabled:opacity-25 disabled:hover:text-zinc-400';
+    const step = 'text-zinc-400 hover:text-zinc-200 border border-zinc-700 rounded px-2.5 py-1 whitespace-nowrap disabled:opacity-25 disabled:hover:text-zinc-400';
     return (
       <>
         {isPending && (
@@ -346,7 +347,7 @@ function QueueTableInner({
             {/* Front of the pending queue. A running job is never preempted, so
                 "first" means "next to run". */}
             <button disabled={!!busy || r.isFirstPending} onClick={() => move(r.entryId, 'top')}
-                    className="text-xs text-emerald-400 hover:text-emerald-300 border border-emerald-900/50 hover:border-emerald-700 px-2.5 py-1 rounded disabled:opacity-30 disabled:hover:border-emerald-900/50"
+                    className="text-xs text-emerald-400 hover:text-emerald-300 border border-emerald-900/50 hover:border-emerald-700 px-2.5 py-1 rounded whitespace-nowrap disabled:opacity-30 disabled:hover:border-emerald-900/50"
                     title="Поднять в начало очереди (сразу после текущей задачи)">
               {busy === `${r.entryId}:top` ? '…' : '⤒ в начало'}
             </button>
@@ -356,7 +357,7 @@ function QueueTableInner({
         {isPending && r.projectId && (
           <button disabled={!!busy}
                   onClick={() => prioritizeProject(r.projectId!, r.projectTier > 0 ? 0 : 1)}
-                  className={`text-xs px-2.5 py-1 rounded border disabled:opacity-30 ${
+                  className={`text-xs px-2.5 py-1 rounded border whitespace-nowrap disabled:opacity-30 ${
                     r.projectTier > 0
                       ? 'text-emerald-300 border-emerald-700 hover:border-emerald-500'
                       : 'text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200'}`}
@@ -369,7 +370,7 @@ function QueueTableInner({
         {canCancel && (
           <button onClick={() => cancel(r)}
                   disabled={busy === `${r.entryId}:cancel`}
-                  className="text-xs text-red-400 hover:text-red-300 border border-red-900/50 hover:border-red-700 px-2.5 py-1 rounded disabled:opacity-50">
+                  className="text-xs text-red-400 hover:text-red-300 border border-red-900/50 hover:border-red-700 px-2.5 py-1 rounded whitespace-nowrap disabled:opacity-50">
             {busy === `${r.entryId}:cancel` ? '…' : 'отменить'}
           </button>
         )}
@@ -469,20 +470,22 @@ function QueueTableInner({
     {
       id: 'target', enableSorting: false, enableColumnFilter: false,
       header: () => <span className="text-left">Цель</span>,
+      // Ошибка идёт ТОЙ ЖЕ строкой, а не вторым этажом: второй этаж делал ряды с
+      // ошибкой выше остальных. Полный текст — в title (и в карточке задачи).
       cell: ({ row }) => {
         const r = row.original;
         return (
-          <div className="min-w-0">
-            <div className="font-mono text-xs truncate">
+          <div className="flex items-baseline gap-2 min-w-0 max-w-[420px]">
+            <span className="font-mono text-xs truncate min-w-0">
               {renderRowTargets(r, r.projectSlug ? links[r.projectSlug] : undefined)}
               {r.attemptNumber > 1 && (
                 <span className="text-amber-500 ml-2" title="Повторная попытка на той же строке">#{r.attemptNumber}</span>
               )}
-            </div>
+            </span>
             {r.errorMessage && (
-              <div className="text-xs text-red-400 truncate" title={r.errorMessage}>
+              <span className="text-xs text-red-400 truncate min-w-0" title={r.errorMessage}>
                 ⚠ {r.errorMessage}
-              </div>
+              </span>
             )}
           </div>
         );
@@ -530,8 +533,12 @@ function QueueTableInner({
       // Reorder buttons appear for every pending row regardless of type. The
       // server pre-computes whether this row is the head or tail of the unified
       // pending FIFO and disables the matching direction.
+      //
+      // flex-nowrap, не flex-wrap: перенос кнопок на вторую строку — ровно то,
+      // что делало ряды разной высоты. Кнопки узкие, все пять помещаются в
+      // строку; на телефоне колонка уезжает вбок вместе с таблицей.
       cell: ({ row }) => (
-        <div className="flex flex-wrap items-center justify-end gap-1.5">
+        <div className="flex flex-nowrap items-center justify-end gap-1.5">
           {rowActions(row.original)}
         </div>
       ),
@@ -592,9 +599,9 @@ function QueueTableInner({
 
       {!data && !error && <p className="text-zinc-500">Загрузка…</p>}
 
-      {/* Phone-only filter/sort bar. On desktop these live in the table's column
-          headers, which the card list below doesn't have — without this bar a
-          phone could neither filter nor sort the queue at all. */}
+      {/* Phone-only filter/sort bar. Те же фильтры есть в шапке таблицы, но на
+          телефоне до них надо докрутить таблицу вбок — панель держит их под
+          рукой. Обе управляют одним и тем же состоянием таблицы. */}
       {data && (
         <div className="md:hidden bg-zinc-900 border border-zinc-800 rounded p-3 flex flex-wrap items-center gap-x-3 gap-y-2">
           <FilterField label="Тип">
@@ -647,73 +654,12 @@ function QueueTableInner({
           for a «следующая страница» tap. */}
       {pager}
 
-      {/* Phone layout: one card per job. The desktop table is 960px of ten
-          columns — on a 375px screen that is a horizontal-scrolling puzzle where
-          the buttons sit past the right edge, so below md the table is replaced
-          outright rather than squeezed. */}
+      {/* ОДНА вёрстка на все экраны — таблица (user, 2026-08-12: «надо вернуть
+          таблицу»). На телефоне она уезжает вбок внутри своего overflow-x-auto,
+          а фильтры/сортировка доступны панелью выше, так что карточная раскладка
+          (была 11.08) не нужна: два разных списка расходились по возможностям. */}
       {data && (
-        <div className="md:hidden space-y-2">
-          {rows.length === 0 && (
-            <p className="text-center text-zinc-600 italic py-6">— под эти фильтры не попала ни одна строка —</p>
-          )}
-          {rows.map((r) => {
-            const proj = r.projectSlug ? projectList.find((p) => p.slug === r.projectSlug) : undefined;
-            const projId = r.projectId ?? proj?.id ?? r.projectSlug;
-            return (
-              <article key={r.entryId} className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 space-y-2">
-                <div className="flex items-center gap-2 flex-wrap">
-                  {r.status === 'running'
-                    ? <span className="text-xs text-amber-300 font-mono">▶</span>
-                    : r.position !== null && (
-                      <span className="text-xs font-mono text-zinc-400">
-                        #{r.position}
-                        {r.projectTier > 0 && <span className="ml-1 text-emerald-400" title="Проект приоритетный">⚑</span>}
-                      </span>
-                    )}
-                  <span className={`text-[10px] uppercase font-mono px-1.5 py-0.5 rounded border ${typeBadge(r.type)}`}>
-                    {typeLabel(r.type)}
-                  </span>
-                  <span className={`text-[10px] uppercase font-mono px-1.5 py-0.5 rounded ${statusBadge(r.status)}`}>
-                    {statusLabel(r.status)}
-                  </span>
-                  {r.attemptNumber > 1 && (
-                    <span className="text-[10px] text-amber-500" title="Повторная попытка на той же строке">#{r.attemptNumber}</span>
-                  )}
-                </div>
-
-                <div className="font-mono text-sm break-words">
-                  {renderRowTargets(r, r.projectSlug ? links[r.projectSlug] : undefined)}
-                </div>
-
-                {r.errorMessage && (
-                  <div className="text-xs text-red-400 break-words">⚠ {r.errorMessage}</div>
-                )}
-
-                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-zinc-500">
-                  {projId && (
-                    <Link href={`/projects/${projId}`} className="text-zinc-400 underline-offset-2 hover:underline">
-                      {proj?.name ?? r.projectSlug}
-                    </Link>
-                  )}
-                  {r.queuedAt    && <span>добавлена {fmtRel(r.queuedAt)}</span>}
-                  {r.durationMs !== null && (
-                    <span className={!r.completedAt ? 'text-amber-300' : undefined}>
-                      {fmtDuration(r.durationMs)}{!r.completedAt && ' ↻'}
-                      {r.outcome === 'wasted' && <span className="ml-1 text-red-400" title={`Впустую: ${r.outcomeReason ?? ''}`}>✗</span>}
-                      {r.outcome === 'useful' && <span className="ml-1 text-emerald-500" title="В финальной версии">✓</span>}
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-1.5 text-xs">{rowActions(r)}</div>
-              </article>
-            );
-          })}
-        </div>
-      )}
-
-      {data && (
-        <div className="hidden md:block bg-zinc-900 border border-zinc-800 rounded overflow-x-auto">
+        <div className="bg-zinc-900 border border-zinc-800 rounded overflow-x-auto">
           <table className="w-full min-w-[960px] text-sm">
             <thead className="bg-zinc-950 text-zinc-400 text-xs uppercase tracking-wider align-top">
               {table.getHeaderGroups().map((hg) => (
@@ -761,8 +707,11 @@ function QueueTableInner({
                       className={`hover:bg-zinc-900/50 ${draggable ? 'cursor-grab' : ''} ${
                         isDragged ? 'opacity-40' : ''} ${
                         isTarget  ? 'border-t-2 border-t-emerald-500' : ''}`}>
+                    {/* Одна высота у всех строк: фиксированный h-11 + каждая
+                        ячейка в одну строку (нет переносов — нечему растягивать
+                        ряд). Длинное содержимое обрезается своим truncate. */}
                     {r.getVisibleCells().map((c) => (
-                      <td key={c.id} className="px-3 py-2 align-top">
+                      <td key={c.id} className="px-3 py-0 h-11 align-middle whitespace-nowrap">
                         {flexRender(c.column.columnDef.cell, c.getContext())}
                       </td>
                     ))}
@@ -964,6 +913,9 @@ function typeBadge(t: QueueJobType): string {
   if (t === 'training')      return 'bg-purple-950/40 text-purple-300 border-purple-900';
   if (t === 'dataset')       return 'bg-blue-950/40   text-blue-300   border-blue-900';
   if (t === 'scene')         return 'bg-amber-950/40  text-amber-300  border-amber-900';
+  // Next to 'scene' in the palette: it is the same kind of work (an image for a
+  // shot), just the last frame of the clip instead of the first.
+  if (t === 'end_frame')     return 'bg-yellow-950/40 text-yellow-300 border-yellow-900';
   if (t === 'video')         return 'bg-rose-950/40   text-rose-300   border-rose-900';
   if (t === 'video_post')    return 'bg-pink-950/40   text-pink-300   border-pink-900';
   if (t === 'tts')           return 'bg-cyan-950/40   text-cyan-300   border-cyan-900';

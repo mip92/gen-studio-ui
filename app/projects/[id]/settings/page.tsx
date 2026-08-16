@@ -173,7 +173,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
       const promptPatch: UpdateProjectBody = {};
       const promptKeys: (keyof UpdateProjectBody)[] = [
         'name', 'visualStyle', 'defaultNegative', 'defaultVideoNegative',
-        'defaultMotionPrompt', 'defaultStaticMotionPrompt',
+        'defaultMotionPrompt', 'defaultStaticMotionPrompt', 'defaultVideoFlow',
       ];
       for (const k of promptKeys) {
         if (draft[k] !== undefined && draft[k] !== project[k as keyof ProjectFull]) {
@@ -283,6 +283,18 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
             {effStyle && !styleOpts.some((s) => s.id === effStyle) && (
               <option value={effStyle}>{effStyle} (нет в реестре)</option>
             )}
+          </select>
+        </Row>
+
+        <Row
+          label="Флоу видео по умолчанию"
+          hint="project.defaultVideoFlow — сколько опорных кадров получает Wan. «1 кадр» = как было всегда: закреплён только первый кадр, остальные 80 модель придумывает сама, и именно там живут прыжки, лишние предметы и расплывание. «2 кадра» = закреплён ещё и последний, клипу некуда уплыть — но каждому кадру нужен свой последний кадр (правка Qwen) и его утверждение. Переопределяется на акте и на отдельном кадре. Влияет только на БУДУЩИЕ рендеры.">
+          <select
+            value={(v('defaultVideoFlow') as string) || 'i2v'}
+            onChange={(e) => onChange('defaultVideoFlow', e.target.value)}
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
+            <option value="i2v">1 кадр — только первый (как раньше)</option>
+            <option value="flf2v">2 кадра — первый и последний</option>
           </select>
         </Row>
 

@@ -104,10 +104,12 @@ export default function LaunchPage({ params }: { params: Promise<{ id: string }>
               <p className="text-xs text-amber-300">Сначала подтверди связывание выше.</p>
             ) : (
               <>
-                <p className="text-xs text-zinc-500 mb-3">Основное — ближайший вт/чт 16:00{view.hasShorts && ', шорты — тот же день 16:05'}. Или опубликовать сейчас.</p>
+                <SlotNote view={view} />
                 <div className="flex items-center gap-3">
-                  <button onClick={doSchedule} disabled={busy} className="text-sm bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white px-4 py-2 rounded">
-                    {busy ? '…' : '📅 Запланировать вт/чт'}
+                  <button onClick={doSchedule} disabled={busy || view.plannedReleasePast}
+                    title={view.plannedReleasePast ? 'Дата в календаре уже прошла — подвинь слот' : undefined}
+                    className="text-sm bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white px-4 py-2 rounded">
+                    {busy ? '…' : view.plannedReleaseAt ? '📅 Запланировать на дату календаря' : '📅 Запланировать вт/чт'}
                   </button>
                   <button onClick={doPublishNow} disabled={busy} className="text-sm bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 disabled:opacity-50 text-white px-4 py-2 rounded">
                     Опубликовать сейчас
@@ -119,6 +121,38 @@ export default function LaunchPage({ params }: { params: Promise<{ id: string }>
         </div>
       )}
     </main>
+  );
+}
+
+/**
+ * Что именно уйдёт в publishAt. Дата берётся из релизного календаря
+ * (Project.releaseAt) — «ближайший свободный вт/чт» остался только запасным
+ * путём для фильма, которого в календаре нет.
+ */
+function SlotNote({ view }: { view: LaunchView }) {
+  if (!view.plannedReleaseAt) {
+    return (
+      <p className="text-xs text-amber-300 mb-3">
+        В <a href="/releases" className="underline hover:text-amber-200">календаре релизов</a> у этого фильма нет даты —
+        встанет ближайший вт/чт 16:00{view.hasShorts && ', шорты +5 минут'}. Лучше сначала назначить слот.
+      </p>
+    );
+  }
+  const at = new Date(view.plannedReleaseAt);
+  const when = at.toLocaleString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  if (view.plannedReleasePast) {
+    return (
+      <p className="text-xs text-red-300 mb-3">
+        Дата в <a href="/releases" className="underline hover:text-red-200">календаре</a> ({when}) уже прошла — подвинь слот
+        или публикуй сейчас.
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs text-zinc-500 mb-3">
+      Основное — по <a href="/releases" className="underline hover:text-zinc-300">календарю</a>:{' '}
+      <b className="text-zinc-300">{when}</b>{view.hasShorts && ', шорты — +5 минут'}. Или опубликовать сейчас.
+    </p>
   );
 }
 

@@ -23,13 +23,18 @@ const GATE_LABELS: Record<ActionGateKey, { num: number; ru: string }> = {
   approve_prop_anchor:   { num: 1,  ru: 'Утвердить якорь предмета' },
   render_scene:          { num: 4,  ru: 'Сгенерировать кадр' },
   approve_render:        { num: 5,  ru: 'Утвердить рендер' },
+  // Both sit at 6 with «Создать видео»: on the two-frame флоу the end frame is
+  // one of the clip's two inputs, so it is the same stage, not a later one.
+  // (Gate 1 already carries four keys — the number is the phase, not the key.)
+  render_end_frame:      { num: 6,  ru: 'Сгенерировать последний кадр (2 кадра)' },
+  approve_end_frame:     { num: 6,  ru: 'Утвердить последний кадр' },
   create_video:          { num: 6,  ru: 'Создать видео' },
   approve_video:         { num: 7,  ru: 'Утвердить видео' },
   upscale_video:         { num: 8,  ru: 'Апскейл видео' },
   interpolate_video:     { num: 9,  ru: 'Увеличить FPS (обязательно)' },
   render_tts:            { num: 10, ru: 'Озвучить — нет голоса' },
   approve_tts:           { num: 11, ru: 'Утвердить закадровый голос' },
-  render_bgm:            { num: 12, ru: 'Отрендерить музыку — плитка пустая' },
+  render_bgm:            { num: 12, ru: 'Отрендерить музыку — плитка пустая (или все попытки упали)' },
   approve_bgm:           { num: 13, ru: 'Утвердить фоновую музыку' },
 };
 
@@ -45,6 +50,8 @@ const GATE_ORDER: ActionGateKey[] = [
   'start_training',
   'render_scene',
   'approve_render',
+  'render_end_frame',
+  'approve_end_frame',
   'create_video',
   'approve_video',
   'upscale_video',

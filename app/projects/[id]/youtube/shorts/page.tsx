@@ -328,6 +328,8 @@ function ShortModal({
 }
 
 // ── Short → YouTube upload (inside the short editor modal) ──────────────────────
+/** Шорт выходит следом за своим основным видео (то же смещение, что и в связке). */
+const SHORT_OFFSET_MIN = 5;
 function nextTueThuS(hour = 17): Date {
   const d = new Date(); d.setHours(hour, 0, 0, 0);
   for (let i = 0; i < 14; i++) { const day = d.getDay(); if ((day === 2 || day === 4) && d.getTime() > Date.now()) return d; d.setDate(d.getDate() + 1); }
@@ -445,11 +447,19 @@ function ShortUpload({ projectId, shortSlug, onUploaded }: {
             onChange={async (e) => {
               setSchedule(e.target.checked);
               if (e.target.checked && !publishAtLocal) {
-                try { const r = await api.getYoutubeNextSlot('short'); setPublishAtLocal(toLocalInputS(new Date(r.publishAt))); }
-                catch { setPublishAtLocal(toLocalInputS(nextTueThuS())); }
+                // Дата шорта — слот его фильма из релизного календаря + 5 минут
+                // (шорт едет следом за основным видео). Канальный next-slot —
+                // только запасной путь, если фильма в календаре нет.
+                try {
+                  const s = await api.getLaunchSlot(projectId);
+                  setPublishAtLocal(toLocalInputS(new Date(new Date(s.publishAt).getTime() + SHORT_OFFSET_MIN * 60_000)));
+                } catch {
+                  try { const r = await api.getYoutubeNextSlot('short'); setPublishAtLocal(toLocalInputS(new Date(r.publishAt))); }
+                  catch { setPublishAtLocal(toLocalInputS(nextTueThuS())); }
+                }
               }
             }} />
-          вт/чт
+          по календарю
         </label>
         {schedule && (
           <input type="datetime-local" value={publishAtLocal} onChange={(e) => setPublishAtLocal(e.target.value)}

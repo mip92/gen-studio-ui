@@ -266,6 +266,12 @@ export interface ShotFull {
   locationId:          string | null;
   /** 'animated' (default) → renders a Wan clip; 'static' → still only, video disabled. */
   renderMode:          string | null;
+  /** Per-shot i2v flow override; null = inherit the act, then the project. */
+  videoFlow?:          VideoFlow | null;
+  /** Qwen edit instruction producing this shot's END frame (flf2v only). */
+  endFramePrompt?:     string | null;
+  chosenEndFrame?:     string | null;
+  endFrameApprovedAt?: string | null;
   participants:        ShotParticipant[];
   /** Image-QC verdicts, one per candidate file (✓/⚠/✗ badges on the picker). */
   imageQcVerdicts?:    ImageQcVerdict[];
@@ -360,6 +366,41 @@ export interface UpdateShotBody {
   /** 'animated' → Wan i2v clip; 'static' → still only, video disabled. Per-shot
    *  override of the act-level render mode. */
   renderMode?:         string;
+  /** Per-shot override of the i2v flow. null = inherit the act, then the project. */
+  videoFlow?:          VideoFlow | null;
+  /** Qwen edit instruction for this shot's END frame — ONLY what is different a
+   *  few seconds later. Changing it clears the pick and the approval server-side. */
+  endFramePrompt?:     string | null;
+}
+
+/**
+ * Which conditioning flow a shot animates on.
+ *   'i2v'   — one pinned frame: the chosen still starts the clip, the rest is free.
+ *   'flf2v' — two pinned frames: an approved end frame also pins the LAST frame,
+ *             so the clip cannot drift away between them.
+ * Set on a project, overridable per act and per shot; null anywhere below the
+ * project means "inherit".
+ */
+export type VideoFlow = 'i2v' | 'flf2v';
+
+/** One rendered end-frame candidate. */
+export interface EndFrameCandidate {
+  filename:  string;
+  promptId?: string;
+  seed?:     number;
+  createdAt?: string;
+}
+
+export interface EndFrameState {
+  /** The RESOLVED flow for the shot (its own override, else the act's, else the
+   *  project's). On 'i2v' nothing would ever consume an end frame, so the page
+   *  offers no generation at all. */
+  flow:       VideoFlow;
+  /** Shot.endFramePrompt — the edit instruction. */
+  prompt:     string | null;
+  candidates: EndFrameCandidate[];
+  chosen:     string | null;
+  approvedAt: string | null;
 }
 
 export interface CreateShotBody {
@@ -529,6 +570,9 @@ export interface ProjectFull extends ProjectListItem {
   ttsVoiceoverId?:           string | null;
   /** Visual style id — see ProjectListItem.visualStyle. */
   visualStyle?:              string;
+  /** Default i2v flow for this project's shots ('i2v' | 'flf2v'). Acts and shots
+   *  override it; every project predating the feature reads 'i2v'. */
+  defaultVideoFlow?:         VideoFlow;
   /** Published YouTube URL of the finished video. When set the project is DONE
    *  and /actions hides all pipeline gates for it. Null = still in production. */
   youtubeUrl?:               string | null;
@@ -624,6 +668,8 @@ export interface UpdateProjectBody {
   /** Published YouTube URL of the finished video. Non-empty marks the project
    *  DONE (hides /actions gates); empty string clears it (back to production). */
   youtubeUrl?:                 string;
+  /** Default i2v flow for this project's shots. Acts and shots override it. */
+  defaultVideoFlow?:           VideoFlow;
 }
 
 /** One graphic-novel style LoRA on disk (GET /projects/style-loras). */
@@ -683,6 +729,19 @@ export interface SceneShot {
   /** Pending|running FPS interpolation on the chosen video, if any. */
   pipelineInterp?: { id: string; status: string } | null;
 
+  // ── End frame (two-frame / flf2v flow) ────────────────────────────────────
+  /** The RESOLVED flow for this shot: its own override, else the act's, else the
+   *  project's. Never null — a shot always renders on one of the two. */
+  videoFlow?: VideoFlow;
+  /** How far this shot's END frame has got. Only meaningful on flf2v. */
+  endFrame?: {
+    /** endFramePrompt is non-empty — without it no end frame is planned. */
+    hasPrompt:  boolean;
+    candidates: number;
+    chosen:     string | null;
+    approved:   boolean;
+  };
+
   // ── Per-shot narration (new in 2026-05) ───────────────────────────────────
   /** ~5s Russian voiceover text for this shot. Per-shot TTS replaces the
    *  legacy whole-scene narration on projects that opted in. */
@@ -717,13 +776,15 @@ export interface SceneSummary {
   /** Which lines in <slug>_script.md this scene covers (inclusive). */
   scriptStartLine:  number | null;
   scriptEndLine:    number | null;
+  /** Act-level i2v flow override; null = inherit the project. */
+  defaultVideoFlow?: VideoFlow | null;
   shots:           SceneShot[];
 }
 
 /** `video_post` is the combined one-pass upscale->RIFE job. It replaced the old
  *  `video_upscale` + `video_interp` pair, which were two queue jobs for what is
  *  a single ComfyUI workflow. */
-export type QueueJobType = 'training' | 'dataset' | 'scene' | 'video' | 'video_post' | 'tts' | 'bgm' | 'anchor' | 'validation' | 'anchor_validation' | 'caption' | 'thumbnail' | 'thumbnail_ideas' | 'prop_anchor' | 'vo_validation' | 'image_qc' | 'video_qc';
+export type QueueJobType = 'training' | 'dataset' | 'scene' | 'end_frame' | 'video' | 'video_post' | 'tts' | 'bgm' | 'anchor' | 'validation' | 'anchor_validation' | 'caption' | 'thumbnail' | 'thumbnail_ideas' | 'prop_anchor' | 'vo_validation' | 'image_qc' | 'video_qc';
 
 /** Caption drawn by scripts/render_caption.py — every field is a real parameter
  *  of the overlay, not a wish addressed to a diffusion model. */
@@ -1364,6 +1425,31 @@ export const api = {
   deleteShot: (shotId: string) =>
     http(`/shots/${shotId}`, { method: 'DELETE' }),
 
+  // End frames (two-frame / flf2v flow). The end frame is an EDIT of the shot's
+  // chosen still, so everything here is scoped to the shot that owns it.
+  listEndFrames: (shotId: string) =>
+    http<EndFrameState>(`/generation/shots/${shotId}/end-frames`),
+
+  /** Queues ONE job producing `batchSize` candidates (default 5) — same shape as
+   *  a scene render, one queue entry and one model load for the whole batch. */
+  enqueueEndFrame: (shotId: string, body: { instruction?: string; seed?: number; batchSize?: number } = {}) =>
+    http<Array<{ id: string; status: string }>>(`/generation/shots/${shotId}/end-frames`, {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  chooseEndFrame: (shotId: string, filename: string) =>
+    http<ShotFull>(`/generation/shots/${shotId}/end-frames/choose`, {
+      method: 'POST',
+      body:   JSON.stringify({ filename }),
+    }),
+
+  approveEndFrame: (shotId: string) =>
+    http<ShotFull>(`/generation/shots/${shotId}/end-frames/approve`, { method: 'POST' }),
+
+  endFrameImageUrl: (shotId: string, filename: string) =>
+    `${MEDIA_BASE}/generation/shots/${shotId}/end-frames/${encodeURIComponent(filename)}/file`,
+
   addShotRender: (shotId: string, body: { filename: string; promptId?: string; seed?: number; strategyId?: string }) =>
     http<ShotFull>(`/shots/${shotId}/renders`, {
       method: 'POST',
@@ -1647,6 +1733,22 @@ export const api = {
     http<{ id: string; sceneKey: string; title: string | null; sortOrder: number }>(
       `/projects/${projectIdOrSlug}/scenes`,
       { method: 'POST', body: JSON.stringify(body) },
+    ),
+
+  /** Update an act. Only the keys sent are written; `defaultVideoFlow: null`
+   *  clears the override so the act inherits the project's flow. */
+  updateScene: (
+    projectIdOrSlug: string,
+    sceneId: string,
+    body: {
+      title?:             string;
+      sortOrder?:         number;
+      defaultVideoFlow?:  VideoFlow | null;
+    },
+  ) =>
+    http<{ id: string; sceneKey: string; title: string | null; sortOrder: number }>(
+      `/projects/${projectIdOrSlug}/scenes/${sceneId}`,
+      { method: 'PATCH', body: JSON.stringify(body) },
     ),
 
   trainingProgress: (jobId: string) =>
@@ -2370,9 +2472,13 @@ export const api = {
   /** Step 4: confirm the manual Studio linking is done. */
   confirmLaunchLinked: (idOrSlug: string) =>
     http<LaunchView>(`/projects/${idOrSlug}/youtube/launch/confirm-linked`, { method: 'POST' }),
-  /** Step 5: schedule all (main 16:00, shorts 16:05). */
+  /** Дата публикации фильма: слот из релизного календаря (или запасной вт/чт,
+   *  если фильма в календаре нет). 400, если плановая дата уже прошла. */
+  getLaunchSlot: (idOrSlug: string) =>
+    http<LaunchSlot>(`/projects/${idOrSlug}/youtube/launch/slot`),
+  /** Step 5: schedule all on the release-calendar date (shorts +5 min). */
   scheduleLaunch: (idOrSlug: string) =>
-    http<{ mainPublishAt: string; shortsPublishAt: string; view: LaunchView }>(
+    http<{ mainPublishAt: string; shortsPublishAt: string; slotSource: 'calendar' | 'auto'; view: LaunchView }>(
       `/projects/${idOrSlug}/youtube/launch/schedule`, { method: 'POST' }),
   /** Step 5 alt: publish all PUBLIC now instead of scheduling. */
   publishLaunchNow: (idOrSlug: string) =>
@@ -2762,6 +2868,9 @@ export interface YoutubeAuthStatus {
   channelTitle: string | null;
   /** False when YT_CLIENT_ID/SECRET are missing from the backend .env. */
   configured:   boolean;
+  /** False when the stored token has no `yt-analytics.readonly` scope: uploads
+   *  still work, but every analytics query fails. Fix = re-run the consent flow. */
+  analytics:    boolean;
 }
 
 /** Result of POST /projects/:id/youtube/upload. */
@@ -2829,6 +2938,17 @@ export interface LaunchView {
   publishMode:     'scheduled' | 'public' | null;
   mainPublishAt:   string | null;
   shortsPublishAt: string | null;
+  /** Дата из релизного календаря (Project.releaseAt) — по ней и планируется выход. */
+  plannedReleaseAt:   string | null;
+  /** Плановая дата уже прошла: планировать нечего, слот двигают на /releases. */
+  plannedReleasePast: boolean;
+}
+
+/** Дата публикации фильма и её происхождение (календарь / запасной вт/чт). */
+export interface LaunchSlot {
+  publishAt: string;
+  source:    'calendar' | 'auto';
+  reason:    string;
 }
 
 /** A subtitle/caption job (transcribe final mp4 → captions.insert). */
@@ -3134,6 +3254,8 @@ export type ActionGateKey =
   | 'approve_prop_anchor'
   | 'render_scene'
   | 'approve_render'
+  | 'render_end_frame'
+  | 'approve_end_frame'
   | 'create_video'
   | 'approve_video'
   | 'upscale_video'

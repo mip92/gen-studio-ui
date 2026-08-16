@@ -148,6 +148,7 @@ function typeBadge(t: string): string {
   if (t === 'training')      return 'bg-purple-950/40 text-purple-300 border-purple-900';
   if (t === 'dataset')       return 'bg-blue-950/40   text-blue-300   border-blue-900';
   if (t === 'scene')         return 'bg-amber-950/40  text-amber-300  border-amber-900';
+  if (t === 'end_frame')     return 'bg-yellow-950/40 text-yellow-300 border-yellow-900';
   if (t === 'video')         return 'bg-rose-950/40   text-rose-300   border-rose-900';
   if (t === 'video_post')    return 'bg-pink-950/40   text-pink-300   border-pink-900';
   if (t === 'tts')           return 'bg-cyan-950/40   text-cyan-300   border-cyan-900';

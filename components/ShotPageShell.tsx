@@ -29,6 +29,9 @@ const TABS = [
   { slug: 'prompts',      label: 'Промпты' },
   { slug: 'participants', label: 'Участники' },
   { slug: 'render',       label: 'Рендер' },
+  // Sits between the still and the clip because that is where it belongs in the
+  // pipeline: on the two-frame flow the end frame is the clip's second input.
+  { slug: 'end-frame',    label: 'Посл. кадр' },
   { slug: 'videos',       label: 'Видео' },
   { slug: 'narration',    label: 'Озвучка' },
 ] as const;
@@ -101,13 +104,15 @@ function StickyHeader({ projectId, shotId, shot }: { projectId: string; shotId: 
       title={<span className="font-mono">{shot.shotCode}</span>}
       actions={<RenderModeToggle />}
       tabs={TABS.map((t) => {
-        const disabled = t.slug === 'videos' && isStatic;
+        // A static shot never becomes a clip, so neither the clip nor its second
+        // conditioning frame means anything for it.
+        const disabled = (t.slug === 'videos' || t.slug === 'end-frame') && isStatic;
         return {
           href:     `${base}/${t.slug}`,
           label:    t.label,
           active:   activeSlug === t.slug,
           disabled,
-          title:    disabled ? 'Видео недоступно для статичного кадра (renderMode=static)' : undefined,
+          title:    disabled ? 'Недоступно для статичного кадра (renderMode=static)' : undefined,
         };
       })}
     />

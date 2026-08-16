@@ -219,6 +219,7 @@ function stageLabel(type: string): string {
   // «кадр (SDXL)» врал для qwen/flux-проектов (user 2026-08-07, station).
   const map: Record<string, string> = {
     scene:             'кадр img',
+    end_frame:         'посл. кадр',
     video:             'видео (i2v)',
     video_post:        'FHD + FPS',
     tts:               'озвучка',
