@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import Link from 'next/link';
 import { api, ProjectListItem, QueueListResponse, QueueRow } from '../lib/api';
 import { PageHeader } from '../components/PageHeader';
-
-const POLL_MS = 5000;
+import { RefreshControl } from '../components/RefreshControl';
+import { useLiveEvents, on } from '../lib/liveEvents';
+import { useRefreshable } from '../lib/useRefreshable';
 
 export default function OverviewPage() {
   const [projects, setProjects] = useState<ProjectListItem[] | null>(null);
@@ -13,31 +14,22 @@ export default function OverviewPage() {
   const [done,     setDone]     = useState<QueueListResponse | null>(null);
   const [error,    setError]    = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const refresh = async () => {
-      try {
-        const [p, a, d] = await Promise.all([
-          api.listProjects(),
-          api.pipelineQueue({ finished: false, sort: 'queuedAt',    order: 'asc',  limit: 10 }),
-          api.pipelineQueue({ finished: true,  sort: 'completedAt', order: 'desc', limit: 5  }),
-        ]);
-        if (cancelled) return;
-        setProjects(p);
-        setActive(a);
-        setDone(d);
-        setError(null);
-      } catch (e) {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    };
-
-    void refresh();
-    const t = setInterval(refresh, POLL_MS);
-    return () => { cancelled = true; clearInterval(t); };
+  // No timer. Like /queue, this screen exists to watch the whole queue, so it
+  // subscribes to every delta while it is on screen. The staleness guard inside
+  // useRefreshable is what replaces the old `cancelled` flag.
+  const load = useCallback(async () => {
+    const [p, a, d] = await Promise.all([
+      api.listProjects(),
+      api.pipelineQueue({ finished: false, sort: 'queuedAt',    order: 'asc',  limit: 10 }),
+      api.pipelineQueue({ finished: true,  sort: 'completedAt', order: 'desc', limit: 5  }),
+    ]);
+    setProjects(p);
+    setActive(a);
+    setDone(d);
   }, []);
+
+  const { refreshing, error: loadError, lastUpdatedAt, refresh } = useRefreshable(load);
+  const streamStatus = useLiveEvents(on.any, refresh, { active: true });
 
   // Active count = pending + running across all types. "running" here is loose:
   // anything not in the terminal bucket. Server already filtered via finished=false.
@@ -51,12 +43,20 @@ export default function OverviewPage() {
         crumbs={[{ label: 'Overview' }]}
         title="Gen Studio"
         subtitle="AI video production · LoRA pipeline · scene rendering"
+        actions={
+          <RefreshControl
+            lastUpdatedAt={lastUpdatedAt}
+            refreshing={refreshing}
+            onRefresh={refresh}
+            live={streamStatus === 'open'}
+          />
+        }
       />
 
       <main className="p-4 sm:p-8 space-y-6">
-        {error && (
+        {loadError && (
           <div className="bg-red-900/40 border border-red-700 rounded p-4">
-            <p className="text-red-200 font-mono text-sm">{error}</p>
+            <p className="text-red-200 font-mono text-sm">{loadError}</p>
           </div>
         )}
 

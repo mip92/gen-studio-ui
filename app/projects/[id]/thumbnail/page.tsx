@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState, use } from 'react';
 import { api, CaptionSpec, ThumbQuality, ThumbnailIdeaInput, ThumbnailIdeaJob, ThumbnailJob } from '@/lib/api';
+import { useLiveEvents, on } from '@/lib/liveEvents';
 
-const POLL_MS = 3000;
 const ACTIVE = new Set(['pending', 'running']);
 
 const STATUS_RU: Record<string, string> = {
@@ -72,11 +72,11 @@ export default function ThumbnailPage({ params }: { params: Promise<{ id: string
   // Poll only while something is still rendering — a finished pool is static.
   const anyActive = jobs.some((j) => ACTIVE.has(j.status))
                  || proposals.some((p) => ACTIVE.has(p.status));
-  useEffect(() => {
-    if (!anyActive) return;
-    const t = setInterval(() => void refresh(), POLL_MS);
-    return () => clearInterval(t);
-  }, [anyActive, refresh]);
+  const thumbMatch = useCallback(
+    on.all(on.project(projectId), on.types('thumbnail', 'thumbnail_ideas')),
+    [projectId],
+  );
+  useLiveEvents(thumbMatch, () => void refresh(), { active: anyActive });
 
   useEffect(() => {
     if (!lightbox) return;

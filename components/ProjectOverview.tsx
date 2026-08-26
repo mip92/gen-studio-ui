@@ -1,8 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api, ScenesResponse, DashboardResponse, ProjectFull } from '../lib/api';
+import { useLiveEvents, on } from '../lib/liveEvents';
+import { useRefreshable } from '../lib/useRefreshable';
+import { RefreshControl } from './RefreshControl';
 
 type Stats = Awaited<ReturnType<typeof api.getProjectStats>>;
 
@@ -11,28 +14,39 @@ export function ProjectOverview({ id }: { id: string }) {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [stats,     setStats]     = useState<Stats             | null>(null);
   const [project,   setProject]   = useState<ProjectFull       | null>(null);
-  const [error,     setError]     = useState<string | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const [s, d, st, pr] = await Promise.all([
-          api.listScenes(id),
-          api.dashboard(id),
-          api.getProjectStats(id).catch(() => null),
-          api.getProject(id).catch(() => null),
-        ]);
-        setScenes(s);
-        setDashboard(d);
-        setStats(st);
-        setProject(pr);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    })();
+  const load = useCallback(async () => {
+    const [s, d, st, pr] = await Promise.all([
+      api.listScenes(id),
+      api.dashboard(id),
+      api.getProjectStats(id).catch(() => null),
+      api.getProject(id).catch(() => null),
+    ]);
+    setScenes(s);
+    setDashboard(d);
+    setStats(st);
+    setProject(pr);
   }, [id]);
 
-  if (error)         return <Pad><Err msg={error} /></Pad>;
+  const { refreshing, error: loadError, lastUpdatedAt, refresh } = useRefreshable(load);
+
+  // This page had NO refresh path at all before — it fetched once on mount, so
+  // the forecast and waste numbers went stale the moment anything finished and
+  // only a full page reload fixed them.
+  //
+  // `on.finished` (op === 'closed') and not every delta: /projects/:id/stats is
+  // the heavy read here (forecast, per-stage costs, waste breakdown) and those
+  // numbers only move when work COMPLETES. A reorder or a priority bump changes
+  // nothing worth recomputing. `active: false` — a stats page should not hold a
+  // socket open on its own; it still hears deltas while one is up for another
+  // reason, and always re-reads on tab wake.
+  const statsMatch = useCallback(
+    (e: Parameters<typeof on.finished>[0]) => on.finished(e) && on.project(id)(e),
+    [id],
+  );
+  useLiveEvents(statsMatch, refresh, { active: false });
+
+  if (loadError)     return <Pad><Err msg={loadError} /></Pad>;
   if (!scenes || !dashboard) return <Pad><p className="text-zinc-500">Loading…</p></Pad>;
 
   const slug       = dashboard.project.slug;
@@ -54,6 +68,13 @@ export function ProjectOverview({ id }: { id: string }) {
 
   return (
     <main className="px-4 sm:px-8 py-6">
+      <div className="flex justify-end mb-3">
+        <RefreshControl
+          lastUpdatedAt={lastUpdatedAt}
+          refreshing={refreshing}
+          onRefresh={refresh}
+        />
+      </div>
       <div className="flex items-start justify-between mb-6 gap-4">
         <section className="grid grid-cols-2 md:grid-cols-4 gap-3 flex-1">
           <Stat label="Акты"      value={String(scenes.scenes.length)} href={`/projects/${id}/scenes`} />

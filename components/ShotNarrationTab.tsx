@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, TTSJob, TTSVoice, ProjectFull, ProjectTTSEmotionRef, VoVerdictView, TTSEngine, TTS_ENGINE_LABELS } from '../lib/api';
 import { useShotCtx } from './ShotPageShell';
+import { useLiveEvents, on } from '../lib/liveEvents';
 
 const SILERO_VOICE_LABELS: Record<TTSVoice, string> = {
   eugene:  'Eugene (м, спокойный диктор)',
@@ -81,13 +82,9 @@ export function ShotNarrationTab() {
 
   useEffect(() => { refreshJobs(); }, [refreshJobs]);
 
-  // Poll while any job is pending/running.
-  useEffect(() => {
-    if (!jobs) return;
-    if (!jobs.some((j) => j.status === 'pending' || j.status === 'running')) return;
-    const t = setInterval(refreshJobs, 3000);
-    return () => clearInterval(t);
-  }, [jobs, refreshJobs]);
+  const ttsInFlight = (jobs ?? []).some((j) => j.status === 'pending' || j.status === 'running');
+  const ttsMatch = useCallback(on.all(on.shot(shotId), on.types('tts')), [shotId]);
+  useLiveEvents(ttsMatch, refreshJobs, { active: ttsInFlight });
 
   // Reset textarea when route nav between shots.
   useEffect(() => { setText(initialText); }, [initialText, shotId]);
@@ -354,7 +351,12 @@ export function ShotNarrationTab() {
                   <span className="text-xs font-mono text-zinc-400">{jobMetaLabel(j)}</span>
                   {j.voVerdict && <VoQcBadge v={j.voVerdict} />}
                   {j.status === 'completed' && (
-                    <audio controls preload="none" src={api.ttsFileUrl(j.id)} className="h-7 flex-1 max-w-md" />
+                    /* w-full on a phone: flex-1 cannot shrink a native iOS audio
+                       control below its intrinsic width, so it overflowed the row
+                       and h-7 clipped its transport. Own line on mobile, inline
+                       from sm up. */
+                    <audio controls preload="none" src={api.ttsFileUrl(j.id)}
+                           className="w-full sm:flex-1 sm:max-w-md h-10 sm:h-7" />
                   )}
                   {j.status === 'failed' && (
                     <span className="text-[10px] text-red-300/70 font-mono truncate flex-1">{j.errorMessage}</span>
@@ -362,7 +364,7 @@ export function ShotNarrationTab() {
                   <span className="text-[10px] text-zinc-600 ml-auto">{new Date(j.queuedAt).toLocaleTimeString()}</span>
                   {j.status === 'completed' && !isApproved && (
                     <button onClick={() => approve(j.id)} disabled={busy !== false}
-                      className="text-[11px] bg-emerald-700 hover:bg-emerald-600 text-white px-2 py-0.5 rounded">
+                      className="text-[11px] bg-emerald-700 hover:bg-emerald-600 text-white px-3 sm:px-2 min-h-9 sm:min-h-0 py-0.5 rounded">
                       утвердить
                     </button>
                   )}
@@ -370,7 +372,7 @@ export function ShotNarrationTab() {
                     <span className="flex items-center gap-1.5">
                       <span className="text-[11px] text-emerald-300 font-medium">✓ выбрано</span>
                       <button onClick={clearApproval} disabled={busy !== false}
-                        className="text-[10px] text-zinc-500 hover:text-red-300"
+                        className="text-[10px] text-zinc-500 hover:text-red-300 px-2 sm:px-0 min-h-9 sm:min-h-0"
                         title="Снять выбор">снять</button>
                     </span>
                   )}

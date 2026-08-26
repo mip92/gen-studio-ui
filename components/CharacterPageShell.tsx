@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { api, ProfileSummary, ProfileFull, ProfileStyleReadiness } from '../lib/api';
 import { BreadcrumbItem } from './Breadcrumbs';
 import { PageHeader } from './PageHeader';
+import { useLiveEvents, on } from '../lib/liveEvents';
 
 const POLL_MS = 5000;
 
@@ -113,11 +114,16 @@ export function CharacterPageShell({
       : hasPhotoreal ? 'lora'
       : 'anchor';
 
-  // Periodic refresh so dataset/training phase keeps updating.
-  useEffect(() => {
-    const t = setInterval(refresh, POLL_MS);
-    return () => clearInterval(t);
-  }, [refresh]);
+  // Was an unconditional 5s poll of two endpoints, for a shell whose numbers
+  // only move when a dataset/training/anchor job lands. Now: event-driven, and
+  // it does not vote the socket open — a character page sitting idle should not
+  // hold a connection. It still hears deltas whenever the socket is up for
+  // another reason, and always re-reads on tab wake.
+  const shellMatch = useCallback(
+    on.all(on.profile(profileId), on.types('dataset', 'training', 'anchor', 'anchor_validation')),
+    [profileId],
+  );
+  useLiveEvents(shellMatch, refresh, { active: false });
 
   if (error) {
     return (

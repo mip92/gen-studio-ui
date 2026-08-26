@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, Prop, PropAnchorCandidates, PropAnchorJob, PropAnchorPipeline } from '../lib/api';
 import { AnchorPanelView } from './AnchorPanelView';
+import { useLiveEvents, on } from '../lib/liveEvents';
+import { useRefreshable } from '../lib/useRefreshable';
+import { RefreshControl } from './RefreshControl';
 
 /**
  * Object anchor for a PROP. Fetching + wording only — the markup is
@@ -23,7 +26,6 @@ const PIPELINES: Array<{ value: PropAnchorPipeline; label: string }> = [
   { value: 'sdxl_comic', label: 'SDXL comic' },
 ];
 
-const POLL_MS = 3000;
 
 export function PropAnchorPanel({ prop, onChanged }: { prop: Prop; onChanged: () => void }) {
   const [jobs,     setJobs]     = useState<PropAnchorJob[] | null>(null);
@@ -33,7 +35,6 @@ export function PropAnchorPanel({ prop, onChanged }: { prop: Prop; onChanged: ()
   const [pipeline, setPipeline] = useState<PropAnchorPipeline | ''>('');
   const [anchorBust, setAnchorBust] = useState(Date.now());
   const prevCompleted = useRef<string | null>(null);
-  const pollTimer     = useRef<NodeJS.Timeout | null>(null);
 
   const loadAll = useCallback(async () => {
     try {
@@ -49,11 +50,24 @@ export function PropAnchorPanel({ prop, onChanged }: { prop: Prop; onChanged: ()
     }
   }, [prop.id]);
 
-  useEffect(() => {
-    void loadAll();
-    pollTimer.current = setInterval(() => { void loadAll(); }, POLL_MS);
-    return () => { if (pollTimer.current) clearInterval(pollTimer.current); };
-  }, [loadAll]);
+  // No timer. This panel is mounted ONCE PER PROP on the props page, so the old
+  // unconditional 3s interval meant N parallel forever-timers — 12 props was
+  // ~8 requests/second with nothing rendering. Now an idle prop costs nothing
+  // and only a prop whose own render is in flight subscribes to deltas.
+  //
+  // NOTE the filter is project-wide, not prop-wide: `queue_entries` has no
+  // propId column, so a prop_anchor delta cannot be narrowed further than its
+  // project. Every mounted panel on the page re-reads when any prop finishes.
+  // That is one refetch per completed render, not per tick — acceptable. See
+  // docs/live-updates.md.
+  const { refreshing, lastUpdatedAt, refresh } = useRefreshable(loadAll);
+
+  const propInFlight = (jobs ?? []).some((j) => j.status === 'pending' || j.status === 'running');
+  const match = useCallback(
+    on.all(on.project(prop.projectId), on.types('prop_anchor')),
+    [prop.projectId],
+  );
+  const streamStatus = useLiveEvents(match, refresh, { active: propInFlight });
 
   // A finished render is the ONLY thing that refreshes the parent list — a queue
   // click must not make the page reload under the user.

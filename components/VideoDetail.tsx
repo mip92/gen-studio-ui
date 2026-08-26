@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api, VideoRender } from '../lib/api';
+import { useLiveEvents, on } from '../lib/liveEvents';
 
 export function VideoDetail({
   projectId, shotId, videoId,
@@ -21,25 +22,49 @@ export function VideoDetail({
   const [approveBusy,  setApproveBusy]  = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [deleteBusy,   setDeleteBusy]   = useState(false);
+  const [audioBusy,    setAudioBusy]    = useState(false);
+  const [audioError,   setAudioError]   = useState<string | null>(null);
+  const [videoEngine,  setVideoEngine]  = useState<string | null>(null);
 
   const load = useCallback(() => {
-    Promise.all([api.getVideo(videoId), api.getShot(shotId)])
-      .then(([v, s]) => { setVideo(v); setChosenVideoId(s.chosenVideoId ?? null); })
+    // The project comes along for its videoEngine: only LTX-2.5 writes sound
+    // into the clip, so only there is a mute switch meaningful.
+    Promise.all([api.getVideo(videoId), api.getShot(shotId), api.getProject(projectId)])
+      .then(([v, s, p]) => {
+        setVideo(v);
+        setChosenVideoId(s.chosenVideoId ?? null);
+        setVideoEngine(p.videoEngine ?? null);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, [videoId, shotId]);
+  }, [videoId, shotId, projectId]);
 
   useEffect(() => { load(); }, [load]);
 
-  // Live-refresh while either the render OR the upscale is in flight.
-  useEffect(() => {
+  /** Flip the clip's export-time audio switch. Nothing is re-rendered and the
+   *  mp4 is untouched — the CapCut segment is laid with volume=0 instead. */
+  const toggleAudio = async () => {
     if (!video) return;
-    const renderInFlight  = video.status === 'pending' || video.status === 'running';
-    const upscaleInFlight = video.upscaleStatus === 'pending' || video.upscaleStatus === 'running';
-    const interpInFlight  = video.interpStatus === 'pending' || video.interpStatus === 'running';
-    if (!renderInFlight && !upscaleInFlight && !interpInFlight) return;
-    const t = setInterval(load, 3000);
-    return () => clearInterval(t);
-  }, [video, load]);
+    setAudioBusy(true);
+    setAudioError(null);
+    try {
+      await api.setVideoAudioMuted(video.id, !video.audioMuted);
+      load();
+    } catch (e) {
+      setAudioError(e instanceof Error ? e.message : String(e));
+    } finally { setAudioBusy(false); }
+  };
+
+
+  // Live-refresh while either the render OR the upscale is in flight.
+  // Was a 3s poll of one video row. Render, upscale and RIFE are all queue
+  // jobs, so a delta for this shot's video work is the signal.
+  const inFlight = !!video && (
+    video.status === 'pending' || video.status === 'running' ||
+    video.upscaleStatus === 'pending' || video.upscaleStatus === 'running' ||
+    video.interpStatus === 'pending' || video.interpStatus === 'running'
+  );
+  const vidMatch = useCallback(on.all(on.shot(shotId), on.types('video', 'video_post')), [shotId]);
+  useLiveEvents(vidMatch, load, { active: inFlight });
 
   const startUpscale = async () => {
     setUpscaleBusy(true); setUpscaleError(null);
@@ -129,6 +154,43 @@ export function VideoDetail({
           loop
           className={`w-full bg-black rounded mb-4 ${chosenVideoId === video.id ? 'ring-2 ring-emerald-500/60' : ''}`}
         />
+      )}
+
+      {/* Clip-carried audio. LTX-2.5 generates sound together with the picture
+          and the upscale pass now keeps it, so the clip plays under the
+          narration and the act's score. Shown only when the mp4 really has an
+          audio stream — a Wan clip has nothing to mute. Muting is a timeline
+          decision (volume=0 in the CapCut draft), not a file edit. */}
+      {video.status === 'completed' && videoEngine === 'ltx' && (
+        <section className="bg-zinc-900 border border-zinc-800 rounded p-4 mb-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-[10px] uppercase tracking-wider text-zinc-500">
+              Звук клипа
+            </span>
+            <button
+              onClick={toggleAudio}
+              disabled={audioBusy}
+              className={`${
+                video.audioMuted
+                  ? 'bg-zinc-700 hover:bg-zinc-600'
+                  : 'bg-amber-800 hover:bg-amber-700'
+              } disabled:bg-zinc-800 disabled:text-zinc-600 text-white text-xs px-3 py-1 rounded`}
+              title={
+                video.audioMuted
+                  ? 'Вернуть звук клипа в экспорт'
+                  : 'Не брать звук этого клипа в экспорт (файл не меняется)'
+              }
+            >
+              {audioBusy ? '⏳…' : video.audioMuted ? '🔇 звук выключен — включить' : '🔊 вырезать звук'}
+            </button>
+            <span className="text-[10px] text-zinc-500 leading-relaxed">
+              {video.audioMuted
+                ? 'В CapCut клип ляжет с volume=0. Файл не тронут — можно вернуть.'
+                : 'Звук LTX (шаги, замок, дыхание) попадёт в фильм. Выключи, если модель придумала музыку — она спорит с музыкой акта.'}
+            </span>
+          </div>
+          {audioError && <div className="mt-2 text-xs text-red-400 font-mono">{audioError}</div>}
+        </section>
       )}
 
       {/* Approve toggle — mirrors photo "выбрать как финальное". Drives the

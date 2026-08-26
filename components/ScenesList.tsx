@@ -7,6 +7,9 @@ import { api, ScenesResponse, SceneShot, SceneShotParticipant, VideoFlow } from 
 import { CreateSceneModal } from './CreateSceneModal';
 import { CreateShotModal } from './CreateShotModal';
 import { useScrollRestore } from '../lib/useScrollRestore';
+import { useLiveEvents, on } from '../lib/liveEvents';
+import { useRefreshable } from '../lib/useRefreshable';
+import { RefreshControl } from '../components/RefreshControl';
 
 export function ScenesList({ id }: { id: string }) {
   const markBeforeNav = useScrollRestore(`scenes-list:${id}`);
@@ -18,12 +21,33 @@ export function ScenesList({ id }: { id: string }) {
   const [queue, setQueue] = useState<{ running: string[]; pending: string[] } | null>(null);
   const [enqueuing, setEnqueuing] = useState(false);
 
+  // What the bulk button will actually queue, computed from the rows already on
+  // screen — same three conditions the server filters on (enqueuePendingForProject):
+  // no renders at all (never rendered, or every render deleted), not approved,
+  // and nothing pending/running for the shot. Counted here so the NUMBER sits on
+  // the button face: the primary device is a tablet, where `title` tooltips do
+  // not exist, so a label reading «всё на рендер» was the only thing visible and
+  // read as "re-render everything" (user 2026-08-26).
+  const pendingShots = (data?.scenes ?? []).flatMap((sc) => sc.shots).filter(
+    (sh) => sh.rendersCount === 0 && sh.chosenRender === null && sh.pipelineRender === null,
+  );
+
   const enqueueAll = async () => {
-    if (!confirm('Поставить на рендер ВСЕ кадры проекта, которые ещё не рендерились и не стоят в очереди?\n\nУже готовые (апрувнутые) и ждущие апрува — НЕ трогаются. Ничего не удаляется, только добавляется.')) return;
+    if (pendingShots.length === 0) return;
+    const sample = pendingShots.slice(0, 12).map((s) => s.shotCode).join(', ');
+    if (!confirm(
+      `Поставить в очередь ${pendingShots.length} кадр(ов), у которых нет ни одного рендера.\n\n`
+      + `${sample}${pendingShots.length > 12 ? ` … и ещё ${pendingShots.length - 12}` : ''}\n\n`
+      + 'НЕ трогаются: апрувнутые, ждущие апрува и уже стоящие в очереди. '
+      + 'Ничего не удаляется и не перерендеривается.',
+    )) return;
     setEnqueuing(true);
     try {
       const r = await api.enqueueProjectPending(id);
-      alert(`Поставлено в очередь: ${r.enqueued}`);
+      const blocked = r.blockedByAnchors ?? 0;
+      alert(blocked > 0
+        ? `Поставлено в очередь: ${r.enqueued}\nПропущено из-за неутверждённых якорей: ${blocked}`
+        : `Поставлено в очередь: ${r.enqueued}`);
       refresh();
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
@@ -37,11 +61,15 @@ export function ScenesList({ id }: { id: string }) {
     api.comfyQueue().then(setQueue).catch(() => setQueue(null));
   }, [id]);
 
-  useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 5000);
-    return () => clearInterval(t);
-  }, [refresh]);
+  // No timer. The act/shot tree only changes when the user edits it or a render
+  // for this project lands — both events. `active: true` because this is a
+  // work-watching screen: the shared socket stays up while it is on screen and
+  // closes the instant the tab is hidden.
+  const { refreshing, lastUpdatedAt, refresh: reload } = useRefreshable(
+    useCallback(async () => { refresh(); }, [refresh]),
+  );
+  const match = useCallback(on.project(id), [id]);
+  const streamStatus = useLiveEvents(match, reload, { active: true });
 
   if (error)  return <main className="px-4 sm:px-8 py-6"><div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{error}</div></main>;
   if (!data)  return <main className="px-4 sm:px-8 py-6 text-zinc-500">Loading…</main>;
@@ -51,6 +79,12 @@ export function ScenesList({ id }: { id: string }) {
       <div className="flex justify-between items-center mb-4">
         <div className="flex items-center gap-3">
           <h2 className="text-sm uppercase tracking-wider text-zinc-500">Акты и кадры</h2>
+          <RefreshControl
+            lastUpdatedAt={lastUpdatedAt}
+            refreshing={refreshing}
+            onRefresh={reload}
+            live={streamStatus === 'open'}
+          />
           {queue && (queue.running.length > 0 || queue.pending.length > 0) && (
             <span className="text-xs text-amber-300 bg-amber-900/30 border border-amber-800/50 rounded px-2 py-0.5">
               ComfyUI: ⚙ {queue.running.length} · ⏳ {queue.pending.length}
@@ -60,11 +94,15 @@ export function ScenesList({ id }: { id: string }) {
         <div className="flex items-center gap-2">
           <button
             onClick={enqueueAll}
-            disabled={enqueuing}
-            title="Поставить на рендер все кадры, которые ещё не рендерились и не в очереди (готовые/ждущие апрува не трогаются)"
+            disabled={enqueuing || pendingShots.length === 0}
+            title="Только кадры без рендеров. Апрувнутые, ждущие апрува и стоящие в очереди не трогаются."
             className="text-xs bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3 py-1 rounded"
           >
-            {enqueuing ? '…' : '▶ всё на рендер'}
+            {enqueuing
+              ? '…'
+              : pendingShots.length === 0
+                ? 'нечего дорендерить'
+                : `▶ дорендерить неснятое (${pendingShots.length})`}
           </button>
           <button
             onClick={() => setShowCreate(true)}
@@ -244,13 +282,11 @@ function SceneTTSControls({ projectId, sceneId }: { projectId: string; sceneId: 
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Live poll while jobs are in flight.
-  useEffect(() => {
-    if (!sum) return;
-    if (sum.inFlight === 0) return;
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  }, [sum, refresh]);
+  // Was a 3s poll per scene row while its TTS batch ran — N rows meant N timers.
+  // Now one shared socket, and this row only re-reads on a tts delta for its own
+  // project. It votes the socket open only while its own batch is in flight.
+  const ttsMatch = useCallback(on.all(on.project(projectId), on.types('tts')), [projectId]);
+  useLiveEvents(ttsMatch, refresh, { active: (sum?.inFlight ?? 0) > 0 });
 
   if (!sum) {
     return (

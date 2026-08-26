@@ -273,8 +273,18 @@ export interface ShotFull {
   chosenEndFrame?:     string | null;
   endFrameApprovedAt?: string | null;
   participants:        ShotParticipant[];
+  /** Scene renders in flight, and how many candidates they owe. Server-side so
+   *  the gallery can show placeholders after a reload — "queued" used to live in
+   *  React state only and vanished the moment you left the page. */
+  pendingRenders?:     { jobs: number; expected: number };
   /** Image-QC verdicts, one per candidate file (✓/⚠/✗ badges on the picker). */
   imageQcVerdicts?:    ImageQcVerdict[];
+  /** Clip rows for this shot — enough to answer «есть ли вообще что смотреть»
+   *  without loading the videos tab (see SHOT_FULL_INCLUDE on the backend). */
+  videoRenders?:       Array<{
+    id: string; status: string; outputFilename: string | null;
+    upscaleStatus: string | null; upscaledFilename: string | null;
+  }>;
   scene?: {
     id:              string;
     sceneKey:        string;
@@ -285,8 +295,16 @@ export interface ShotFull {
     /** Inclusive line range in the project's script.md. */
     scriptStartLine: number | null;
     scriptEndLine:   number | null;
+    /** Act-level video-flow default; null = inherit the project. Present so the
+     *  shot header can show WHICH flow an «Наследовать» shot actually renders on
+     *  without a second request. */
+    defaultVideoFlow?: VideoFlow | null;
   };
-  project?: { id: string; slug: string; name: string; visualStyle?: string };
+  project?: {
+    id: string; slug: string; name: string; visualStyle?: string;
+    /** Bottom of the flow chain — always a concrete value in the DB. */
+    defaultVideoFlow?: VideoFlow | null;
+  };
 }
 
 /** Image-QC verdict for ONE candidate file (see ImageQcService).
@@ -383,6 +401,15 @@ export interface UpdateShotBody {
  */
 export type VideoFlow = 'i2v' | 'flf2v';
 
+/**
+ * Which model family renders a project's clips.
+ *   'wan' — Wan 2.2 i2v, the project's original engine and the default.
+ *   'ltx' — LTX-2.5: faster, and it produces a diegetic sound layer (footsteps,
+ *           a door, a train) alongside the picture. Voiceover stays on f5 and
+ *           music on ACE-Step regardless.
+ */
+export type VideoEngineId = 'wan' | 'ltx';
+
 /** One rendered end-frame candidate. */
 export interface EndFrameCandidate {
   filename:  string;
@@ -396,6 +423,10 @@ export interface EndFrameState {
    *  project's). On 'i2v' nothing would ever consume an end frame, so the page
    *  offers no generation at all. */
   flow:       VideoFlow;
+  /** End-frame jobs in flight, and how many candidates they owe — same purpose
+   *  as ShotFull.pendingRenders: the gallery draws that many placeholders so a
+   *  queued batch is still visible after a reload. */
+  pending?:   { jobs: number; expected: number };
   /** Shot.endFramePrompt — the edit instruction. */
   prompt:     string | null;
   candidates: EndFrameCandidate[];
@@ -573,6 +604,9 @@ export interface ProjectFull extends ProjectListItem {
   /** Default i2v flow for this project's shots ('i2v' | 'flf2v'). Acts and shots
    *  override it; every project predating the feature reads 'i2v'. */
   defaultVideoFlow?:         VideoFlow;
+  /** Which model family renders this project's clips. Per project only — one
+   *  film is shot on one engine, so a montage never mixes two grains. */
+  videoEngine?:              VideoEngineId;
   /** Published YouTube URL of the finished video. When set the project is DONE
    *  and /actions hides all pipeline gates for it. Null = still in production. */
   youtubeUrl?:               string | null;
@@ -670,6 +704,9 @@ export interface UpdateProjectBody {
   youtubeUrl?:                 string;
   /** Default i2v flow for this project's shots. Acts and shots override it. */
   defaultVideoFlow?:           VideoFlow;
+  /** Video model family. Affects FUTURE renders only — the workflow filename is
+   *  baked onto each queued clip, so switching never re-patches queued work. */
+  videoEngine?:                VideoEngineId;
 }
 
 /** One graphic-novel style LoRA on disk (GET /projects/style-loras). */
@@ -1381,8 +1418,11 @@ export const api = {
 
   // Bulk-enqueue every not-yet-rendered, not-queued shot in a project (one click).
   // Additive only — never wipes; skips rendered/approved/awaiting-approval/already-queued.
+  // `blockedByAnchors` — eligible shots the server skipped because a character or
+  // prop anchor is not approved yet. Surfaced so a lower number than expected has
+  // a stated reason instead of looking like a silent under-queue.
   enqueueProjectPending: (projectId: string) =>
-    http<{ enqueued: number }>(
+    http<{ enqueued: number; blockedByAnchors?: number }>(
       `/generation/shots/project/${projectId}/enqueue-pending`,
       { method: 'POST', body: JSON.stringify({}) },
     ),
@@ -1872,6 +1912,17 @@ export const api = {
 
   videoSmoothFileUrl: (videoId: string) =>
     `${MEDIA_BASE}/generation/videos/${videoId}/file-smooth`,
+
+  /**
+   * Mute or unmute the audio the clip itself carries. LTX-2.5 writes sound with
+   * the picture; muting sets volume=0 on the CapCut segment and never touches
+   * the mp4, so it is reversible and costs no re-render.
+   */
+  setVideoAudioMuted: (videoId: string, muted: boolean) =>
+    http<{ id: string; audioMuted: boolean }>(`/generation/videos/${videoId}/audio`, {
+      method: 'POST',
+      body:   JSON.stringify({ muted }),
+    }),
 
   upscaleVideo: (videoId: string) =>
     http<VideoRender>(`/generation/videos/${videoId}/upscale`, { method: 'POST' }),
@@ -2684,13 +2735,30 @@ export const api = {
     title?:      string | null;
     sortOrder?:  number;
     moodPrompt?: string | null;
+    lyricsStructure?: string | null;
     shotIds?:    string[];
     status?:     'filling' | 'filled' | 'manual';
+    /** Accept a caption the richness heuristics reject (an instrument outside
+     *  the backend's lexicon). Never bypasses the mechanical checks. */
+    allowThin?:  boolean;
   } & MusicMetas) =>
     http<NarrativeBlock>(`/bgm/blocks/${blockId}`, {
       method: 'PATCH',
       body:   JSON.stringify(body),
     }),
+
+  /**
+   * Review a caption without saving it. The editor calls this while you type so
+   * the hint on screen and the refusal on save come from the same code — the UI
+   * used to carry its own transcription of three of the rules, and went quiet
+   * the moment the backend learned the rest.
+   */
+  lintCaption: (body: { caption?: string; lyrics?: string; allowThin?: boolean }) =>
+    http<BgmLintResult>('/bgm/lint', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** Corpus audit of every act caption / tile override, same rules as the gate. */
+  auditBgm: (projectId?: string) =>
+    http<BgmAudit>(`/bgm/audit${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
 
   deleteBlock: (blockId: string) =>
     http<{ deleted: true; id: string }>(`/bgm/blocks/${blockId}`, { method: 'DELETE' }),
@@ -2723,9 +2791,11 @@ export const api = {
    *  flac no longer matches the prompt. */
   updateSegment: (segmentId: string, body: {
     prompt?:      string | null;
+    lyricsStructure?: string | null;
     durationSec?: number;
     sortOrder?:   number;
     spare?:       boolean;
+    allowThin?:   boolean;
   } & MusicMetas) =>
     http<MusicSegment>(`/bgm/segments/${segmentId}`, {
       method: 'PATCH',
@@ -3156,6 +3226,11 @@ export interface VideoQcReadiness {
 }
 
 export interface VideoRender {
+  /** Export-time switch for the audio the clip itself carries (LTX-2.5 writes
+   *  sound with the picture). true = the CapCut segment is laid with volume=0;
+   *  the mp4 keeps its track, so the switch is reversible. Absent on older
+   *  backends — treat undefined as false. */
+  audioMuted?:         boolean;
   id:                  string;
   shotId:              string;
   sourceImageFilename: string;
@@ -3209,6 +3284,41 @@ export interface MusicMetas {
   timesignature?: string | null;
 }
 
+/** One finding from the shared caption/lyrics rules. `error` blocks a save. */
+export interface BgmIssue {
+  code:     string;
+  severity: 'error' | 'warn';
+  message:  string;
+}
+
+export interface BgmLintResult {
+  ok:      boolean;
+  caption: { chars: number; ideas: number; instruments: string[]; issues: BgmIssue[] };
+  lyrics:  { issues: BgmIssue[] };
+}
+
+export interface BgmAudit {
+  totals: {
+    projects: number;
+    blocks: number;
+    blocksWithErrors: number;
+    blocksWithWarnings: number;
+    byCode: Record<string, number>;
+  };
+  projects: Array<{
+    slug: string;
+    /** Already on YouTube — frozen, do not edit its prompts. */
+    released: boolean;
+    errorBlocks: number;
+    warnBlocks: number;
+    blocks: Array<{
+      blockId: string; slug: string; chars: number; ideas: number;
+      instruments: string[]; hasLyricsArc: boolean; issues: BgmIssue[];
+      segmentIssues: Array<{ segmentId: string; sortOrder: number; issues: BgmIssue[] }>;
+    }>;
+  }>;
+}
+
 export interface NarrativeBlock extends MusicMetas {
   id:            string;
   projectId:     string;
@@ -3216,6 +3326,10 @@ export interface NarrativeBlock extends MusicMetas {
   title:         string | null;
   sortOrder:     number;
   moodPrompt:    string | null;
+  /** ACE-Step section markers for the `lyrics` input — the act's temporal
+   *  script. Null = the backend generates a three-part arc from moodPrompt per
+   *  tile. Markers only, one per line. Absent on older backends. */
+  lyricsStructure?: string | null;
   /** Ordered list of Shot.id that this block covers — drives targetSeconds. */
   shotIds:       string[];
   /** Sum of covered shots' chosen-video durations (length / fps), in seconds. */
@@ -3232,6 +3346,8 @@ export interface MusicSegment extends MusicMetas {
   sortOrder:     number;
   /** Per-segment ACE-Step tags override; null = inherit block.moodPrompt. */
   prompt:        string | null;
+  /** Per-tile override of the act's section arc; null = inherit the block's. */
+  lyricsStructure?: string | null;
   durationSec:   number;
   /** Spare tile: manual-editing material laid raw on its own export lane.
    *  Optional — absent on older backends (treat undefined as false). */

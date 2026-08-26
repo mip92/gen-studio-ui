@@ -2,35 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { api, SceneShot, ScenesResponse, TTSJob, TTSVoice, ProjectFull, ProjectTTSEmotionRef, TTSEngine, TTS_ENGINE_LABELS, VoVerdictView } from '../lib/api';
-
-const PROSODY_LABELS: Record<string, string> = {
-  monotone: 'монотонно', too_fast: 'слишком быстро', too_slow: 'слишком медленно',
-  long_mid_silence: 'длинная пауза в середине', clipping: 'клиппинг',
-};
-const TECH_LABELS: Record<string, string> = {
-  truncated_end: 'обрезан конец', leading_garbage: 'мусор в начале',
-  too_short: 'слишком короткий', too_long: 'слишком длинный',
-};
-
-/** Полная расшифровка вердикта VO-QC для tooltip'а: за что именно сняты баллы —
- *  и на pass тоже (голый «QC ✓ 92» не объяснял недостающие 8, user 2026-08-07). */
-function voVerdictTooltip(v: VoVerdictView): string {
-  const lines: string[] = [];
-  for (const i of v.issues ?? []) lines.push(i);
-  if (typeof v.wer === 'number' && v.wer > 0) lines.push(`расхождение слов с текстом (WER): ${Math.round(v.wer * 100)}%`);
-  if (v.missingWords?.length)  lines.push(`не услышано: ${v.missingWords.join(', ')}`);
-  if (v.extraWords?.length)    lines.push(`лишнее: ${v.extraWords.join(', ')}`);
-  if (v.repeatedWords?.length) lines.push(`заикание/повтор: ${v.repeatedWords.join(', ')}`);
-  if (v.garbledWords?.length)  lines.push(`искажено: ${v.garbledWords.map((g) => `${g.expected} → ${g.heard}`).join('; ')}`);
-  if (v.prosodyFlags?.length)  lines.push(`просодия: ${v.prosodyFlags.map((f) => PROSODY_LABELS[f] ?? f).join(', ')}`);
-  if (v.techFlags?.length)     lines.push(`техника: ${v.techFlags.map((f) => TECH_LABELS[f] ?? f).join(', ')}`);
-  if (v.riskyStressWords?.length) lines.push(`омографы (проверить ударение): ${v.riskyStressWords.join(', ')}`);
-  if (v.textSnapshotStale) lines.push('⚠ текст кадра изменился после рендера этого дубля');
-  if (lines.length === 0) return 'идеальное совпадение с текстом, претензий нет';
-  if (v.transcript) lines.push(`распознано: «${v.transcript}»`);
-  return lines.join('\n');
-}
+import { api, SceneShot, ScenesResponse, TTSJob, TTSVoice, ProjectFull, ProjectTTSEmotionRef, TTSEngine, TTS_ENGINE_LABELS } from '../lib/api';
+import { useLiveEvents, on } from '../lib/liveEvents';
+import { voVerdictTooltip } from '../lib/voQc';
 
 const SILERO_VOICE_LABELS: Record<TTSVoice, string> = {
   eugene:  'Eugene (м, спокойный диктор)',
@@ -87,6 +61,9 @@ export function ProjectTTSPage({ projectId, initialSceneId }: { projectId: strin
   const [approvedByShot, setApprovedByShot] = useState<Record<string, string | null>>({});
   const [jobsByShot,     setJobsByShot]     = useState<Record<string, TTSJob[]>>({});
   const [saving,         setSaving]         = useState<Record<string, boolean>>({});
+  // QC-расшифровка раскрывается тапом: title-tooltip не существует на тач-экране,
+  // а основное устройство — планшет.
+  const [qcOpen,         setQcOpen]         = useState<Record<string, boolean>>({});
   const [busyAll,        setBusyAll]        = useState<false | 'all' | 'missing' | 'approve100'>(false);
   const [notice,         setNotice]         = useState<string | null>(null);
   const [err,            setErr]            = useState<string | null>(null);
@@ -183,16 +160,20 @@ export function ProjectTTSPage({ projectId, initialSceneId }: { projectId: strin
 
   useEffect(() => { void refreshJobs(); }, [refreshJobs]);
 
-  // Poll while anything on this page is pending/running.
-  useEffect(() => {
-    const ids = new Set(pageIdsKey.split(','));
-    const anyInflight = Object.entries(jobsByShot).some(
-      ([id, jobs]) => ids.has(id) && jobs.some((j) => j.status === 'pending' || j.status === 'running'),
-    );
-    if (!anyInflight) return;
-    const t = setInterval(refreshJobs, 3000);
-    return () => clearInterval(t);
-  }, [jobsByShot, refreshJobs, pageIdsKey]);
+  // This was the worst fan-out in the app: `refreshJobs` issues ONE request per
+  // visible shot (Promise.all over pageRows), and it ran every 3 seconds — at a
+  // page size of 100 that is ~33 requests/second while a batch synthesised.
+  //
+  // The fan-out itself is unchanged (there is no batch endpoint for TTS jobs),
+  // but it now runs once per tts delta for this project instead of once per tick.
+  // A 200-line act therefore costs one burst per finished line, not 33/s for the
+  // whole run.
+  const anyInflight = Object.entries(jobsByShot).some(
+    ([id, jobs]) => pageIdsKey.split(',').includes(id)
+      && jobs.some((j) => j.status === 'pending' || j.status === 'running'),
+  );
+  const ttsMatch = useCallback(on.all(on.project(projectId), on.types('tts')), [projectId]);
+  useLiveEvents(ttsMatch, refreshJobs, { active: anyInflight });
 
   // ── Synth body (engine-aware, same rules as the old modal) ──────────────
   const synthBody = (shotId?: string): Parameters<typeof api.startShotTTS>[1] => {
@@ -298,9 +279,14 @@ export function ProjectTTSPage({ projectId, initialSceneId }: { projectId: strin
         if (approvedByShot[r.shot.id]) continue;
         const jobs = jobsByShot[r.shot.id]
           ?? await api.listShotTTSJobs(r.shot.id).catch(() => [] as TTSJob[]);
+        // Омографы исключают авто-апрув: 100 юзер не слушает вообще, а
+        // дорога́/доро́га машина различить не может (user 2026-08-23). Старые
+        // вердикты с score=100 при омографах отсекаются именно этим условием;
+        // новые больше 99 не получат (см. score() в vo-validation.service.ts).
         const take = jobs.find((j) =>
           j.status === 'completed' && j.voVerdict
           && j.voVerdict.status === 'pass' && j.voVerdict.score === 100
+          && (j.voVerdict.riskyStressWords?.length ?? 0) === 0
           && !j.voVerdict.textSnapshotStale);
         checked++;
         if (!take) continue;
@@ -344,14 +330,17 @@ export function ProjectTTSPage({ projectId, initialSceneId }: { projectId: strin
       )}
 
       {/* Engine-global controls + bulk actions */}
-      <div className="mb-3 bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3 flex items-end gap-4 flex-wrap">
+      {/* min-w-0 so the 260px voice select and the 200px emotion select below can
+          actually shrink instead of forcing the whole panel wider than the
+          screen — a flex item's default min-width is its content. */}
+      <div className="mb-3 bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3 flex items-end gap-4 flex-wrap [&>*]:min-w-0">
         {engine === 'silero' && (
           <label className="text-xs flex flex-col gap-1">
             <span className="text-zinc-500 uppercase tracking-wider">Голос (применится ко всем)</span>
             <select
               value={voice}
               onChange={(e) => setVoice(e.target.value as TTSVoice)}
-              className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 min-w-[260px]"
+              className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 w-full sm:w-auto sm:min-w-[260px]"
             >
               {(Object.keys(SILERO_VOICE_LABELS) as TTSVoice[]).map((v) => (
                 <option key={v} value={v}>{SILERO_VOICE_LABELS[v]}</option>
@@ -366,7 +355,7 @@ export function ProjectTTSPage({ projectId, initialSceneId }: { projectId: strin
               <select
                 value={emotionRefName}
                 onChange={(e) => setEmotionRefName(e.target.value)}
-                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 min-w-[200px]"
+                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 w-full sm:w-auto sm:min-w-[200px]"
               >
                 <option value="">— нейтрально (голос-референс) —</option>
                 {emotionRefs.map((r) => (
@@ -428,7 +417,7 @@ export function ProjectTTSPage({ projectId, initialSceneId }: { projectId: strin
             onClick={() => void approveAll100()}
             disabled={busyAll !== false}
             className="bg-emerald-800 hover:bg-emerald-700 disabled:opacity-30 text-white text-xs font-medium px-3 py-1.5 rounded"
-            title="Утвердить все неутверждённые дубли с вердиктом QC pass и оценкой ровно 100 (в рамках текущего фильтра). Дубли со снятыми баллами остаются на ручную прослушку."
+            title="Утвердить все неутверждённые дубли с вердиктом QC pass и оценкой ровно 100 (в рамках текущего фильтра). Дубли со снятыми баллами или с омографами в тексте остаются на ручную прослушку."
           >
             {busyAll === 'approve100' ? '⏳' : '✓✓ Утвердить все 100%'}
           </button>
@@ -514,9 +503,12 @@ export function ProjectTTSPage({ projectId, initialSceneId }: { projectId: strin
                   {!approvedJob && !approvedNoJobs && latestCompleted && (
                     <span className="text-amber-300 font-mono">🔊 готов, не утверждён</span>
                   )}
-                  {/* VO-QC verdict of the take being played/approved. */}
+                  {/* VO-QC verdict of the take being played/approved. Тап (не
+                      только hover) раскрывает расшифровку блоком под строкой. */}
                   {playableJob?.voVerdict && (
-                    <span
+                    <button
+                      type="button"
+                      onClick={() => setQcOpen((o) => ({ ...o, [s.id]: !o[s.id] }))}
                       title={voVerdictTooltip(playableJob.voVerdict)}
                       className={`font-mono border rounded px-1 cursor-help ${
                         playableJob.voVerdict.status === 'pass' ? 'text-emerald-400 border-emerald-800'
@@ -528,7 +520,8 @@ export function ProjectTTSPage({ projectId, initialSceneId }: { projectId: strin
                         : playableJob.voVerdict.status === 'warn' ? '⚠'
                         : playableJob.voVerdict.status === 'fail' ? '✗' : '?'}
                       {typeof playableJob.voVerdict.score === 'number' ? ` ${playableJob.voVerdict.score}` : ''}
-                    </span>
+                      {' '}{qcOpen[s.id] ? '▴' : '▾'}
+                    </button>
                   )}
                   {inFlight && (
                     <span className="text-blue-300 font-mono">
@@ -538,20 +531,12 @@ export function ProjectTTSPage({ projectId, initialSceneId }: { projectId: strin
                   {latest && latest.status === 'failed' && (
                     <span className="text-red-400 font-mono" title={latest.errorMessage ?? ''}>✕ упал</span>
                   )}
-                  {playableJob && (
-                    <audio
-                      controls
-                      preload="none"
-                      src={api.ttsFileUrl(playableJob.id)}
-                      className="h-7 max-w-[260px]"
-                    />
-                  )}
                   {latestCompleted && !approvedJob && (
                     <button
                       onClick={() => approveJob(s.id, latestCompleted.id)}
                       disabled={isBusy}
                       title="Утвердить этот wav как канонический для кадра"
-                      className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 text-white text-[10px] px-2 py-0.5 rounded"
+                      className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30 text-white text-xs sm:text-[10px] px-3 sm:px-2 min-h-9 sm:min-h-0 py-0.5 rounded"
                     >
                       {isBusy ? '⏳' : '✓ утвердить'}
                     </button>
@@ -562,7 +547,7 @@ export function ProjectTTSPage({ projectId, initialSceneId }: { projectId: strin
                       onClick={() => trimArtifact(s.id, approvedJob.id)}
                       disabled={isBusy}
                       title="Обрезать ведущий артефакт «понь» (обратимо)"
-                      className="bg-zinc-700 hover:bg-zinc-600 disabled:opacity-30 text-white text-[10px] px-2 py-0.5 rounded"
+                      className="bg-zinc-700 hover:bg-zinc-600 disabled:opacity-30 text-white text-xs sm:text-[10px] px-3 sm:px-2 min-h-9 sm:min-h-0 py-0.5 rounded"
                     >
                       {isBusy ? '⏳' : '✂ понь'}
                     </button>
@@ -572,7 +557,7 @@ export function ProjectTTSPage({ projectId, initialSceneId }: { projectId: strin
                       onClick={() => revertArtifact(s.id, approvedJob.id)}
                       disabled={isBusy}
                       title="Вернуть оригинал (отменить обрезку «понь»)"
-                      className="bg-amber-800 hover:bg-amber-700 disabled:opacity-30 text-white text-[10px] px-2 py-0.5 rounded"
+                      className="bg-amber-800 hover:bg-amber-700 disabled:opacity-30 text-white text-xs sm:text-[10px] px-3 sm:px-2 min-h-9 sm:min-h-0 py-0.5 rounded"
                     >
                       {isBusy ? '⏳' : '↩ вернуть'}
                     </button>
@@ -582,13 +567,40 @@ export function ProjectTTSPage({ projectId, initialSceneId }: { projectId: strin
                       onClick={() => deletePlayable(s.id, playableJob.id)}
                       disabled={isBusy}
                       title={approvedJob ? 'Удалить утверждённый wav (approval тоже сбросится)' : 'Удалить этот wav'}
-                      className="bg-red-900/40 hover:bg-red-800/60 border border-red-900/60 hover:border-red-700 disabled:opacity-30 text-red-300 hover:text-red-200 text-[10px] px-2 py-0.5 rounded"
+                      className="bg-red-900/40 hover:bg-red-800/60 border border-red-900/60 hover:border-red-700 disabled:opacity-30 text-red-300 hover:text-red-200 text-xs sm:text-[10px] px-3 sm:px-2 min-h-9 sm:min-h-0 py-0.5 rounded"
                     >
                       {isBusy ? '⏳' : '✕ удалить'}
                     </button>
                   )}
                 </div>
               </div>
+
+              {qcOpen[s.id] && playableJob?.voVerdict && (
+                <div className="mb-2 text-[11px] leading-relaxed text-zinc-300 bg-zinc-900/60 border border-zinc-800 rounded p-2 whitespace-pre-line">
+                  {voVerdictTooltip(playableJob.voVerdict)}
+                </div>
+              )}
+
+              {/* The player gets a LINE OF ITS OWN, at both sizes.
+                  It used to live in the badge row above at `sm:max-w-[260px]
+                  h-10 sm:h-7`. The phone half of that had already been fixed
+                  once (w-full + h-10, iPhone 13 mini) and the comment recorded
+                  why: at 260px the native control drops the scrubber and the
+                  timecode, and h-7 clips the transport. The desktop half kept
+                  exactly those two broken values — 28px tall among 10px badges,
+                  right-justified — so on a computer the control was a clipped
+                  sliver and read as "there is no player". Chrome's native audio
+                  element is 300×54 by design; it clips rather than scales, so
+                  the height must stay near it. */}
+              {playableJob && (
+                <audio
+                  controls
+                  preload="none"
+                  src={api.ttsFileUrl(playableJob.id)}
+                  className="w-full sm:w-auto sm:min-w-[340px] h-10 mb-2"
+                />
+              )}
+
               <textarea
                 value={draft}
                 onChange={(e) => setDrafts((d) => ({ ...d, [s.id]: e.target.value }))}

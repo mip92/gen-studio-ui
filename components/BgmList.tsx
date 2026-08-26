@@ -13,7 +13,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { api, NarrativeBlock, MusicSegment, AudioRenderJob } from '../lib/api';
+import { api, NarrativeBlock, MusicSegment, AudioRenderJob, BgmLintResult, BgmIssue, BgmAudit } from '../lib/api';
+import { useLiveEvents, on } from '../lib/liveEvents';
+import { useRefreshable } from '../lib/useRefreshable';
+import { RefreshControl } from '../components/RefreshControl';
 
 /** Valid ACE-Step meta values, fetched from the backend (which mirrors the
  *  ComfyUI node's combo options). Null until the fetch lands. */
@@ -24,26 +27,113 @@ export type MetaOptions = {
 };
 
 /**
- * Does this caption still state a tempo, key or metre in its text, where it
- * fights the `# Metas` block the tokenizer appends? Advisory only — never blocks
- * a save. Twin of `captionMetaConflicts()` in the backend's bgm.types.ts; keep
- * the two in step (there is no shared module between the API and this app).
+ * Live caption review, straight from the backend.
+ *
+ * This used to be a local function — a hand transcription of three of the
+ * rules, with a comment asking whoever edited the backend to keep the two in
+ * step. Nobody did: the backend grew eight more checks and a hard gate, and
+ * this editor kept cheerfully reporting nothing while `сохранить` started
+ * returning 400. Now there is one implementation and the UI asks it.
  */
-function captionMetaConflicts(prompt: string): string[] {
-  const found: string[] = [];
-  const bpm = prompt.match(/\b\d{2,3}\s?bpm\b/i);
-  if (bpm) found.push(`темп в тексте («${bpm[0]}») — перенесите в поле bpm`);
-  const key = prompt.match(/\b[A-G](?:\s?(?:#|b|sharp|flat))?\s+(?:major|minor)\b/);
-  if (key) found.push(`тональность в тексте («${key[0]}») — перенесите в поле keyscale`);
-  const ts = prompt.match(/\b[2-9]\s?\/\s?[248]\b/);
-  if (ts) found.push(`размер в тексте («${ts[0]}») — перенесите в поле размера`);
-  return found;
+function useBgmLint(caption: string, lyrics?: string | null) {
+  const [lint, setLint] = useState<BgmLintResult | null>(null);
+  useEffect(() => {
+    if (!caption.trim() && !(lyrics ?? '').trim()) { setLint(null); return; }
+    let alive = true;
+    // Debounced: this fires on every keystroke otherwise, and the answer is
+    // only interesting once the author pauses.
+    const timer = setTimeout(() => {
+      api.lintCaption({ caption, ...(lyrics ? { lyrics } : {}) })
+        .then((r) => { if (alive) setLint(r); })
+        .catch(() => { if (alive) setLint(null); });
+    }, 400);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [caption, lyrics]);
+  return lint;
+}
+
+/** Errors the backend lets you override with `allowThin` — the three that rest
+ *  on its instrument lexicon rather than on something mechanical. */
+const ESCAPABLE_CODES = ['few_instruments', 'no_percussion_statement', 'thin'];
+
+function issuesOf(lint: BgmLintResult | null): BgmIssue[] {
+  if (!lint) return [];
+  return [...lint.caption.issues, ...lint.lyrics.issues];
+}
+
+function onlyEscapable(issues: BgmIssue[]): boolean {
+  const errors = issues.filter((i) => i.severity === 'error');
+  return errors.length > 0 && errors.every((i) => ESCAPABLE_CODES.includes(i.code));
+}
+
+/** Caption verdict panel: the budget line, then errors, then warnings. */
+function LintPanel({ lint, compact }: { lint: BgmLintResult | null; compact?: boolean }) {
+  if (!lint) return null;
+  const issues = issuesOf(lint);
+  const errors = issues.filter((i) => i.severity === 'error');
+  const warns  = issues.filter((i) => i.severity === 'warn');
+  const { chars, ideas, instruments } = lint.caption;
+  const thin = chars < 180 || instruments.length < 3;
+
+  return (
+    <div className={compact ? 'mt-1 space-y-1' : 'mt-2 space-y-1.5'}>
+      <div className="text-[10px] text-zinc-500 flex flex-wrap gap-x-3">
+        <span className={chars > 512 ? 'text-red-400' : thin ? 'text-amber-400/90' : 'text-zinc-500'}>
+          {chars}/512 симв
+        </span>
+        <span className={ideas < 6 ? 'text-amber-400/90' : 'text-zinc-500'}>{ideas} идей</span>
+        <span className={instruments.length < 3 ? 'text-amber-400/90' : 'text-zinc-500'}>
+          {instruments.length} инстр.{instruments.length > 0 && `: ${instruments.join(', ')}`}
+        </span>
+      </div>
+      {errors.length > 0 && (
+        <div className="text-[10px] text-red-300 bg-red-950/30 border border-red-900/60 rounded px-2 py-1.5 space-y-0.5">
+          {errors.map((e) => <div key={e.code + e.message}>✕ {e.message}</div>)}
+          <div className="text-red-200/50">Гейт откажет в сохранении — правила в Skill(gen-studio-acestep) §3.</div>
+        </div>
+      )}
+      {warns.length > 0 && (
+        <div className="text-[10px] text-amber-300/90 bg-amber-950/30 border border-amber-900/60 rounded px-2 py-1.5 space-y-0.5">
+          {warns.map((w) => <div key={w.code + w.message}>⚠ {w.message}</div>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One line of corpus verdict for the header: how many acts of this project would
+ * be refused by the gate today. Purely informational — legacy captions keep
+ * rendering, the gate only fires when one is edited.
+ */
+function auditSummary(audit: BgmAudit | null) {
+  if (!audit) return null;
+  const proj = audit.projects[0];
+  const errs  = proj?.errorBlocks ?? 0;
+  const warns = proj?.warnBlocks  ?? 0;
+  if (errs === 0 && warns === 0) {
+    return <span className="text-emerald-400/80" title="Все промпты проходят правила ACE-Step">промпты ✓</span>;
+  }
+  const parts = [
+    errs  > 0 ? `${errs} с ошибками`   : null,
+    warns > 0 ? `${warns} с замечаниями` : null,
+  ].filter(Boolean).join(' · ');
+  return (
+    <span
+      className={errs > 0 ? 'text-red-400/90' : 'text-amber-400/90'}
+      title="Считано теми же правилами, что и гейт на сохранение. Отрендеренное не тронуто — правило действует при правке."
+    >
+      промпты: {parts}
+      {proj?.released && <span className="text-zinc-500"> · фильм опубликован, не править</span>}
+    </span>
+  );
 }
 
 export function BgmList({ projectId }: { projectId: string }) {
   const [blocks, setBlocks] = useState<NarrativeBlock[] | null>(null);
   const [error,  setError]  = useState<string | null>(null);
   const [opts,   setOpts]   = useState<MetaOptions | null>(null);
+  const [audit,  setAudit]  = useState<BgmAudit | null>(null);
 
   const refresh = useCallback(() => {
     api.listBlocks(projectId)
@@ -51,11 +141,12 @@ export function BgmList({ projectId }: { projectId: string }) {
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, [projectId]);
 
-  useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 5000);
-    return () => clearInterval(t);
-  }, [refresh]);
+  // No timer. Music tiles change only when a bgm render lands.
+  const { refreshing, lastUpdatedAt, refresh: reload } = useRefreshable(
+    useCallback(async () => { refresh(); }, [refresh]),
+  );
+  const match = useCallback(on.all(on.project(projectId), on.types('bgm')), [projectId]);
+  const streamStatus = useLiveEvents(match, reload, { active: true });
 
   // Option lists never change at runtime — fetch once, not on the 5s poll.
   useEffect(() => {
@@ -63,6 +154,24 @@ export function BgmList({ projectId }: { projectId: string }) {
       .then(setOpts)
       .catch(() => { /* selects fall back to a free-text input */ });
   }, []);
+
+  // Corpus verdict for this project, same rules as the save gate. Deliberately
+  // NOT on the refresh path that runs on its own: this re-reads every block and
+  // every tile override, and nothing in it can change without somebody saving.
+  const refreshAudit = useCallback(() => {
+    api.auditBgm(projectId)
+      .then(setAudit)
+      .catch(() => { /* the summary line simply does not appear */ });
+  }, [projectId]);
+
+  useEffect(() => { refreshAudit(); }, [refreshAudit]);
+
+  // A save changes both the block list and the verdict — one callback for the
+  // cards, so the header cannot go stale behind the editor.
+  const onBlockChanged = useCallback(() => {
+    refresh();
+    refreshAudit();
+  }, [refresh, refreshAudit]);
 
   if (error) {
     return (
@@ -77,8 +186,15 @@ export function BgmList({ projectId }: { projectId: string }) {
     <main className="px-4 sm:px-8 py-6">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-sm uppercase tracking-wider text-zinc-500">Фоновая музыка · ACE-Step</h2>
-        <div className="text-xs text-zinc-500">
-          {blocks.length} актов
+        <div className="text-xs text-zinc-500 flex items-center gap-3">
+          {auditSummary(audit)}
+          <span>{blocks.length} актов</span>
+          <RefreshControl
+            lastUpdatedAt={lastUpdatedAt}
+            refreshing={refreshing}
+            onRefresh={reload}
+            live={streamStatus === 'open'}
+          />
         </div>
       </div>
 
@@ -90,7 +206,7 @@ export function BgmList({ projectId }: { projectId: string }) {
 
       <div className="space-y-6">
         {blocks.map((b) => (
-          <BlockCard key={b.id} block={b} opts={opts} onChanged={refresh} />
+          <BlockCard key={b.id} block={b} opts={opts} onChanged={onBlockChanged} />
         ))}
       </div>
     </main>
@@ -231,19 +347,26 @@ export function BlockCard({
   const tiled     = wantMain > 0 && mains.length >= wantMain && spares.length >= 2;
 
   const [prompt, setPrompt]     = useState(block.moodPrompt ?? '');
+  const [arc,    setArc]        = useState(block.lyricsStructure ?? '');
   const [metas,  setMetas]      = useState<MetaDraft>(() => metaDraftFrom(block));
   const [dirty,  setDirty]      = useState(false);
   const [busy,   setBusy]       = useState(false);
+  const [thinOk, setThinOk]     = useState(false);
 
   // Resync editor when the block prop changes (e.g. server refresh changed moodPrompt)
   useEffect(() => {
     if (!dirty) setPrompt(block.moodPrompt ?? '');
   }, [block.moodPrompt, dirty]);
   useEffect(() => {
+    if (!dirty) setArc(block.lyricsStructure ?? '');
+  }, [block.lyricsStructure, dirty]);
+  useEffect(() => {
     if (!dirty) setMetas(metaDraftFrom(block));
   }, [block.bpm, block.keyscale, block.timesignature, dirty]);
 
-  const conflicts = captionMetaConflicts(prompt);
+  const lint      = useBgmLint(prompt, arc);
+  const issues    = issuesOf(lint);
+  const blocked   = issues.some((i) => i.severity === 'error') && !(thinOk && onlyEscapable(issues));
 
   /** Caption and metas go in ONE patch — they are two halves of the same prompt
    *  and saving them separately would leave the model contradicting itself for
@@ -251,7 +374,13 @@ export function BlockCard({
   const savePrompt = async () => {
     setBusy(true);
     try {
-      await api.updateBlock(block.id, { moodPrompt: prompt, ...metaBodyFrom(metas) });
+      await api.updateBlock(block.id, {
+        moodPrompt:      prompt,
+        // Empty textarea = null = let the backend generate the arc per tile.
+        lyricsStructure: arc.trim() ? arc : null,
+        ...(thinOk ? { allowThin: true } : {}),
+        ...metaBodyFrom(metas),
+      });
       setDirty(false);
       onChanged();
     } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
@@ -332,21 +461,53 @@ export function BlockCard({
             </span>
           </div>
 
-          {conflicts.length > 0 && (
-            <div className="mt-2 text-[10px] text-amber-300/90 bg-amber-950/30 border border-amber-900/60 rounded px-2 py-1.5 space-y-0.5">
-              {conflicts.map((c) => <div key={c}>⚠ {c}</div>)}
-              <div className="text-amber-200/60">
-                Темп и тональность ACE-Step получает отдельным блоком — цифра в тексте спорит с ним, и ритм выходит ничей.
-              </div>
+          {/* Section arc for the `lyrics` input — the act's temporal script.
+              Empty is the normal case: the backend then builds a three-part arc
+              from the caption per tile. Fill it in for an act that actually
+              turns. See Skill(gen-studio-acestep) §4. */}
+          <details className="mt-2 text-xs">
+            <summary className="cursor-pointer text-zinc-500 text-[10px] uppercase tracking-wider">
+              Структура трека (lyrics)
+              {arc.trim()
+                ? <span className="text-amber-400/80 ml-1 normal-case tracking-normal">· своя арка</span>
+                : <span className="text-zinc-600 ml-1 normal-case tracking-normal">· авто из промпта</span>}
+            </summary>
+            <textarea
+              value={arc}
+              onChange={(e) => { setArc(e.target.value); setDirty(true); }}
+              rows={4}
+              spellCheck={false}
+              className="mt-1 w-full font-mono text-xs bg-zinc-950 border border-zinc-800 rounded p-2 text-zinc-200 focus:outline-none focus:border-zinc-600"
+              placeholder={'[intro - ambient]\n[main theme - cello]\n[outro - fade out]'}
+            />
+            <div className="mt-1 text-[10px] text-zinc-600 leading-relaxed">
+              Только маркеры <code>[...]</code>, по одному на строку, одно-два слова после дефиса.
+              Обычный текст запрещён — под каптионом «no vocals» он даёт вокализы.
+              Пусто = бэкенд строит <code>[intro]/[main theme - &lt;инструмент&gt;]/[outro - fade out]</code>
+              из промпта; плитка короче 45с получает <code>[instrumental]</code>.
             </div>
+          </details>
+          <LintPanel lint={lint} />
+
+          {onlyEscapable(issues) && (
+            <label className="mt-1.5 flex items-center gap-1.5 text-[10px] text-zinc-400">
+              <input
+                type="checkbox"
+                checked={thinOk}
+                onChange={(e) => setThinOk(e.target.checked)}
+                className="accent-amber-600"
+              />
+              принять как есть (allowThin) — инструмента нет в словаре бэкенда
+            </label>
           )}
+
           <div className="mt-2 flex items-center justify-between">
             <div className="text-[10px] text-zinc-500">
-              {dirty ? 'не сохранено' : ' '}
+              {blocked ? <span className="text-red-400">гейт откажет</span> : dirty ? 'не сохранено' : ' '}
             </div>
             <button
               onClick={savePrompt}
-              disabled={!dirty || busy}
+              disabled={!dirty || busy || blocked}
               className="text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-3 py-1 rounded"
             >
               сохранить
@@ -434,6 +595,12 @@ function SegmentRow({
   const selected = selectedJobId ? jobs.find((j) => j.id === selectedJobId) ?? null : null;
 
   const [override,    setOverride]   = useState(segment.prompt ?? '');
+  const [segThinOk,   setSegThinOk]  = useState(false);
+  // An empty override inherits the act's caption, which was gated on its own
+  // save — so an empty box is never "blocked", the hook just returns null.
+  const segLint    = useBgmLint(override, segment.lyricsStructure ?? null);
+  const segBlocked = issuesOf(segLint).some((i) => i.severity === 'error')
+                  && !(segThinOk && onlyEscapable(issuesOf(segLint)));
   const [segMetas,    setSegMetas]   = useState<MetaDraft>(() => metaDraftFrom(segment));
   const [dirty,       setDirty]      = useState(false);
   const [busy,        setBusy]       = useState(false);
@@ -459,6 +626,7 @@ function SegmentRow({
       const trimmed = override.trim();
       await api.updateSegment(segment.id, {
         prompt: trimmed === '' ? null : trimmed,
+        ...(segThinOk ? { allowThin: true } : {}),
         ...metaBodyFrom(segMetas),
       });
       setDirty(false);
@@ -537,8 +705,12 @@ function SegmentRow({
       className={`bg-zinc-950 border rounded p-3 ${
         highlighted ? 'border-emerald-600 ring-1 ring-emerald-600/40' : 'border-zinc-800'}`}
     >
-      <div className="flex items-center justify-between text-xs">
-        <div className="flex items-center gap-2">
+      {/* Wraps on a phone. Unwrapped, the left group's status line («3 take(s) —
+          нужна аппрува») ate the row and pushed the duration input, ▶ render and
+          ✕ off the right edge of a 375px screen — the tile could be read but not
+          worked (user, iPhone 13 mini). */}
+      <div className="flex flex-wrap items-center justify-between gap-y-2 text-xs">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="flex flex-col -my-1">
             <button
               onClick={() => move('up')}
@@ -577,7 +749,7 @@ function SegmentRow({
             <span className="text-zinc-500">ничего не рендерено</span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <input
             type="number"
             min={10}
@@ -597,7 +769,7 @@ function SegmentRow({
           <button
             onClick={queueRender}
             disabled={busy}
-            className="text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-2 py-0.5 rounded"
+            className="text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-3 sm:px-2 min-h-9 sm:min-h-0 py-0.5 rounded"
             title="Поставить ACE-Step take в очередь с указанной длительностью"
           >
             ▶ render
@@ -642,26 +814,41 @@ function SegmentRow({
           />
           <button
             onClick={savePrompt}
-            disabled={!dirty || busy}
+            disabled={!dirty || busy || segBlocked}
+            title={segBlocked ? 'гейт откажет — см. ошибки ниже' : undefined}
             className="text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-2 py-0.5 rounded"
           >
             сохранить
           </button>
         </div>
-        {captionMetaConflicts(override).map((c) => (
-          <div key={c} className="mt-1 text-[10px] text-amber-300/90">⚠ {c}</div>
-        ))}
+        <LintPanel lint={segLint} compact />
+        {onlyEscapable(issuesOf(segLint)) && (
+          <label className="mt-1 flex items-center gap-1.5 text-[10px] text-zinc-400">
+            <input
+              type="checkbox"
+              checked={segThinOk}
+              onChange={(e) => setSegThinOk(e.target.checked)}
+              className="accent-amber-600"
+            />
+            принять как есть (allowThin)
+          </label>
+        )}
       </details>
 
       {/* Player + take selector */}
       {completed.length > 0 && (
         <div className="mt-2">
-          <div className="flex items-center gap-2 text-xs mb-1">
+          {/* A <select> is sized by its widest option, and these options carry
+              id + status + seed. At 375px that alone overran the row, and with
+              no wrapping the approve/delete buttons landed off-screen — the one
+              thing this page exists for. min-w-0 lets it shrink; the buttons
+              wrap to their own line instead of vanishing. */}
+          <div className="flex flex-wrap items-center gap-2 text-xs mb-1">
             <span className="text-zinc-500">Версия:</span>
             <select
               value={selectedJobId ?? ''}
               onChange={(e) => setSelectedJobId(e.target.value || null)}
-              className="bg-zinc-900 border border-zinc-800 rounded px-2 py-0.5 text-zinc-200 font-mono"
+              className="min-w-0 flex-1 sm:flex-none bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 sm:py-0.5 text-zinc-200 font-mono"
             >
               {jobs.map((j) => (
                 <option key={j.id} value={j.id}>
@@ -677,7 +864,7 @@ function SegmentRow({
                   <button
                     onClick={() => approve(selected.id)}
                     disabled={busy}
-                    className="text-xs bg-emerald-700 hover:bg-emerald-600 text-white px-2 py-0.5 rounded"
+                    className="text-xs bg-emerald-700 hover:bg-emerald-600 text-white px-3 sm:px-2 min-h-9 sm:min-h-0 py-0.5 rounded"
                   >
                     апрувнуть
                   </button>
@@ -685,7 +872,7 @@ function SegmentRow({
                   <button
                     onClick={unapprove}
                     disabled={busy}
-                    className="text-xs text-zinc-400 hover:text-amber-400"
+                    className="text-xs text-zinc-400 hover:text-amber-400 px-2 sm:px-0 min-h-9 sm:min-h-0"
                   >
                     снять апрув
                   </button>
@@ -693,7 +880,7 @@ function SegmentRow({
                 <button
                   onClick={() => deleteJob(selected.id)}
                   disabled={busy}
-                  className="text-xs text-zinc-400 hover:text-red-400"
+                  className="text-xs text-zinc-400 hover:text-red-400 px-2 sm:px-0 min-h-9 sm:min-h-0"
                 >
                   удалить версию
                 </button>

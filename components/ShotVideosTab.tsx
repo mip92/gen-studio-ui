@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, VideoRender, VideoQcShotVerdict } from '../lib/api';
-import { useShotCtx } from './ShotPageShell';
+import { resolveVideoFlow, useShotCtx } from './ShotPageShell';
 import { useScrollRestore } from '../lib/useScrollRestore';
+import { useLiveEvents, on } from '../lib/liveEvents';
 
 export function ShotVideosTab() {
   const { shot, setShot, projectId, shotId, reload } = useShotCtx();
@@ -72,18 +73,21 @@ export function ShotVideosTab() {
     } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
   }, [shotId]);
 
-  useEffect(() => {
+  const pollVideoQc = useCallback(async () => {
     if (qcPendingSince === null) return;
-    const t = setInterval(async () => {
+    {
       try {
         const vs = await api.videoQcShotVerdicts(shotId);
         setQcVerdicts(new Map(vs.map((v) => [v.videoRenderId, v])));
         const done = vs.length > 0 && vs.every((v) => new Date(v.updatedAt).getTime() >= qcPendingSince);
         if (done || Date.now() - qcPendingSince > 30 * 60_000) setQcPendingSince(null);
-      } catch { /* keep polling */ }
-    }, 5000);
-    return () => clearInterval(t);
+      } catch { /* the next delta will retry */ }
+    }
   }, [qcPendingSince, shotId]);
+
+  // 30-minute give-up bound kept as app logic inside the handler.
+  const qcMatch = useCallback(on.all(on.shot(shotId), on.types('video_qc')), [shotId]);
+  useLiveEvents(qcMatch, pollVideoQc, { active: qcPendingSince !== null });
 
   const approve = useCallback(async (videoId: string | null) => {
     try {
@@ -108,17 +112,12 @@ export function ShotVideosTab() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Poll the videos list while anything is in flight (render or upscale).
-  useEffect(() => {
-    if (!videos) return;
-    const inFlight = videos.some(
-      (v) => v.status === 'pending' || v.status === 'running' ||
-             v.upscaleStatus === 'pending' || v.upscaleStatus === 'running',
-    );
-    if (!inFlight) return;
-    const t = setInterval(refresh, 4000);
-    return () => clearInterval(t);
-  }, [videos, refresh]);
+  const anyInFlight = (videos ?? []).some(
+    (v) => v.status === 'pending' || v.status === 'running' ||
+           v.upscaleStatus === 'pending' || v.upscaleStatus === 'running',
+  );
+  const vidMatch = useCallback(on.all(on.shot(shotId), on.types('video', 'video_post')), [shotId]);
+  useLiveEvents(vidMatch, refresh, { active: anyInFlight });
 
   if (shot.renderMode === 'static') {
     return (
@@ -146,6 +145,15 @@ export function ShotVideosTab() {
       </main>
     );
   }
+
+  // A two-frame shot whose last frame is not APPROVED cannot render a clip worth
+  // keeping: with nothing picked the backend silently degrades to one frame, with
+  // something picked-but-unapproved it refuses outright — and afterwards both
+  // look like a failed flf2v clip. So the RENDER is blocked, not the page: shots
+  // that already have clips (the soft degrade shipped plenty before the pair was
+  // a rule) must stay viewable and approvable. The header hides the tab outright
+  // only while there is nothing to look at.
+  const awaitsEndFrame = resolveVideoFlow(shot).effective === 'flf2v' && !shot.endFrameApprovedAt;
 
   const start = async () => {
     setBusy('start'); setError(null);
@@ -198,10 +206,23 @@ export function ShotVideosTab() {
           {!isDirty && !savedTick && <span className="text-zinc-600 text-xs">совпадает с сохранённым промптом кадра</span>}
         </div>
 
+        {awaitsEndFrame && (
+          <div className="bg-amber-900/30 border border-amber-800 rounded p-3 text-amber-200 text-sm">
+            Кадр едет на <b>двух опорных кадрах</b>, а последний кадр{' '}
+            {shot.chosenEndFrame ? 'выбран, но не утверждён' : 'ещё не сделан'} — новый клип
+            уехал бы по одному кадру и выглядел бы как провалившийся двухкадровый.{' '}
+            {shot.chosenEndFrame ? 'Утвердите его' : 'Сделайте и утвердите его'} на вкладке{' '}
+            <Link href={`/projects/${projectId}/shots/${shotId}/end-frame`}
+                  className="text-blue-400 hover:text-blue-300">Посл. кадр</Link>
+            {' '}— или переключите «Флоу» на «1 кадр» в шапке, если двух кадров этому кадру не нужно.
+          </div>
+        )}
+
         <div className="flex gap-2 flex-wrap items-center">
           <button
             onClick={start}
-            disabled={busy !== false}
+            disabled={busy !== false || awaitsEndFrame}
+            title={awaitsEndFrame ? 'Сначала утвердите последний кадр' : undefined}
             className="bg-blue-700 hover:bg-blue-600 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded"
           >
             {busy === 'start' ? '⏳ ставим в очередь…' : `🎬 рендерить ${count > 1 ? `${count} видео` : 'видео'}`}

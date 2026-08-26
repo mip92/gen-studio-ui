@@ -2,209 +2,12 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { api, ShotFull, ShotPromptFields, UpdateShotBody, VideoRender, ImageQcVerdict } from '../lib/api';
+import { api, ShotFull, VideoRender, ImageQcVerdict } from '../lib/api';
+import { useLiveEvents, on } from '../lib/liveEvents';
 
-export function ShotDetail({ projectId, shotId }: { projectId: string; shotId: string }) {
-  const router = useRouter();
-  const [shot,       setShot]       = useState<ShotFull | null>(null);
-  const [characters, setCharacters] = useState<Awaited<ReturnType<typeof api.listCharacters>>>([]);
-  const [error,      setError]      = useState<string | null>(null);
-  const [editing,    setEditing]    = useState(false);
-  const [draft,      setDraft]      = useState<UpdateShotBody>({});
-  const [busy,       setBusy]       = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      const [s, chs] = await Promise.all([api.getShot(shotId), api.listCharacters(projectId)]);
-      setShot(s);
-      setCharacters(chs);
-      setError(null);
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-  }, [shotId, projectId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  if (error)  return <Pad><Err msg={error} /></Pad>;
-  if (!shot)  return <Pad><p className="text-zinc-500">Loading…</p></Pad>;
-
-  const pf  = shot.promptFields ?? {};
-  const dpf = (draft.promptFields ?? pf) as ShotPromptFields;
-
-  const startEdit = () => {
-    setDraft({
-      shotCode:     shot.shotCode,
-      promptFields: { ...pf },
-      participants: shot.participants.map((p) => ({
-        label:       p.label,
-        characterId: p.characterId,
-        profileId:   p.profileId,
-      })),
-    });
-    setEditing(true);
-  };
-
-  const cancel = () => { setEditing(false); setDraft({}); };
-
-  const save = async () => {
-    setBusy(true); setError(null);
-    try {
-      const updated = await api.updateShot(shotId, draft);
-      setShot(updated);
-      setEditing(false);
-      setDraft({});
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
-  };
-
-  const remove = async () => {
-    if (!confirm(`Удалить кадр ${shot.shotCode}?`)) return;
-    setBusy(true);
-    try {
-      await api.deleteShot(shotId);
-      router.push(`/projects/${projectId}/scenes#${shot.scene?.sceneKey ?? ''}`);
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); setBusy(false); }
-  };
-
-  const updatePf = (patch: Partial<ShotPromptFields>) => {
-    setDraft((d) => ({ ...d, promptFields: { ...((d.promptFields ?? pf) as ShotPromptFields), ...patch } }));
-  };
-
-  return (
-    <main className="px-4 sm:px-8 py-6">
-      <Link href={`/projects/${projectId}/scenes`} className="text-zinc-500 hover:text-zinc-200 text-sm mb-4 inline-block">
-        ← все акты
-      </Link>
-
-      <header className="mb-6 flex items-baseline justify-between">
-        <div>
-          <div className="text-zinc-500 text-xs font-mono mb-1">{shot.scene?.title ?? shot.scene?.sceneKey}</div>
-          <h1 className="text-2xl font-semibold font-mono">{shot.shotCode}</h1>
-        </div>
-        <div className="flex gap-2">
-          {!editing ? (
-            <>
-              <button onClick={startEdit}
-                className="text-sm bg-blue-700 hover:bg-blue-600 text-white px-3 py-1.5 rounded">
-                ✎ редактировать
-              </button>
-              <button onClick={remove} disabled={busy}
-                className="text-sm text-red-400 hover:text-red-300 border border-red-900/50 hover:border-red-700 rounded px-3 py-1.5">
-                ✕ удалить
-              </button>
-            </>
-          ) : (
-            <>
-              <button onClick={save} disabled={busy}
-                className="text-sm bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3 py-1.5 rounded">
-                {busy ? '…' : 'сохранить'}
-              </button>
-              <button onClick={cancel} disabled={busy}
-                className="text-sm text-zinc-400 hover:text-zinc-200 border border-zinc-700 rounded px-3 py-1.5">
-                отмена
-              </button>
-            </>
-          )}
-        </div>
-      </header>
-
-      {error && <div className="mb-4 bg-red-900/40 border border-red-700 rounded p-3 text-red-200 font-mono text-xs">{error}</div>}
-
-      <div className="space-y-4">
-        <Field label="Beat (narrativeBeat)" hint="Что происходит в кадре">
-          {!editing ? <Value v={pf.narrativeBeat} multi />
-                    : <Textarea value={dpf.narrativeBeat ?? ''} rows={3}
-                        onChange={(v) => updatePf({ narrativeBeat: v })} />}
-        </Field>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field label="Location (label)">
-            {!editing ? <Value v={pf.location?.label} />
-                      : <Input value={dpf.location?.label ?? ''}
-                          onChange={(v) => updatePf({ location: { ...dpf.location, label: v } })} />}
-          </Field>
-
-          <Field label="Interior / Exterior">
-            {!editing ? <Value v={pf.location?.interiorExterior} mono />
-                      : <Input value={dpf.location?.interiorExterior ?? ''}
-                          onChange={(v) => updatePf({ location: { ...dpf.location, interiorExterior: v } })} />}
-          </Field>
-        </div>
-
-        <Field label="Positive prompt" hint="Полный позитивный промпт для ComfyUI (обязателен — единственный текст кадра, который уходит в рендер)">
-          {!editing ? <Value v={pf.positive} multi />
-                    : <Textarea value={dpf.positive ?? ''} rows={4}
-                        onChange={(v) => updatePf({ positive: v })} />}
-        </Field>
-
-        <Field label="Negative prompt">
-          {!editing ? <Value v={pf.negative} multi />
-                    : <Textarea value={dpf.negative ?? ''} rows={3}
-                        onChange={(v) => updatePf({ negative: v })} />}
-        </Field>
-
-        <Field label="Camera movement" hint="Движение камеры для видео i2v">
-          {!editing ? <Value v={pf.camera?.movement} mono />
-                    : <Input value={dpf.camera?.movement ?? ''}
-                        onChange={(v) => updatePf({ camera: { ...dpf.camera, movement: v } })} />}
-        </Field>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field label="Workflow route">
-            {!editing ? <Value v={shot.workflowRouteKey ?? undefined} mono />
-                      : <Input value={(draft.workflowRouteKey ?? shot.workflowRouteKey) ?? ''}
-                          onChange={(v) => setDraft((d) => ({ ...d, workflowRouteKey: v }))} />}
-          </Field>
-
-          <Field label="Production status (draft/ready/locked)">
-            {!editing ? <Value v={pf.production?.promptStatus} mono />
-                      : <Input value={dpf.production?.promptStatus ?? ''}
-                          onChange={(v) => updatePf({ production: { ...dpf.production, promptStatus: v } })} />}
-          </Field>
-        </div>
-
-        <Field label="Production notes">
-          {!editing ? <Value v={pf.production?.notes} multi />
-                    : <Textarea value={dpf.production?.notes ?? ''} rows={2}
-                        onChange={(v) => updatePf({ production: { ...dpf.production, notes: v } })} />}
-        </Field>
-
-        <ParticipantsEditor
-          editing={editing}
-          participants={editing ? (draft.participants ?? []) : shot.participants.map((p) => ({
-            label:       p.label,
-            characterId: p.characterId,
-            profileId:   p.profileId,
-          }))}
-          characters={characters}
-          shotParticipants={shot.participants}
-          isCartoon={(shot.project?.visualStyle ?? 'photoreal_cinematic') !== 'photoreal_cinematic'}
-          projectId={projectId}
-          onChange={(parts) => setDraft((d) => ({ ...d, participants: parts }))}
-        />
-
-        {!editing && (
-          <>
-            <p className="text-zinc-600 text-xs mt-3">
-              Чтобы поменять персонажей или какой профиль брать (например HERO_TEEN_15 vs HERO_OVERLOAD_16) — нажми «✎ редактировать» вверху.
-            </p>
-            <RenderSection shot={shot} onShotChange={setShot} />
-            <VideoSection projectId={projectId} shot={shot} />
-          </>
-        )}
-      </div>
-    </main>
-  );
-}
 
 // ── Small UI primitives ─────────────────────────────────────────────────────
 
-function Pad({ children }: { children: React.ReactNode }) {
-  return <main className="px-4 sm:px-8 py-6">{children}</main>;
-}
-function Err({ msg }: { msg: string }) {
-  return <div className="bg-red-900/40 border border-red-700 rounded p-4 text-red-200 font-mono text-sm">{msg}</div>;
-}
 export function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div>
@@ -243,6 +46,31 @@ export function Textarea({ value, rows, onChange }: { value: string; rows: numbe
 // via profile.promptBase + triggerToken (and optional anchor PNG for IP-Adapter).
 // Photoreal projects need a trained LoRA per participant. Branch the gating.
 
+/**
+ * One placeholder tile per candidate the queue still owes.
+ *
+ * Deliberately the same aspect and grid cell as a real candidate rather than a
+ * one-line "рендерится…" notice: the point is that the gallery LOOKS like it is
+ * mid-batch — three finished tiles and two grey ones read instantly as "two more
+ * coming", where a status line above the grid does not survive a glance
+ * (user 2026-08-16). Rendered by both the Рендер tab and the Последний кадр tab.
+ */
+export function QueuedTiles({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <>
+      {Array.from({ length: count }, (_, i) => (
+        <div key={`queued-${i}`}
+             className="rounded border border-dashed border-zinc-600 bg-zinc-900/60 animate-pulse
+                        flex flex-col items-center justify-center aspect-video text-zinc-500">
+          <span className="text-xl leading-none">⏳</span>
+          <span className="mt-1 text-[11px] uppercase tracking-wider">в очереди</span>
+        </div>
+      ))}
+    </>
+  );
+}
+
 export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotChange: (s: ShotFull) => void }) {
   // The pipeline queue owns dispatch + ComfyUI polling + persisting outputs to
   // shot.renderedImages. The UI just enqueues, then polls the shot until the
@@ -254,6 +82,8 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
   }>({ status: 'idle' });
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
   const initialRenderCount = useRef<number>(shot.renderedImages?.length ?? 0);
+  /** True while the enqueue POST is out — see the self-heal effect below. */
+  const submitting = useRef(false);
 
   const visualStyle = shot.project?.visualStyle ?? 'photoreal_cinematic';
   const isCartoon   = visualStyle !== 'photoreal_cinematic';
@@ -311,14 +141,23 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
   const maxParticipants = visualStyle === 'realcomic_qwen' ? 3 : 2;
   const supportedByStrategy = charCount <= maxParticipants;
 
-  const canRender = allReady && supportedByStrategy && state.status !== 'queued' && state.status !== 'running';
+  // Queue state that SURVIVES a reload. `state.status` is local React state and
+  // is gone the moment you navigate away, which is why the page used to look
+  // idle while a job was running — and why a batch got queued twice. The server
+  // now reports what this shot has in flight, so the gallery can draw that many
+  // placeholders and the button can stay disabled («после постановки в очередь
+  // должны выделяться заглушки в галерее», user 2026-08-16).
+  const pendingRenders = shot.pendingRenders?.expected ?? 0;
+  const busyOnServer   = (shot.pendingRenders?.jobs ?? 0) > 0;
+
+  const canRender = allReady && supportedByStrategy && !busyOnServer
+    && state.status !== 'queued' && state.status !== 'running';
 
   // Poll the pipeline queue until our scene job finishes. The pipeline server-
   // side persists the rendered filenames to shot.renderedImages, so we just
   // refresh the shot when the job lands in a terminal state.
-  useEffect(() => {
-    if ((state.status !== 'queued' && state.status !== 'running') || !state.sceneJobId) return;
-    const t = setInterval(async () => {
+  const followJob = useCallback(async () => {
+    {
       try {
         const snap = await api.pipelineQueue({ id: state.sceneJobId, type: ['scene'], limit: 1 });
         const found = snap.rows[0];
@@ -338,13 +177,44 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
       } catch (e) {
         setState({ status: 'error', error: e instanceof Error ? e.message : String(e) });
       }
-    }, 3000);
-    return () => clearInterval(t);
-  }, [state.status, state.sceneJobId, shot.id, onShotChange]);
+    }
+  }, [state.sceneJobId, shot.id, onShotChange]);
+
+  // Was a 3s poll of /pipeline/queue for one job id. Now the backend tells us
+  // when THAT job moves — `on.job` matches the scene job we are following, and
+  // the shot-scoped subscription below is the backstop if that exact delta is
+  // ever missed (reconnect gap, or a job closed while the tab was away).
+  const following = (state.status === 'queued' || state.status === 'running') && !!state.sceneJobId;
+  const jobMatch = useCallback(on.all(on.job(state.sceneJobId ?? null)), [state.sceneJobId]);
+  useLiveEvents(jobMatch, followJob, { active: following });
+
+  // SELF-HEAL. `state.status` is optimistic: handleRender flips it to 'queued'
+  // BEFORE the POST resolves, so the button can lock immediately. When the poller
+  // existed, a stale flag cost at most 3 seconds. Now nothing clears it except a
+  // delta for one specific job id — so a lost delta, or a POST still hanging
+  // behind a 1400-deep queue, left «⏳ в очереди» on screen forever with no way
+  // back but a page reload (user 2026-08-20: «не могу дорендерить, постоянно
+  // пишет в очереди»).
+  //
+  // The server already reports the truth in shot.pendingRenders, and a fresh
+  // shot arrives on every shot-scoped delta AND on every tab wake. So: if the
+  // server says nothing is in flight for this shot and we are not mid-request,
+  // the optimistic flag is wrong — drop it. This is what makes the page
+  // self-healing again without reintroducing a timer.
+  useEffect(() => {
+    if (submitting.current) return;                 // POST still out — trust the flag
+    if (state.status !== 'queued' && state.status !== 'running') return;
+    if (busyOnServer) return;                       // server agrees work is live
+    setState({ status: 'idle' });
+  }, [busyOnServer, state.status, shot.renderedImages]);
 
   const handleRender = async () => {
     setState({ status: 'queued' });
     initialRenderCount.current = shot.renderedImages?.length ?? 0;
+    // The enqueue POST can hang for minutes: the backend blocks on HTTP while
+    // TTS synthesises. Mark it in flight so the self-heal above does not mistake
+    // "server has no job yet" for "the flag is stale".
+    submitting.current = true;
     try {
       const body: Parameters<typeof api.enqueueShotRender>[1] = {
         seed:      Math.floor(Math.random() * 2 ** 32),
@@ -360,6 +230,8 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
       setState({ status: 'queued', sceneJobId: job.id });
     } catch (e) {
       setState({ status: 'error', error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      submitting.current = false;
     }
   };
 
@@ -388,9 +260,9 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
       setQcPendingSince(Date.now());
     } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
   };
-  useEffect(() => {
+  const pollQc = useCallback(async () => {
     if (qcPendingSince === null) return;
-    const t = setInterval(async () => {
+    {
       try {
         const fresh = await api.getShot(shot.id);
         onShotChange(fresh);
@@ -402,14 +274,28 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
         // The run sits behind whatever the queue is doing — give up polling
         // after 30 min; badges still refresh on the next page load.
         if (done || Date.now() - qcPendingSince > 30 * 60_000) setQcPendingSince(null);
-      } catch { /* keep polling */ }
-    }, 5000);
-    return () => clearInterval(t);
+      } catch { /* a failed read just means we wait for the next delta */ }
+    }
   }, [qcPendingSince, shot.id, onShotChange]);
+
+  // The 30-minute give-up bound is app logic, so it stays — it just lives in the
+  // handler now instead of bounding a timer.
+  const qcMatch = useCallback(on.all(on.shot(shot.id), on.types('image_qc', 'validation')), [shot.id]);
+  useLiveEvents(qcMatch, pollQc, { active: qcPendingSince !== null });
 
   const renders = shot.renderedImages ?? [];
   const verdictByFile = new Map<string, ImageQcVerdict>();
   for (const v of shot.imageQcVerdicts ?? []) verdictByFile.set(v.filename, v);
+
+  // Poll the shot itself while anything is in flight — this is the path that
+  // works after a reload, when there is no sceneJobId in local state to follow.
+  // The path that works after a reload, when local state has no sceneJobId to
+  // follow: any delta for this shot re-reads the shot.
+  const reloadShot = useCallback(async () => {
+    try { onShotChange(await api.getShot(shot.id)); } catch { /* next delta will retry */ }
+  }, [shot.id, onShotChange]);
+  const shotMatch = useCallback(on.shot(shot.id), [shot.id]);
+  useLiveEvents(shotMatch, reloadShot, { active: busyOnServer });
 
   return (
     <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mt-6">
@@ -547,8 +433,8 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
           disabled={!canRender}
           className="bg-blue-700 hover:bg-blue-600 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded"
         >
-          {state.status === 'queued'  ? '⏳ в очереди…'
-          : state.status === 'running' ? '⚙ рендерится…'
+          {state.status === 'running'   ? '⚙ рендерится…'
+          : state.status === 'queued' || busyOnServer ? `⏳ в очереди — ждём ${pendingRenders || batchSize}…`
           : renders.length > 0          ? `+ ещё ${batchSize} вариантов в очередь (всего: ${renders.length})`
           : `🎬 в очередь — ${batchSize} вариантов`}
         </button>
@@ -563,11 +449,14 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
         <div className="mt-3 bg-red-900/40 border border-red-700 rounded p-3 text-red-200 font-mono text-xs">{state.error}</div>
       )}
 
-      {/* Gallery of all rendered variants */}
-      {renders.length > 0 && (
+      {/* Gallery of all rendered variants — plus a placeholder per candidate the
+          queue still owes, so a reload does not hide work in progress. */}
+      {(renders.length > 0 || pendingRenders > 0) && (
         <div className="mt-5">
           <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mb-2">
-            <span className="text-xs uppercase tracking-wider text-zinc-500">Варианты ({renders.length})</span>
+            <span className="text-xs uppercase tracking-wider text-zinc-500">
+              Варианты ({renders.length}{pendingRenders > 0 ? ` + ${pendingRenders} в очереди` : ''})
+            </span>
             {shot.chosenRender && <span className="text-xs text-emerald-400">✓ выбран: <span className="font-mono">{shot.chosenRender}</span></span>}
             {renders.length > 0 && (
               <button
@@ -662,6 +551,7 @@ export function RenderSection({ shot, onShotChange }: { shot: ShotFull; onShotCh
                 </div>
               );
             })}
+            <QueuedTiles count={pendingRenders} />
           </div>
         </div>
       )}
@@ -801,6 +691,7 @@ export function ParticipantsEditor({
   participants:     ParticipantDraft[];
   characters:       Awaited<ReturnType<typeof api.listCharacters>>;
   shotParticipants: ShotFull['participants'];
+
   /** True when project.visualStyle != 'photoreal_cinematic'. Switches LoRA-label
    *  copy to profile/identity wording and skips the "нет LoRA" amber state
    *  (cartoon profiles render via promptBase + triggerToken, no LoRA needed). */
@@ -816,6 +707,7 @@ export function ParticipantsEditor({
   };
   const addRow    = () => onChange([...participants, { label: 'character', characterId: null, profileId: null }]);
   const removeRow = (idx: number) => onChange(participants.filter((_, i) => i !== idx));
+
 
   return (
     <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mt-6">
@@ -963,13 +855,9 @@ export function VideoSection({ projectId, shot }: {
 
   // Poll while anything is pending/running so the UI flips to "completed"
   // without the user reloading.
-  useEffect(() => {
-    if (!videos) return;
-    const hasInFlight = videos.some((v) => v.status === 'pending' || v.status === 'running');
-    if (!hasInFlight) return;
-    const t = setInterval(refresh, 4000);
-    return () => clearInterval(t);
-  }, [videos, refresh]);
+  const hasInFlight = (videos ?? []).some((v) => v.status === 'pending' || v.status === 'running');
+  const vidMatch = useCallback(on.all(on.shot(shot.id), on.types('video', 'video_post')), [shot.id]);
+  useLiveEvents(vidMatch, refresh, { active: hasInFlight });
 
   if (!shot.chosenRender) {
     return (

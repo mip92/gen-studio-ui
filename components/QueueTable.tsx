@@ -26,8 +26,9 @@ import {
 } from '../lib/api';
 import { diffQueueUrlState, parseQueueUrlState, type QueuePreset } from '../lib/queueUrlState';
 import { FilterField, HeaderCell, MultiSelectLabeled } from './table/TableControls';
-
-const POLL_MS = 3000;
+import { useLiveEvents, type QueueDeltaEvent } from '../lib/liveEvents';
+import { useRefreshable } from '../lib/useRefreshable';
+import { RefreshControl } from './RefreshControl';
 
 const ALL_TYPES: QueueJobType[] = ['training', 'dataset', 'scene', 'end_frame', 'video', 'video_post', 'tts', 'bgm', 'anchor', 'validation', 'anchor_validation', 'caption', 'thumbnail', 'thumbnail_ideas', 'prop_anchor', 'vo_validation', 'image_qc', 'video_qc'];
 // Historical ledger value 'scene' actually means "render one shot's still image"
@@ -237,11 +238,40 @@ function QueueTableInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortingKey, filterKey, pagination.pageIndex, pagination.pageSize]);
 
-  useEffect(() => {
-    void refresh();
-    const t = setInterval(refresh, POLL_MS);
-    return () => clearInterval(t);
-  }, [refresh]);
+  // No timer. This table's whole purpose is watching the queue, so it stays
+  // `active: true` while on screen (the socket still closes the moment the tab
+  // is hidden, so an open queue tab on a pocketed tablet costs nothing).
+  const { refreshing, lastUpdatedAt, refresh: reload } = useRefreshable(refresh);
+
+  // But NOT `on.any`. The queue is deep (~1400 pending) and every claim/close
+  // broadcasts, so a blanket subscription refetched this table every couple of
+  // seconds — including on /queue/done?type=end_frame, where a video job being
+  // claimed cannot change a single visible row (user 2026-08-20: «кнопка
+  // постоянно прыгает обновляется»). Filter the delta against what this view
+  // actually shows.
+  const queueMatch = useCallback((e: QueueDeltaEvent) => {
+    if (e.seq === -1) return true;        // resync after a reconnect/wake — always re-read
+    if (e.scope === 'bulk') return true;  // renumber / project priority reorders everything
+
+    const typeFilter = (columnFilters.find((f) => f.id === 'type')?.value as string[] | undefined) ?? [];
+    // A job type this view hides can never add or remove a row here.
+    if (typeFilter.length > 0 && e.jobType && !typeFilter.includes(e.jobType)) return false;
+
+    // A view restricted to TERMINAL statuses only changes when something reaches
+    // a terminal state: enqueued/claimed/released/moved rows were not in it
+    // before and still are not. (The reverse shortcut is NOT safe — on a
+    // pending/running view a close must refetch precisely so the row leaves.)
+    const statusFilter = (columnFilters.find((f) => f.id === 'status')?.value as string[] | undefined) ?? [];
+    const terminalOnly = statusFilter.length > 0
+      && statusFilter.every((st) => st !== 'pending' && st !== 'running');
+    if (terminalOnly && e.op !== 'closed') return false;
+
+    return true;
+    // filterKey is the stable identity of columnFilters (see above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey]);
+
+  const streamStatus = useLiveEvents(queueMatch, reload, { active: true });
 
   // Pull the page back inside the result set. The page number now lives in the
   // URL, so it survives what used to reset it: the queue draining under an open
@@ -599,6 +629,17 @@ function QueueTableInner({
 
       {!data && !error && <p className="text-zinc-500">Загрузка…</p>}
 
+      {/* Freshness affordance. A page-level control in its own row — never a
+          per-row cell: queue rows keep one action line and a uniform height. */}
+      <div className="flex justify-end">
+        <RefreshControl
+          lastUpdatedAt={lastUpdatedAt}
+          refreshing={refreshing}
+          onRefresh={reload}
+          live={streamStatus === 'open'}
+        />
+      </div>
+
       {/* Phone-only filter/sort bar. Те же фильтры есть в шапке таблицы, но на
           телефоне до них надо докрутить таблицу вбок — панель держит их под
           рукой. Обе управляют одним и тем же состоянием таблицы. */}
@@ -792,6 +833,10 @@ function renderRowTargets(row: QueueRow, pl?: ProjectLinks): React.ReactNode {
   function shotTabHref(): string | null {
     if (!shotId || !projSeg) return null;
     if (row.type === 'scene')      return `/projects/${projSeg}/shots/${shotId}/render`;
+    // end_frame was the one shot-anchored type with no entry here, so its target
+    // rendered as dead text — the only row in the table you could not click
+    // through to its own result (user 2026-08-16).
+    if (row.type === 'end_frame')  return `/projects/${projSeg}/shots/${shotId}/end-frame`;
     if (row.type === 'video')      return `/projects/${projSeg}/shots/${shotId}/videos`;
     if (row.type === 'video_post') return `/projects/${projSeg}/shots/${shotId}/videos`;
     if (row.type === 'tts')        return `/projects/${projSeg}/shots/${shotId}/narration`;

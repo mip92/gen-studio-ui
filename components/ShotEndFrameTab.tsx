@@ -1,8 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { api, EndFrameState, VideoFlow } from '../lib/api';
+import { api, EndFrameState } from '../lib/api';
 import { useShotCtx } from './ShotPageShell';
+import { QueuedTiles } from './ShotDetail';
+import { useLiveEvents, on } from '../lib/liveEvents';
 
 /**
  * The shot's END frame — the second conditioning image of a two-frame (flf2v)
@@ -33,6 +35,14 @@ export function ShotEndFrameTab() {
   }, [shotId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Anything in flight → keep refreshing, so the placeholders turn into pictures
+  // without the user hunting for the «Обновить» button. Server-side state, so it
+  // works after a reload too — the whole point of the placeholders.
+  const pendingJobs     = state?.pending?.jobs ?? 0;
+  const pendingExpected = state?.pending?.expected ?? 0;
+  const efMatch = useCallback(on.all(on.shot(shotId), on.types('end_frame')), [shotId]);
+  useLiveEvents(efMatch, load, { active: pendingJobs > 0 });
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true); setError(null); setNotice(null);
@@ -67,9 +77,10 @@ export function ShotEndFrameTab() {
     setNotice('Последний кадр утверждён — кадр поедет на 2 кадрах');
   });
 
-  const flow = (shot.videoFlow ?? null) as VideoFlow | null;
   // The shot's own column only says "inherit"; the value that actually decides
-  // comes resolved from the API (shot → act → project).
+  // comes resolved from the API (shot → act → project). The switch itself lives
+  // in the shot header (`VideoFlowToggle`) — one control for the field instead
+  // of a second copy on this page, and it is on screen from every tab.
   const effectiveFlow = state?.flow ?? null;
   const twoFrame = effectiveFlow === 'flf2v';
   const promptDirty = (state?.prompt ?? '') !== prompt;
@@ -79,18 +90,13 @@ export function ShotEndFrameTab() {
       {error  && <div className="bg-red-900/40 border border-red-700 rounded p-3 text-red-200 font-mono text-sm">{error}</div>}
       {notice && <div className="bg-emerald-900/30 border border-emerald-800 rounded p-3 text-emerald-200 text-sm">{notice}</div>}
 
-      <FlowPicker value={flow} disabled={busy} onChange={(v) => run(async () => {
-        const updated = await api.updateShot(shotId, { videoFlow: v });
-        setShot(updated);
-      })} />
-
       {/* On the one-frame flow nothing downstream reads an end frame, so the page
           says so plainly instead of offering a render that would be thrown away. */}
       {effectiveFlow === 'i2v' && (
         <div className="bg-zinc-800/60 border border-zinc-700 rounded p-3 text-zinc-300 text-sm">
           Этот кадр рендерится <b>по одному кадру</b> — последний кадр ему не нужен и
-          использован не будет. Чтобы он появился в клипе, переключи на «2 кадра»
-          здесь, у акта или у проекта.
+          использован не будет. Чтобы он появился в клипе, переключи «Флоу» на
+          «2 кадра» в шапке кадра — или смени дефолт у акта либо у проекта.
         </div>
       )}
 
@@ -136,10 +142,11 @@ export function ShotEndFrameTab() {
       {/* ── Render ──────────────────────────────────────────────────────── */}
       {twoFrame && (
         <section className="flex flex-wrap items-center gap-3 border-t border-zinc-800 pt-4">
-          <button type="button" disabled={busy || !shot.chosenRender || !(state?.prompt ?? '').trim()}
+          <button type="button"
+                  disabled={busy || pendingJobs > 0 || !shot.chosenRender || !(state?.prompt ?? '').trim()}
                   onClick={enqueue}
                   className="px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-sm">
-            Сгенерировать 5 вариантов
+            {pendingJobs > 0 ? `⏳ в очереди — ждём ${pendingExpected}…` : 'Сгенерировать 5 вариантов'}
           </button>
           <button type="button" onClick={() => void load()} disabled={busy}
                   className="px-3 py-1.5 rounded border border-zinc-700 text-zinc-300 hover:text-zinc-100 text-sm">
@@ -176,9 +183,9 @@ export function ShotEndFrameTab() {
       {/* ── Candidates ──────────────────────────────────────────────────── */}
       <section className="border-t border-zinc-800 pt-4 space-y-2">
         <h2 className="text-sm font-semibold text-zinc-300">
-          Кандидаты {state ? `(${state.candidates.length})` : ''}
+          Кандидаты {state ? `(${state.candidates.length}${pendingExpected > 0 ? ` + ${pendingExpected} в очереди` : ''})` : ''}
         </h2>
-        {state && state.candidates.length === 0 && (
+        {state && state.candidates.length === 0 && pendingExpected === 0 && (
           <p className="text-sm text-zinc-500">Пока ничего не отрендерено.</p>
         )}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -198,6 +205,7 @@ export function ShotEndFrameTab() {
               </button>
             );
           })}
+          <QueuedTiles count={pendingExpected} />
         </div>
       </section>
     </main>
@@ -211,41 +219,5 @@ function Framed({ label, src }: { label: string; src: string }) {
       <img src={src} alt={label} className="w-full rounded border border-zinc-700 bg-zinc-900" />
       <figcaption className="text-[11px] uppercase tracking-wider text-zinc-500">{label}</figcaption>
     </figure>
-  );
-}
-
-/**
- * Per-shot flow override. «Наследовать» is null — the act decides, and failing
- * that the project — which is why it is the default rather than an explicit
- * 'i2v': storing the inherited value would silently pin the shot the next time
- * the act changes.
- */
-function FlowPicker({
-  value, disabled, onChange,
-}: {
-  value: VideoFlow | null;
-  disabled: boolean;
-  onChange: (v: VideoFlow | null) => void;
-}) {
-  const opts: Array<{ v: VideoFlow | null; label: string; hint: string }> = [
-    { v: null,    label: 'Наследовать', hint: 'Флоу берётся из акта, а если там пусто — из проекта' },
-    { v: 'i2v',   label: '1 кадр',      hint: 'Как раньше: закреплён только первый кадр' },
-    { v: 'flf2v', label: '2 кадра',     hint: 'Закреплены первый И последний кадр — клипу некуда уплыть' },
-  ];
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-[10px] uppercase tracking-wider text-zinc-500">Флоу видео</span>
-      <div className="inline-flex rounded-md border border-zinc-700 overflow-hidden" role="group">
-        {opts.map((o, i) => (
-          <button key={String(o.v)} type="button" disabled={disabled} title={o.hint}
-                  onClick={() => onChange(o.v)}
-                  className={`px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
-                    i > 0 ? 'border-l border-zinc-700 ' : ''
-                  }${value === o.v ? 'bg-blue-600 text-white' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'}`}>
-            {o.label}
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }

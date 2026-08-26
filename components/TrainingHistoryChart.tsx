@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import { useLiveEvents, on } from '../lib/liveEvents';
 
 type Sample = {
   step:       number;
@@ -13,7 +14,6 @@ type Sample = {
   secPerIt:   number;
 };
 
-const POLL_MS = 5000;
 
 /**
  * Loss curve + step-rate sparkline for a kohya training run. Polls while the
@@ -23,24 +23,27 @@ export function TrainingHistoryChart({ jobId }: { jobId: string }) {
   const [data, setData] = useState<{ phase: string; samples: Sample[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
-    const tick = async () => {
-      try {
-        const r = await api.trainingHistory(jobId, 500);
-        if (cancelled) return;
-        setData({ phase: r.phase, samples: r.samples });
-        const terminal = ['completed', 'failed', 'cancelled'].includes(r.phase);
-        if (!terminal) timer = setTimeout(tick, POLL_MS);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      }
-    };
-    tick();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  // Was a self-rescheduling setTimeout chain that stopped on a terminal phase.
+  // LoRA training emits a loss sample per step, which the queue does NOT know
+  // about — the only queue delta for a training job is start and finish. So the
+  // curve now refreshes on those two moments plus every tab wake, not per step.
+  // That is the honest tradeoff of dropping the timer: no live-drawing curve
+  // while training runs. Nothing in the backend can push per-step progress today
+  // (see docs/live-updates.md § «Чего сокет не знает»).
+  const load = useCallback(async () => {
+    try {
+      const r = await api.trainingHistory(jobId, 500);
+      setData({ phase: r.phase, samples: r.samples });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }, [jobId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const trainMatch = useCallback(on.all(on.job(jobId), on.types('training')), [jobId]);
+  const running = !data || !['completed', 'failed', 'cancelled'].includes(data.phase);
+  useLiveEvents(trainMatch, load, { active: running });
 
   if (error) {
     return <div className="bg-red-900/40 border border-red-700 rounded p-3 text-red-200 font-mono text-xs">{error}</div>;

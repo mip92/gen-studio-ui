@@ -174,6 +174,7 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
       const promptKeys: (keyof UpdateProjectBody)[] = [
         'name', 'visualStyle', 'defaultNegative', 'defaultVideoNegative',
         'defaultMotionPrompt', 'defaultStaticMotionPrompt', 'defaultVideoFlow',
+        'videoEngine',
       ];
       for (const k of promptKeys) {
         if (draft[k] !== undefined && draft[k] !== project[k as keyof ProjectFull]) {
@@ -283,6 +284,18 @@ export default function ProjectSettingsPage({ params }: { params: Promise<{ id: 
             {effStyle && !styleOpts.some((s) => s.id === effStyle) && (
               <option value={effStyle}>{effStyle} (нет в реестре)</option>
             )}
+          </select>
+        </Row>
+
+        <Row
+          label="Движок видео"
+          hint="project.videoEngine — какая модель считает клипы. Wan 2.2 — то, на чём снят весь канал: точнее слушается промпта, особенно указаний камере. LTX-2.5 заметно быстрее и выдаёт отдельную дорожку диегетического звука (шаги, дверь, поезд) — озвучка при этом остаётся на f5, музыка на ACE-Step. Выбирается ТОЛЬКО на проекте: один фильм снимается одним движком, чтобы в монтаже не соседствовали две фактуры. Влияет на БУДУЩИЕ рендеры — уже стоящие в очереди клипы досчитаются тем движком, для которого их ставили.">
+          <select
+            value={(v('videoEngine') as string) || 'wan'}
+            onChange={(e) => onChange('videoEngine', e.target.value)}
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm">
+            <option value="wan">Wan 2.2 — точнее по промпту (по умолчанию)</option>
+            <option value="ltx">LTX-2.5 — быстрее, со звуком в кадре</option>
           </select>
         </Row>
 

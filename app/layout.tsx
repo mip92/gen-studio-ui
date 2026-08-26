@@ -4,6 +4,7 @@ import "./globals.css";
 import { Sidebar } from "../components/Sidebar";
 import { MobileNav } from "../components/MobileNav";
 import { getProjects } from "../lib/projects";
+import { LiveEventsProvider } from "../lib/liveEvents";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -67,9 +68,15 @@ export default async function RootLayout({
           row; overflow-x-hidden keeps an oversized child from making the WHOLE
           document pan sideways. */}
       <body className="min-h-dvh flex flex-col md:flex-row bg-zinc-950">
-        <MobileNav projects={projects} />
-        <Sidebar projects={projects} />
-        <div className="flex-1 min-w-0 overflow-x-hidden">{children}</div>
+        {/* One websocket for the whole tab, feeding every live view. Mounted
+            here so it survives navigation between pages instead of being torn
+            down and rebuilt per route. Opens only while the tab is visible and
+            something actually cares — see lib/liveEvents.tsx. */}
+        <LiveEventsProvider>
+          <MobileNav projects={projects} />
+          <Sidebar projects={projects} />
+          <div className="flex-1 min-w-0 overflow-x-hidden">{children}</div>
+        </LiveEventsProvider>
       </body>
     </html>
   );

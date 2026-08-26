@@ -17,6 +17,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api, NarrativeBlock } from '../lib/api';
 import { BlockCard, MetaOptions } from './BgmList';
+import { useLiveEvents, on } from '../lib/liveEvents';
+import { useRefreshable } from '../lib/useRefreshable';
+import { RefreshControl } from '../components/RefreshControl';
 
 export function BgmBlockDetail({ projectId, slug }: { projectId: string; slug: string }) {
   const [blocks, setBlocks] = useState<NarrativeBlock[] | null>(null);
@@ -29,11 +32,14 @@ export function BgmBlockDetail({ projectId, slug }: { projectId: string; slug: s
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, [projectId]);
 
-  useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 5000);
-    return () => clearInterval(t);
-  }, [refresh]);
+  // No timer. Same delta as the list page — note this refetches the WHOLE
+  // project's blocks to render one track, which is a separate (backend-shaped)
+  // inefficiency; on a delta instead of every 5s it stops mattering.
+  const { refreshing, lastUpdatedAt, refresh: reload } = useRefreshable(
+    useCallback(async () => { refresh(); }, [refresh]),
+  );
+  const match = useCallback(on.all(on.project(projectId), on.types('bgm')), [projectId]);
+  const streamStatus = useLiveEvents(match, reload, { active: true });
 
   useEffect(() => {
     api.bgmMetaOptions()
@@ -78,12 +84,20 @@ export function BgmBlockDetail({ projectId, slug }: { projectId: string; slug: s
         <h2 className="text-sm uppercase tracking-wider text-zinc-500">
           Трек · <span className="font-mono normal-case text-zinc-300">{slug}</span>
         </h2>
+        <div className="flex items-center gap-2">
+          <RefreshControl
+            lastUpdatedAt={lastUpdatedAt}
+            refreshing={refreshing}
+            onRefresh={reload}
+            live={streamStatus === 'open'}
+          />
         <Link
           href={`/projects/${projectId}/bgm`}
           className="text-xs text-zinc-400 underline-offset-2 hover:underline hover:text-white"
         >
           ← вся музыка проекта
         </Link>
+        </div>
       </div>
 
       {!block && (

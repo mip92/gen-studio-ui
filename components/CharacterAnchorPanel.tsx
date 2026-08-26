@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, AnchorCandidatesResponse, AnchorRenderJob, AnchorValidationJob, BaseProfileInfo, ProfileStyleReadiness } from '../lib/api';
 import { AnchorPanelView } from './AnchorPanelView';
+import { useLiveEvents, on } from '../lib/liveEvents';
+import { useRefreshable } from '../lib/useRefreshable';
+import { RefreshControl } from './RefreshControl';
 
 /**
  * Anchor portrait panel for a character profile.
@@ -22,7 +25,6 @@ import { AnchorPanelView } from './AnchorPanelView';
  * it matches no candidate). Auto-hides for photoreal-only characters.
  */
 
-const POLL_MS = 3000;
 
 export function CharacterAnchorPanel({ profileId }: { profileId: string }) {
   const [readiness,    setReadiness]    = useState<ProfileStyleReadiness | null>(null);
@@ -39,7 +41,6 @@ export function CharacterAnchorPanel({ profileId }: { profileId: string }) {
   const [anchorBust,   setAnchorBust]   = useState(Date.now());
   const prevCompleted = useRef<string | null>(null);
   const prevValChosen = useRef<string | null>(null);
-  const pollTimer     = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (!lightbox) return;
@@ -72,13 +73,20 @@ export function CharacterAnchorPanel({ profileId }: { profileId: string }) {
     }
   }, [profileId]);
 
-  useEffect(() => {
-    void loadAll();
-    pollTimer.current = setInterval(() => { void loadAll(); }, POLL_MS);
-    return () => {
-      if (pollTimer.current) clearInterval(pollTimer.current);
-    };
-  }, [loadAll]);
+  // No timer — this panel used to poll 5 endpoints every 3s forever, whether or
+  // not anything was rendering. Now it loads once and re-reads on a delta for
+  // THIS profile, and only while one of its own jobs is actually in flight.
+  const { refreshing, lastUpdatedAt, refresh } = useRefreshable(loadAll);
+
+  const anchorInFlight =
+    (jobs ?? []).some((j) => j.status === 'pending' || j.status === 'running') ||
+    (valJobs ?? []).some((j) => j.status === 'pending' || j.status === 'running');
+
+  const match = useCallback(
+    on.all(on.profile(profileId), on.types('anchor', 'anchor_validation')),
+    [profileId],
+  );
+  const streamStatus = useLiveEvents(match, refresh, { active: anchorInFlight });
 
   // New render finished → refetch the installed-anchor image.
   useEffect(() => {
@@ -220,6 +228,14 @@ export function CharacterAnchorPanel({ profileId }: { profileId: string }) {
       }}
       footer={
         <>
+          <div className="flex justify-end mt-2">
+            <RefreshControl
+              lastUpdatedAt={lastUpdatedAt}
+              refreshing={refreshing}
+              onRefresh={refresh}
+              live={streamStatus === 'open'}
+            />
+          </div>
           {baseInfo && baseInfo.options.length > 0 && (
             <div className="mt-3 bg-zinc-950 border border-zinc-800 rounded p-2 text-xs">
               <div className="text-zinc-500 mb-1">

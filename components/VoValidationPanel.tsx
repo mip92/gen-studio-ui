@@ -5,6 +5,7 @@ import Link from 'next/link';
 import {
   api, VoValidationReadiness, VoValidationReportRow, VoValidationRun,
 } from '../lib/api';
+import { useLiveEvents, on } from '../lib/liveEvents';
 
 /**
  * «Озвучка QC» — project page for VO validation (audio QC of rendered
@@ -40,11 +41,10 @@ export function VoValidationPanel({ projectId }: { projectId: string }) {
 
   // Poll while a run is in flight — same 3s idiom as the TTS tabs.
   const inFlight = latest && (latest.status === 'pending' || latest.status === 'running');
-  useEffect(() => {
-    if (!inFlight) return;
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  }, [inFlight, refresh]);
+  // Was a 3s poll while a run was in flight. The run IS a queue job, so the
+  // backend says when it moves and the refetch is the same three reads.
+  const qcMatch = useCallback(on.all(on.project(projectId), on.types('vo_validation')), [projectId]);
+  useLiveEvents(qcMatch, refresh, { active: !!inFlight });
 
   const start = async () => {
     setBusy(true); setErr(null); setNotice(null);

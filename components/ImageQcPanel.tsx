@@ -5,6 +5,7 @@ import Link from 'next/link';
 import {
   api, ImageQcReadiness, ImageQcReportRow, ImageQcRun,
 } from '../lib/api';
+import { useLiveEvents, on } from '../lib/liveEvents';
 
 /**
  * «Кадры QC» — project page for image QC of rendered shot candidates.
@@ -40,13 +41,11 @@ export function ImageQcPanel({ projectId }: { projectId: string }) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Poll while a run is in flight — same 3s idiom as the VO QC page.
+  // Was a 3s poll while a run was in flight. The run IS a queue job, so the
+  // backend says when it moves and the refetch is the same three reads.
   const inFlight = latest && (latest.status === 'pending' || latest.status === 'running');
-  useEffect(() => {
-    if (!inFlight) return;
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  }, [inFlight, refresh]);
+  const qcMatch = useCallback(on.all(on.project(projectId), on.types('image_qc')), [projectId]);
+  useLiveEvents(qcMatch, refresh, { active: !!inFlight });
 
   const start = async () => {
     setBusy(true); setErr(null); setNotice(null);

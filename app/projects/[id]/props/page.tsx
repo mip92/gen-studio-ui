@@ -1,8 +1,11 @@
 'use client';
 
-import { useEffect, useState, use } from 'react';
+import { useCallback, useState, use } from 'react';
 import { api, Prop } from '@/lib/api';
 import { PropAnchorPanel } from '@/components/PropAnchorPanel';
+import { RefreshControl } from '@/components/RefreshControl';
+import { useLiveEvents, on } from '@/lib/liveEvents';
+import { useRefreshable } from '@/lib/useRefreshable';
 
 export default function PropsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: projectId } = use(params);
@@ -31,7 +34,12 @@ export default function PropsPage({ params }: { params: Promise<{ id: string }> 
   };
   const refreshSilent = () => refresh({ silent: true });
 
-  useEffect(() => { refresh(); }, [projectId]);
+  // No timer anywhere on this page. The prop list itself only changes when the
+  // user edits it or a prop_anchor render lands, both of which are events.
+  const loadProps = useCallback(async () => { await refresh({ silent: true }); }, [projectId]);
+  const { refreshing, lastUpdatedAt, refresh: reloadProps } = useRefreshable(loadProps);
+  const match = useCallback(on.all(on.project(projectId), on.types('prop_anchor')), [projectId]);
+  const streamStatus = useLiveEvents(match, reloadProps, { active: false });
 
   const startEdit = (p: Prop) => {
     setEditingId(p.id);
@@ -96,13 +104,24 @@ export default function PropsPage({ params }: { params: Promise<{ id: string }> 
             волосы, у предмета — за весь объект. Описание — английский.
           </p>
         </div>
-        <button
-          onClick={startCreate}
-          disabled={busy || creating}
-          className="text-sm bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3 py-1.5 rounded shrink-0"
-        >
-          + новый предмет
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* ONE control for the page. The per-prop panels below deliberately
+              have none: a dozen «данные от HH:MM» lines is noise, and they all
+              re-read off the same project-scoped delta anyway. */}
+          <RefreshControl
+            lastUpdatedAt={lastUpdatedAt}
+            refreshing={refreshing}
+            onRefresh={reloadProps}
+            live={streamStatus === 'open'}
+          />
+          <button
+            onClick={startCreate}
+            disabled={busy || creating}
+            className="text-sm bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3 py-1.5 rounded"
+          >
+            + новый предмет
+          </button>
+        </div>
       </div>
 
       {error && (
